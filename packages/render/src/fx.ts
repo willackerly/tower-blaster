@@ -9,7 +9,7 @@
 //           bit 19 band: on a sphere, a white band round its body-space equator (a fired ball, so it reads as
 //           a ball and never as a bomb, and its spin shows)
 //           bits 20-21 mark: on a box, an engraved glyph (marks.ts: 1 hit, 2 save, 3 keep); kept by setFx until clearFx
-//           bits 22-23 coat: on a box, its own colour instead of the look's (coats.ts: 1 gilt, 2 glaze); kept likewise
+//           bits 22-23 coat: on a box, its own colour instead of the look's (coats.ts: 1 gilt, 2 glaze, 3 paint: the tint is its colour); kept likewise
 //           bits 24-25 xray: on a box, an objective drawn through what hides it while Renderer.xray is on (1 crown,
 //           2 heritage, 3 a crown to hold: drawn as heritage); kept likewise
 //   word 2  f32 flash start (frame time, seconds)
@@ -63,7 +63,7 @@ export interface FxOptions {
    */
   mark?: MarkId;
   /**
-   * Boxes: a coat, the block's own colour in every look (coats.ts COAT_GILT, COAT_GLAZE; COAT_NONE clears it).
+   * Boxes: a coat, the block's own colour in every look (coats.ts COAT_GILT, COAT_GLAZE, COAT_PAINT; COAT_NONE clears it).
    * Absent, Renderer.setFx keeps the slot's coat as it was (Renderer.setCoats sets coats in bulk).
    */
   coat?: CoatId;

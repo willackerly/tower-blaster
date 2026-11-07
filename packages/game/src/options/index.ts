@@ -24,6 +24,7 @@ import { quality } from './quality.ts';
 import { rapid } from './rapid.ts';
 import { shake } from './shake.ts';
 import { sharp } from './sharp.ts';
+import { sleepTint } from './sleeptint.ts';
 import { slowMo } from './slowmo.ts';
 import { sound } from './sound.ts';
 import { sun } from './sun.ts';
@@ -62,6 +63,7 @@ export const OPTIONS = [
   quality,
   fx,
   spent,
+  sleepTint,
   pullAnim,
   frozenLook,
 ] as const;

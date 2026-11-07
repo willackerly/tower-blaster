@@ -76,8 +76,17 @@ export function pick(r: Ray, s: Snapshot, c: CompiledLevel, groundY = 0): Hit | 
   const n = Math.min(c.meta.n, s.count);
   for (let i = 0; i < n; i++) {
     if (s.tier?.[i] === TIER_FREE) continue;
-    const half = (c.scene.bodies[i]!.shape as { half: Vec3 }).half;
+    const sh = c.scene.bodies[i]!.shape;
     const pos: Vec3 = [s.pos[3 * i]!, s.pos[3 * i + 1]!, s.pos[3 * i + 2]!];
+    // A ball in the structure (a Rube Lab runner): the sphere itself.
+    if (sh.kind === 'sphere') {
+      const t = raySphere(r, pos, sh.radius);
+      if (t === null || (best && t >= best.t)) continue;
+      const p: Vec3 = [r.origin[0] + r.dir[0] * t, r.origin[1] + r.dir[1] * t, r.origin[2] + r.dir[2] * t], l = Math.hypot(p[0] - pos[0], p[1] - pos[1], p[2] - pos[2]) || 1;
+      best = { body: i, t, normal: [(p[0] - pos[0]) / l, (p[1] - pos[1]) / l, (p[2] - pos[2]) / l], point: p };
+      continue;
+    }
+    const half = sh.half;
     // Cheap reject on the bounding sphere first.
     if (raySphere(r, pos, Math.hypot(...half)) === null) continue;
     const h = rayBox(r, pos, [s.rot[4 * i]!, s.rot[4 * i + 1]!, s.rot[4 * i + 2]!, s.rot[4 * i + 3]!], half);
@@ -179,11 +188,12 @@ export interface Contact { body: number; step: number; point: Vec3; normal: Vec3
  * Where the shot's predicted flight (ballistic, as the preview's beads) first touches a structure body or the
  * ground, at the bodies' poses in `s` (PT14's impact marker): null when it touches nothing in ARC_STEPS steps.
  * A swept test: each step's segment is a ray against every body's box grown by the shot's radius (a sphere's
- * Minkowski sum with a box, rounded out to a box: it reports a corner graze a hair early), after a reject on the
+ * Minkowski sum with a box, rounded out to a box: it reports a corner graze a hair early; a ball in the structure,
+ * a Rube Lab runner, is a sphere grown by it, exact), after a reject on the
  * structure's bounding box and each body's bounding sphere. Free bodies (ammo) and pulled ones are skipped, as pick.
  */
 export function arcContact(c: CompiledLevel, s: Snapshot, shot: Shot, substeps = SUBSTEPS, groundY = 0): Contact | null {
-  if (shot.ammo === 'pull') return null;
+  if (shot.ammo === 'pull' || shot.ammo === 'cue' || shot.ammo === 'plunger') return null; // no flight: a pull, a cue, a plunger's charges
   const ev = shotToSpawn(c.frame, shot, 0), sh = ev.body.shape;
   // A ball touches with its radius, a box item with its thinnest half (it may arrive on any face).
   const radius = sh.kind === 'sphere' ? sh.radius : sh.kind === 'box' ? Math.min(...sh.half) : 0;
@@ -195,8 +205,8 @@ export function arcContact(c: CompiledLevel, s: Snapshot, shot: Shot, substeps =
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity], reach = new Float64Array(n);
   for (let i = 0; i < n; i++) {
     if (s.tier?.[i] === TIER_FREE) continue;
-    const half = (c.scene.bodies[i]!.shape as { half: Vec3 }).half;
-    reach[i] = Math.hypot(...half) + radius;
+    const body = c.scene.bodies[i]!.shape;
+    reach[i] = (body.kind === 'sphere' ? body.radius : Math.hypot(...body.half)) + radius;
     for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k]!, s.pos[3 * i + k]! - reach[i]!); hi[k] = Math.max(hi[k]!, s.pos[3 * i + k]! + reach[i]!); }
   }
   for (let k = 0; 3 * k + 5 < arc.length; k++) {
@@ -211,7 +221,10 @@ export function arcContact(c: CompiledLevel, s: Snapshot, shot: Shot, substeps =
       const pos: Vec3 = [s.pos[3 * i]!, s.pos[3 * i + 1]!, s.pos[3 * i + 2]!];
       const ts = raySphere(ray, pos, reach[i]!);
       if (ts === null || ts > len || (best && ts >= best.t)) continue;
-      const half = (c.scene.bodies[i]!.shape as { half: Vec3 }).half;
+      const body = c.scene.bodies[i]!.shape;
+      // A ball in the structure: its bounding sphere grown by the radius is the exact contact.
+      if (body.kind === 'sphere') { best = { t: ts, body: i, normal: [0, 0, 0] }; continue; }
+      const half = body.half;
       const h = rayBox(ray, pos, [s.rot[4 * i]!, s.rot[4 * i + 1]!, s.rot[4 * i + 2]!, s.rot[4 * i + 3]!], [half[0] + radius, half[1] + radius, half[2] + radius]);
       if (h && h.t <= len && (!best || h.t < best.t)) best = { t: h.t, body: i, normal: h.normal };
     }
@@ -224,8 +237,15 @@ export function arcContact(c: CompiledLevel, s: Snapshot, shot: Shot, substeps =
     if (best) {
       const p = best.t, centre: Vec3 = [a[0] + ray.dir[0] * p, a[1] + ray.dir[1] * p, a[2] + ray.dir[2] * p];
       if (best.body < 0) return { body: -1, step: k + 1, point: [centre[0], groundY, centre[2]], normal: [0, 1, 0], radius };
+      const i = best.body, body = c.scene.bodies[i]!.shape;
+      if (body.kind === 'sphere') {
+        // A ball: the point on it toward the shot's centre, the normal along the line of centres.
+        const o: Vec3 = [s.pos[3 * i]!, s.pos[3 * i + 1]!, s.pos[3 * i + 2]!], v: Vec3 = [centre[0] - o[0], centre[1] - o[1], centre[2] - o[2]], l = Math.hypot(...v) || 1;
+        const nrm: Vec3 = [v[0] / l, v[1] / l, v[2] / l];
+        return { body: i, step: k + 1, point: [o[0] + nrm[0] * body.radius, o[1] + nrm[1] * body.radius, o[2] + nrm[2] * body.radius], normal: nrm, radius };
+      }
       // The touched point: the box's nearest point to the shot's centre (on a face, an edge or a corner).
-      const i = best.body, half = (c.scene.bodies[i]!.shape as { half: Vec3 }).half, q: Quat = [s.rot[4 * i]!, s.rot[4 * i + 1]!, s.rot[4 * i + 2]!, s.rot[4 * i + 3]!];
+      const half = body.half, q: Quat = [s.rot[4 * i]!, s.rot[4 * i + 1]!, s.rot[4 * i + 2]!, s.rot[4 * i + 3]!];
       const pos: Vec3 = [s.pos[3 * i]!, s.pos[3 * i + 1]!, s.pos[3 * i + 2]!];
       const l = rotate(conj(q), [centre[0] - pos[0], centre[1] - pos[1], centre[2] - pos[2]]);
       const w = rotate(q, [Math.max(-half[0], Math.min(half[0], l[0])), Math.max(-half[1], Math.min(half[1], l[1])), Math.max(-half[2], Math.min(half[2], l[2]))]);

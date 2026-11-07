@@ -7,7 +7,7 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
-import { armRefusal, type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectFootprints, selectGroups, type Shot, isIcePiece, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { armRefusal, type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, RUBE_GO, runSession, selectFootprints, selectGroups, type Shot, isIcePiece, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import type { EffectStats, FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import type { HostStats } from '@tb/audio';
@@ -33,7 +33,9 @@ import { COST_WINDOW, runPhysics, wakeable } from './physics-loop.ts';
 import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
 import { canvasSize, type QualityState } from './quality.ts';
 import { UndoMarks } from './undo-marks.ts';
-import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, firedKind, PULL_HOVER, ramFx, regrowDuration, regrowScales, roleTint, rolePaint, SPENT_FADE, spentFx, structureCoats, structureMarks, structureTints, tintOf, tintWordOf, xrayOn } from './scene.ts';
+import { FusePanel } from './fuse-panel.ts';
+import { lotBeads, timelineOverlay } from './fuse-timeline.ts';
+import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, firedKind, PULL_HOVER, ramFx, regrowDuration, regrowScales, roleTint, rolePaint, SPENT_FADE, spentFx, structureCoats, duelCoats, duelTint, duelTints, structureMarks, structureTints, tintOf, tintWordOf, xrayOn } from './scene.ts';
 import { easeGrade, FROZEN_LABEL, freezeFxOf } from './frozen-look.ts';
 import { ghostOutline, PULL_SLIDE_STEPS, type PullAnim, pullAnimFor, withPulled } from './pull-anim.ts';
 import { type GestureState, type TouchAction, TouchGestures, touchFace, type TouchMode } from './touch.ts';
@@ -227,6 +229,11 @@ export interface GameHandle {
   refreshMarks(): void;
   /** Physics state now: step, phase and a hash of every pose. */
   state(): SessionState;
+  /**
+   * The structure bodies asleep in the last snapshot (awake 0; on the GPU only with per-body sleep, the
+   * level's physics.sleep or `?keystone.sleep=1`, and Rapier's own sleep), of how many structure bodies.
+   */
+  asleep(): { asleep: number; of: number };
   /** This attempt's shots as the session recorded them, a rapid-fire one with `after` (Shot.after): what replay() and a session file replay. */
   line(): Shot[];
   /** The same shots from the same level on a fresh engine, built as the live one, on this device. */
@@ -314,7 +321,7 @@ export function newGameHandle(): GameHandle {
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, hold: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0, impact: false, xray: false }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, card: { place: 'center', endedMs: null, shownMs: null }, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
     fire: () => false, bank: () => false, skip: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, impact: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, sightlines: async () => null, coverage: async () => 0, pullDrawn: null, frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], refreshMarks: () => {},
-    state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null, handoff: false, scoreFloat: '',
+    state: none, asleep: () => ({ asleep: 0, of: 0 }), line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null, handoff: false, scoreFloat: '',
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
     ice: () => ({ count: 0, cracks: [] }),
     edit: { on: false, enter: () => false, play: () => {}, cancel: () => {}, key: () => false, ray: () => {}, status: () => '', def: () => null, ghosts: () => 0, played: null },
@@ -663,6 +670,10 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let lot: { sheet: LotSheet; goals: readonly Goal[]; groups: Record<string, Int32Array>; footprints: Record<string, Footprint> } | null = null;
   /** The duel being played (env.duel), and when the turn in the air was fired (its pace: DuelDef.turnSeconds). */
   let duel: Duel | null = null, turnStart = 0;
+  // Fuse & Fold's timeline panel (fuse-panel.ts), beside the HUD: shown on levels with plunger charges.
+  const fuse = env.hud.parentElement ? new FusePanel(env.hud.parentElement, { fire: (shot) => handle.fire(shot) }) : null;
+  /** The lot's chalk line on a fold level (fuse-timeline.ts lotBeads), else null. */
+  let foldLot: Overlay | null = null;
   /** Each side's arc on the ground (duel-view.ts arcBeads), made at load. */
   let arcs: Overlay[] = [], arcBeadsDrawn = 0, impactDrawn = false;
   let xrayMemo: { c: CompiledLevel; mode: PaceFeel['xray']; on: boolean } | null = null;
@@ -867,7 +878,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   function applyMarks() {
     // In a duel the player to fire's own king wears the shield, the rival's the crosshair (duel-view.ts duelMarks).
     renderer.setMarks(0, duel ? duelMarks(c, duel, feel.marks) : structureMarks(c, feel.marks));
-    renderer.setCoats(0, structureCoats(c, coatsOn()));
+    renderer.setCoats(0, duel ? duelCoats(c, feel.coats) : structureCoats(c, coatsOn()));
     // The x-ray's kinds are the marks' (1 a crown, 2 heritage) whether or not the stones are carved; Renderer.xray says whether it draws.
     renderer.setXray(0, structureMarks(c, true));
   }
@@ -919,8 +930,13 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     void float.offsetWidth; // restart the animation
     float.classList.add('show');
   }
-  /** Coats as feel.coats says, but never in a duel, whose blocks wear their side's ink. */
+  /** Coats as feel.coats says, but never gilt or glaze in a duel, whose blocks wear their side's ink (painted, duelCoats). */
   const coatsOn = () => feel.coats && !duel;
+  const inks = () => duel!.def.sides.map((s) => s.ink);
+  /** The structure's tints at a load or restore: a duel's sides in their inks and its neutral blocks plain (scene.ts duelTints). */
+  const baseTints = () => (duel ? duelTints(c, duel.owned, inks(), feel.coats) : structureTints(c, coatsOn()));
+  /** Body b's own linear tint, for a felled crown's or cracked heritage's paint: in a duel its side's ink, never the other side's gold. */
+  const ownTint = (b: number) => (duel ? duelTint(c, duel.owned, inks(), b, feel.coats) : roleTint(c, b, coatsOn()));
 
   function restoreMark(mark: UndoMark) {
     mark.cp.restore();
@@ -931,12 +947,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     source.update(driver.snapshot, descs);
     if (fxSlots) renderer.clearFx(0, fxSlots);
     regrowBuf = regrowScales(c, Infinity, new Float32Array(c.meta.n));
-    renderer.setFx(0, structureTints(c, coatsOn()), regrowBuf, false);
+    renderer.setFx(0, baseTints(), regrowBuf, false);
     applyMarks();
     paintIce();
     const s = driver.session, roles = rolePaint(feel.fx);
-    s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { ...roles.crownKept, tint: roleTint(c, c.meta.crowns[k]!, coatsOn()) }); });
-    s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { ...roles.heritageKept, tint: roleTint(c, c.meta.heritage[k]!, coatsOn()) }); });
+    s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { ...roles.crownKept, tint: ownTint(c.meta.crowns[k]!) }); });
+    s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { ...roles.heritageKept, tint: ownTint(c.meta.heritage[k]!) }); });
     // No spark, heat, flash, blast or lit fuse of the undone shot carries over (PT2); the kept shots' fuses are lit again below.
     renderer.resetEffects();
     fading = [];
@@ -1152,16 +1168,18 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     duel = env.duel ? new Duel(env.duel, c, i as Player, driver.session.home) : null;
     hideHandoff();
     firedAt = null;
-    const tints = structureTints(c, coatsOn());
-    // Owner ink: each side's blocks in its colour, its king glowing a little as crowns do.
-    if (duel) duel.owned.forEach((idx, k) => { for (const b of idx) tints[b] = tintWordOf(duel!.def.sides[k]!.ink, c.meta.role[b] === 1 ? CROWN_GLOW : 0); });
+    // Owner ink: each side's blocks in its colour, its king glowing a little as crowns do; a duel's neutral blocks plain grey.
+    const tints = baseTints();
     renderer.setFx(0, tints, regrowBuf, !line);
     applyMarks();
     paintIce();
+    fuse?.level(c);
+    // A fold level is judged on what stays in its lot: chalk the lot on the ground, the whole round.
+    foldLot = c.def.objective.kind === 'fold' ? lotBeads(c) : null;
     if (line) {
       const s = driver.session, roles = rolePaint(feel.fx);
-      s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { ...roles.crownKept, tint: roleTint(c, c.meta.crowns[k]!, coatsOn()) }); });
-      s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { ...roles.heritageKept, tint: roleTint(c, c.meta.heritage[k]!, coatsOn()) }); });
+      s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { ...roles.crownKept, tint: ownTint(c.meta.crowns[k]!) }); });
+      s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { ...roles.heritageKept, tint: ownTint(c.meta.heritage[k]!) }); });
     }
     fxSlots = descs.length;
     pacer.reset();
@@ -1190,7 +1208,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     ending = false;
     hideResult();
     selected = nextSelection(c.def.rack, driver.session.rackLeft, retry ? selected : null);
-    opener = env.opener?.(c) ?? null;
+    // Rube Lab levels open with their plunger (the trapdoor's release): the HUD's Go button and key F fire it.
+    opener = env.opener?.(c) ?? (c.def.rube ? RUBE_GO : null);
     if (!retry) {
       // A duel's sides are what its view is about (duel-view.ts): it opens on the classic view, the turn view (when on) then swings to the side to fire.
       orbit = viewOf(c, viewAspect(), undefined, undefined, undefined, { mode: duel ? 'classic' : feel.view });
@@ -1295,7 +1314,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       // it lands (PT14): what F, or the HUD's Fire button, will do. Its blast zone too, for a bomb. Nothing is aimed.
       // Not under the hand-over card, like the aim.
       const op = openerNow();
-      if (op && op.ammo !== 'pull' && op.ammo !== 'cue') {
+      if (op && op.ammo !== 'pull' && op.ammo !== 'cue' && op.ammo !== 'plunger') {
         contact = arcContact(c, driver.snapshot, op, substeps);
         if (contact) {
           previewingOpener = true;
@@ -1370,7 +1389,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         case 'crownDown':
           juice.shake(0.08);
           // A felled crown flashes once and stops glowing.
-          renderer.setFx(f.body, { ...rolePaint(feel.fx).crownFlash, tint: roleTint(c, f.body, coatsOn()) });
+          renderer.setFx(f.body, { ...rolePaint(feel.fx).crownFlash, tint: ownTint(f.body) });
           // Only where the clear ends the level: par levels, and outcome levels with autobank.
           if (c.def.objective.kind === 'crowns' && f.ordinal + 1 === c.meta.crowns.length && driver.session.phase === 'running' && (driver.session.scoring === 'par' || c.def.autobank)) {
             ending = true;
@@ -1408,7 +1427,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
           juice.shake(0.3);
           banner('Heritage cracked', 'crack');
           // Damage style: a teal flash that stays teal (classic: to white).
-          renderer.setFx(f.body, { ...rolePaint(feel.fx).heritageFlash, tint: roleTint(c, f.body, coatsOn()) });
+          renderer.setFx(f.body, { ...rolePaint(feel.fx).heritageFlash, tint: ownTint(f.body) });
           break;
         case 'tier': banner(`${TIER_NAMES[f.tier]}!`); break;
         case 'settled':
@@ -1720,6 +1739,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   handle.undo = () => undo().catch((e) => { fail(e); return false; });
   handle.undoMemory = () => marks.held;
   handle.line = () => driver.session.inputs.map((i) => ({ ...i.shot }));
+  handle.asleep = () => {
+    const s = driver.snapshot, n = Math.min(c.meta.n, s.count);
+    let k = 0;
+    for (let i = 0; i < n; i++) if (!s.awake[i]) k++;
+    return { asleep: k, of: n };
+  };
   handle.state = () => ({ step: driver.engine.stepIndex, phase: driver.session.phase, strokes: driver.session.strokes, heritageBroken: sum(driver.session.heritageBroken), hash: snapshotHash(driver.snapshot) });
   // Between steps and loads, so neither a step nor a load's dispose runs under the read.
   handle.health = () => exclusive(async () => (await driver.engine.health?.()) ?? null);
@@ -1942,6 +1967,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (!duel && k === 'n' && step(levelIdx, 1)) void load(levelIdx + 1).catch(fail);
     if (!duel && k === 'p' && step(levelIdx, -1)) void load(levelIdx - 1).catch(fail);
     if (k === 'm') setMuted(!muted);
+    if (e.key === 'Enter' && fuse?.timeline) { e.preventDefault(); fuse.press(); }
   });
   addEventListener('keyup', (e) => { if (e.key === ' ') fastHeld = false; });
 
@@ -2035,8 +2061,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // The player to fire's arc on the ground, between shots (and the aim's beads over it).
     const arc = duel && feel.arcs && !duel.result.over && duel.shooter === null ? arcs[duel.turn] ?? null : null;
     arcBeadsDrawn = arc?.colours.length ?? 0;
+    // Fuse & Fold: the charges' markers, coloured by their delays, while the plunger can still go.
+    const plungerReady = !!fuse?.timeline && handle.ready && driver.session.rackLeft.includes('plunger');
+    fuse?.ready(plungerReady);
+    if (fuse?.timeline) fuse.heading(view.yaw, view.pitch);
     const ghost = pullAnim ? ghostOutline(pullAnim, now - pullAnim.at) : null;
-    const o = joinOverlays(beads ? beadOverlay(beads, aimed?.reachable ?? true) : null, arc, ghost);
+    const o = joinOverlays(beads ? beadOverlay(beads, aimed?.reachable ?? true) : null, arc, ghost, plungerReady ? timelineOverlay(fuse!.timeline!) : null, foldLot);
     renderer.reach(ring?.centre ?? null, ring?.radius ?? 0);
     // The impact marker: where the previewed flight first touches, on that face, a little wider than the shot (none under a blast zone).
     const mark = feel.impact && beads && contact && !ring ? contact : null;
@@ -2061,6 +2091,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // There, draw only for a capture.
     viewSun.update(renderer, feel.sun);
     if ((!offscreen && draw) || want) {
+      // Debug: blocks asleep in blue (keystone.sleeptint, the Scene panel), read live.
+      renderer.toggles.sleepTint = feel.sleepTint;
       const stats = await renderer.render(fp, !!want, want?.keep);
       if (want) want.resolve(stats);
     }

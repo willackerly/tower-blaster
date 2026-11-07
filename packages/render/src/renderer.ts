@@ -294,8 +294,12 @@ export class Renderer {
   private readonly boxVerts: { scene: number; shadow: number };
   /** Per-pass GPU timing of render() (cull, shadow, scene, bloom, composite) when set; read with profiler.collect(). */
   profiler: GpuProfiler | null = null;
-  /** Passes to skip, for measuring their marginal cost (bench:render). sparks off also freezes heat (its detector writes it). */
-  toggles = { shadow: true, post: true, sparks: true, trail: true, heat: true, ao: true, blasts: true };
+  /**
+   * Passes to skip, for measuring their marginal cost (bench:render). sparks off also freezes heat (its detector writes it).
+   * sleepTint (debug, off by default): bodies asleep (the source's awake 0: GPU per-body sleep, Rapier's own) draw
+   * in a cold blue (looks.ts LOOK_ASLEEP, ASLEEP_BLUE). Ice and the id pass ignore it.
+   */
+  toggles = { shadow: true, post: true, sparks: true, trail: true, heat: true, ao: true, blasts: true, sleepTint: false };
   /**
    * Bullet Time's frozen look (the game's PaceFeel.frozenLook): grade, the post grade's amount (0 none to 1;
    * post.ts frozenGrade); sparks, the share of sparks drawn (1 all, 0 none; shaders.ts vsSpark); heat, the heat
@@ -625,7 +629,7 @@ export class Renderer {
   }
 
   /**
-   * Coat count = coats.length slots from slot0 (coats.ts: COAT_NONE, COAT_GILT, COAT_GLAZE per slot): the block's
+   * Coat count = coats.length slots from slot0 (coats.ts: COAT_NONE, COAT_GILT, COAT_GLAZE, COAT_PAINT per slot): the block's
    * own colour in every look. A coat stays through every setFx that does not name one, until clearFx; only boxes draw it.
    */
   setCoats(slot0: number, coats: ArrayLike<number>): void {
@@ -827,6 +831,7 @@ export class Renderer {
       this.sceneTime = t;
     }
     const cf = this.writeFrame({ ...f, dt });
+    cf.sleepTint = !ids && this.toggles.sleepTint;
     const ao = !ids && this.toggles.ao;
     if (ao) this.ao.clear(enc);
     // Material level of detail: in the real look, boxes past the stone's fade-out go to boxFar, all of them with no stone.

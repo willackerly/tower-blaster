@@ -5,7 +5,7 @@
 // --engine gpu drives it (keystone-lab cast-browser.ts): SwiftShader in CI,
 // Metal with --channel chrome on a Mac. No rendering: physics only.
 // ?engine=rapier plays on Rapier instead, for comparison.
-import { type CastPlay, castPlay, compileLevel, type LevelDef, physicsOf, readShots } from '@tb/keystone';
+import { type CastPlay, castPlay, type CompiledLevel, compileLevel, type LevelDef, nudgedLevel, physicsOf, readShots, type RubeResult, rubePlay } from '@tb/keystone';
 import { limitProblems } from '@tb/engine-api';
 import { createDevice, isSoftwareAdapter } from '@tb/gpu';
 import { driverOptions, engineKind, makeEngine } from './engines.ts';
@@ -17,14 +17,19 @@ export interface CastHandle {
   adapter: string;
   software: boolean;
   engine: string;
-  /** Each line (writeShots text) from the level's start on a fresh engine, in order; ms is each play's wall time. */
-  play(level: LevelDef, lines: string[], maxSteps?: number): Promise<Array<CastPlay & { ms: number }>>;
+  /**
+   * Each line (writeShots text) from the level's start on a fresh engine, in order; ms is each play's wall time.
+   * `nudges` (index-aligned, optional): each play's build nudge (keystone nudgedLevel; 0 the exact build).
+   */
+  play(level: LevelDef, lines: string[], maxSteps?: number, nudges?: readonly number[]): Promise<Array<CastPlay & { ms: number }>>;
   /**
    * The level at rest on a fresh engine: its pre-settle as the game runs it, then `steps` more with
    * nothing fired. Reports the most any structure body moved over those steps and how far the top
    * fell, in cells (h), with the engine's limit report; ms is the whole run's wall time.
    */
   rest(level: LevelDef, steps: number): Promise<RestReport>;
+  /** A Rube Lab level (par scoring, one plunger: keystone rube-play.ts) as the game plays it, on a fresh engine. */
+  rube(level: LevelDef): Promise<RubeResult & { ms: number }>;
 }
 
 export interface RestReport { presettle: number; steps: number; maxMove: number; topDrop: number; limits: string[]; ms: number }
@@ -33,7 +38,7 @@ declare global { interface Window { __cast: CastHandle } }
 
 const log = document.getElementById('log')!;
 const notReady = async (): Promise<never> => { throw new Error('the cast page is not ready'); };
-const handle: CastHandle = { status: 'loading', adapter: '', software: false, engine: '', play: notReady, rest: notReady };
+const handle: CastHandle = { status: 'loading', adapter: '', software: false, engine: '', play: notReady, rest: notReady, rube: notReady };
 window.__cast = handle;
 
 async function main() {
@@ -45,9 +50,11 @@ async function main() {
   handle.software = isSoftwareAdapter(info);
   handle.engine = kind;
   let plays = 0;
-  handle.play = async (level, lines, maxSteps) => {
-    const c = compileLevel(level), out: Array<CastPlay & { ms: number }> = [];
-    for (const text of lines) {
+  handle.play = async (level, lines, maxSteps, nudges) => {
+    const exact = compileLevel(level), out: Array<CastPlay & { ms: number }> = [], built = new Map<number, CompiledLevel>();
+    const buildOf = (n: number) => { if (!built.has(n)) built.set(n, nudgedLevel(exact, n)); return built.get(n)!; };
+    for (const [k, text] of lines.entries()) {
+      const c = buildOf(nudges?.[k] ?? 0);
       const e = makeEngine(kind, c, device), t0 = performance.now();
       try {
         out.push({ ...(await castPlay(e, c, readShots(text), { ...driverOptions(kind), maxSteps })), ms: performance.now() - t0 });
@@ -74,6 +81,10 @@ async function main() {
       const limits = limitProblems(e.health ? await e.health() : null, e.info.name);
       return { presettle, steps, maxMove: maxMove / h, topDrop: (topA - topB) / h, limits, ms: performance.now() - t0 };
     } finally { e.dispose(); }
+  };
+  handle.rube = async (level) => {
+    const c = compileLevel(level), e = makeEngine(kind, c, device), t0 = performance.now();
+    try { return { ...(await rubePlay(e, c, driverOptions(kind))), ms: performance.now() - t0 }; } finally { e.dispose(); }
   };
   handle.status = 'ready';
   log.textContent = `${handle.adapter} (${kind}): ready`;

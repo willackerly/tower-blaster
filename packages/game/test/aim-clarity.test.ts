@@ -2,8 +2,8 @@
 // marker's place), every point of the structure a player can point at from the opening view is reachable at full
 // power, and every level's pre-aimed opener comes down on the structure.
 import { describe, expect, it } from 'vitest';
-import { emptySnapshot, type Snapshot, type Vec3 } from '@tb/engine-api';
-import { compileLevel, type CompiledLevel, GRAVITY, L1, type LaunchItem, SERIES, type Shot, shotToSpawn } from '@tb/keystone';
+import { emptySnapshot, type Snapshot, TIER_FREE, type Vec3 } from '@tb/engine-api';
+import { compileLevel, type CompiledLevel, GRAVITY, L1, type LaunchItem, levelById, SERIES, type Shot, shotToSpawn } from '@tb/keystone';
 import { rotate } from '@tb/geom';
 import { rayThrough, viewProj } from '@tb/render/camera';
 import { arcContact, azFromYaw, launchHeight, launchY, pick, previewBeads, rayBox, REACH, shotFor, SUBSTEPS } from '../src/aim.ts';
@@ -17,7 +17,7 @@ function atHome(c: CompiledLevel): Snapshot {
   for (let i = 0; i < s.count; i++) s.rot.set(c.scene.bodies[i]!.rot, 4 * i);
   return s;
 }
-const isLaunch = (a: string): a is LaunchItem => a !== 'drop' && a !== 'pull' && a !== 'cue';
+const isLaunch = (a: string): a is LaunchItem => a !== 'drop' && a !== 'pull' && a !== 'cue' && a !== 'plunger';
 const ALL = SERIES.flat();
 
 /**
@@ -70,6 +70,33 @@ describe('arcContact', () => {
   });
 });
 
+describe('a ball in the structure (a Rube Lab runner)', () => {
+  // RL1's structure holds a sphere: pick and arcContact meet it as a sphere (they read a box's half before, and threw).
+  const c = compileLevel(levelById('RL1')), s = atHome(c);
+  const ball = c.scene.bodies.findIndex((b, i) => i < c.meta.n && b.shape.kind === 'sphere');
+  const R = (c.scene.bodies[ball]!.shape as { radius: number }).radius, at: Vec3 = [s.pos[3 * ball]!, s.pos[3 * ball + 1]!, s.pos[3 * ball + 2]!];
+  // Only the ball takes part: every other body as if removed.
+  const alone = (): Snapshot => { const t = { ...s, tier: new Uint8Array(s.count).fill(TIER_FREE) }; t.tier[ball] = 0; return t; };
+  it('has one', () => expect(ball).toBeGreaterThanOrEqual(0));
+
+  it('pick: a ray from above meets its top, the normal straight up', () => {
+    const h = pick({ origin: [at[0], at[1] + 5, at[2]], dir: [0, -1, 0] }, alone(), c)!;
+    expect(h.body).toBe(ball);
+    expect(h.t).toBeCloseTo(5 - R, 9);
+    expect(h.normal[1]).toBeCloseTo(1, 9);
+  });
+
+  it('arcContact: a drop onto it touches its top, the normal along the line of centres', () => {
+    const ph = c.frame.pitch * c.frame.unit;
+    const shot: Shot = { ammo: 'drop', x: Math.round((4 * at[0]) / ph), z: Math.round((4 * at[2]) / ph) };
+    const k = arcContact(c, alone(), shot)!;
+    expect(k.body).toBe(ball);
+    expect(Math.hypot(k.point[0] - at[0], k.point[1] - at[1], k.point[2] - at[2])).toBeCloseTo(R, 9);
+    expect(Math.hypot(...k.normal)).toBeCloseTo(1, 9);
+    expect(k.normal[1]).toBeGreaterThan(0.9);
+  });
+});
+
 describe('every level, from its opening view', () => {
   for (const def of ALL) {
     it(`${def.id}: every structure point under a 9x9 grid of the free area, and every objective's middle, within the ball's range is reachable at full power, wide and upright`, () => {
@@ -112,9 +139,10 @@ describe('the pre-aimed openers', () => {
   for (const def of withOpener) {
     it(`${def.id}: its opener's arc comes down on the structure`, () => {
       const c = compileLevel(def), shot = (def.solutions!.ace?.[0] ?? def.solutions!.par![0])!;
-      if (shot.ammo === 'pull' || shot.ammo === 'cue') return;
+      if (shot.ammo === 'pull' || shot.ammo === 'cue' || shot.ammo === 'plunger') return expect(arcContact(c, atHome(c), shot)).toBeNull();
       const k = arcContact(c, atHome(c), shot);
       expect(k?.body ?? -2).toBeGreaterThanOrEqual(0);
+      if (c.scene.bodies[k!.body]!.shape.kind === 'sphere') return; // a Rube Lab runner: the normal is radial
       // The marker lies flat on one of the body's faces: its normal is a face axis in the body's frame.
       const q = c.scene.bodies[k!.body]!.rot, n = rotate([-q[0], -q[1], -q[2], q[3]], k!.normal);
       expect(n.map((v) => Math.abs(v)).sort((a, b) => a - b).map((v) => Math.round(v * 1e9) / 1e9)).toEqual([0, 0, 1]);

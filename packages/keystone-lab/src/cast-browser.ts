@@ -8,7 +8,7 @@ import { platform } from 'node:os';
 import type { Page } from 'playwright';
 import { createServer } from 'vite';
 import { CLOSE_TIMEOUT_MS, closeWithin, launchChromium, WEBGPU_ARGS } from '@tb/testkit';
-import { type CastPlay, type LevelDef, readShots, writeShots } from '@tb/keystone';
+import { type CastPlay, type LevelDef, readShots, type RubeResult, writeShots } from '@tb/keystone';
 import type { RestReport } from '../../game/src/cast-page.ts';
 import type { CastPlayer } from './cast.ts';
 import { withPageRetry } from './page-retry.ts';
@@ -54,6 +54,8 @@ export interface BrowserCastPlayer extends CastPlayer {
   setBatchTimeout(ms: number): void;
   /** The level at rest on the page's engine (the cast page's rest: pre-settle, then `steps` with nothing fired). */
   rest(level: LevelDef, steps: number): Promise<RestReport>;
+  /** A Rube Lab level played once with its plunger on the page's engine (cast-page.ts rube). */
+  rube(level: LevelDef): Promise<RubeResult & { ms: number }>;
   close(): Promise<string[]>;
 }
 
@@ -126,19 +128,20 @@ export async function openBrowserCastPlayer(opts: BrowserCastOptions = {}): Prom
     adapter: info.adapter, software: info.software, engine: info.engine, playMs, reopens,
     // The game aims for the GPU engine's one substep per step; Rapier substeps once per iteration (4).
     substeps: info.engine === 'rapier' ? 4 : 1,
-    async play(level, lines) {
+    async play(level, lines, nudges) {
       const out: CastPlay[] = [];
       for (let k = 0; k < lines.length; k += batch) {
-        const text = lines.slice(k, k + batch).map((l) => writeShots(l));
-        // Shot text holds integers only (readShots checks each shot), so a line crosses to the page exactly.
+        const text = lines.slice(k, k + batch).map((l) => writeShots(l)), nud = nudges ? nudges.slice(k, k + batch) : null;
+        // Shot text holds integers only (readShots checks each shot), so a line crosses to the page exactly; so do the nudge seeds.
         for (const t of text) readShots(t);
         // Each play starts from the level on a fresh engine, so a batch replayed on a reopened page returns the same plays.
-        const got = await onPage(`plays ${k + 1}-${k + text.length}`, (p) => p.evaluate(([lv, ls, max]) => window.__cast.play(lv, ls, max ?? undefined), [level, text, opts.maxSteps ?? null] as const));
+        const got = await onPage(`plays ${k + 1}-${k + text.length}`, (p) => p.evaluate(([lv, ls, max, nd]) => window.__cast.play(lv, ls, max ?? undefined, nd ?? undefined), [level, text, opts.maxSteps ?? null, nud] as const));
         for (const { ms, ...p } of got) { playMs.push(ms); out.push(p); }
       }
       return out;
     },
     rest: (level, steps) => onPage('rest', (p) => p.evaluate(([lv, n]) => window.__cast.rest(lv, n), [level, steps] as const)),
+    rube: (level) => onPage(`rube ${level.id}`, (p) => p.evaluate((lv) => window.__cast.rube(lv), level)),
     injectFault(kind) { fault = kind; },
     setBatchTimeout(ms) { batchTimeoutMs = ms; },
     close,
