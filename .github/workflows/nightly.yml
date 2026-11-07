@@ -15,14 +15,16 @@ concurrency:
 
 jobs:
   slow:
-    name: slow ${{ matrix.shard }}/4
+    name: slow ${{ matrix.shard }}/6
     runs-on: ubuntu-latest
-    # Some slow cases run for most of an hour on SwiftShader (e2e-keystone-10k).
-    timeout-minutes: 180
+    # One file can take hours on SwiftShader (chorus-gpu 154 min, e2e-keystone-10k 73 min in the first
+    # nightly, run 42394058839), and a file runs on one worker: the plan's longest shard is ~154 min.
+    # GitHub's limit for a job is 360.
+    timeout-minutes: 330
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     env:
       REQUIRE_WEBGPU: '1'
       PHYSICS_GPU_SLOW: '1'
@@ -38,7 +40,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install chromium
-      - run: pnpm test --shard=${{ matrix.shard }}/4 --reporter=default --reporter=json --outputFile.json=.vitest-report.json
+      - run: pnpm test --shard=${{ matrix.shard }}/6 --reporter=default --reporter=json --outputFile.json=.vitest-report.json
       # Times for vitest.durations.nightly.json: pnpm durations --file vitest.durations.nightly.json --from-log <log>.
       - name: Shard file times
         if: ${{ !cancelled() }}
