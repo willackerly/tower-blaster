@@ -44,7 +44,25 @@ export const SETTLE_RULES = ['v1', 'v2', 'v3', 'v4'] as const;
 export type SettleRule = (typeof SETTLE_RULES)[number];
 /** Structure bodies settle v2 lets still move: a few stragglers per thousand, at least 2. */
 export const settleAllowance = (n: number) => Math.max(2, Math.floor(n / 1000));
-export const settleCap = (rule: SettleRule) => (rule === 'v1' ? SETTLE_CAP : SETTLE_CAP_V2);
+/** The cap a shot settles by at the latest, steps: a wave level's run window (LevelDef.runWindow, runWindowSteps) when it has one, else the rule's. */
+export const settleCap = (rule: SettleRule, window?: number) => window ?? (rule === 'v1' ? SETTLE_CAP : SETTLE_CAP_V2);
+/**
+ * A wave level's run window (LevelDef.runWindow, roadmap C22, docs/game/wavefront.md), seconds: more than the 30 s
+ * cap (SETTLE_CAP_V2 at 60 Hz) and at most RUN_WINDOW_MAX. A domino wave runs at about 5 dominoes a second (probe X1:
+ * 0.90 to 0.96 sqrt(g h)), so a 200-domino run takes 40 s, and a city's towers longer. It changes two things and
+ * no rule: the cap is the window, and the settle waits for the front to die. Under it no structure body may still
+ * move for a run to count as quiet (settleAllowance's stragglers are a wave's front: at 10k bodies v2 lets 10 move,
+ * and X1's front is 12 to 16 awake), and v4's steady collapse counts only while nothing is fast (frozenCandidate),
+ * since a wave's D creeps up a domino at a time. v3's frozen run already needs nothing fast, so it stands as is.
+ */
+export const RUN_WINDOW_MAX = 600;
+/** Throws unless s is a run window in seconds (over 30, at most RUN_WINDOW_MAX), naming `where`. */
+export function checkRunWindow(s: unknown, where = 'runWindow'): number {
+  if (typeof s !== 'number' || !Number.isFinite(s) || s <= SETTLE_CAP_V2 / 60 || s > RUN_WINDOW_MAX) throw new Error(`${where} must be seconds over ${SETTLE_CAP_V2 / 60} and at most ${RUN_WINDOW_MAX}: ${String(s)}`);
+  return s;
+}
+/** A run window of `seconds` in steps of dt. */
+export const runWindowSteps = (seconds: number, dt: number) => Math.round(seconds / dt);
 /** Settle v3's frozen structure: no live body faster than this (m/s; any fall passes it within 0.05 s), */
 export const FROZEN_SPEED = 0.5;
 /** for this many steps, */
@@ -236,11 +254,11 @@ export class CpuObserver {
 /** quietSince: the first step of the current quiet run. v3's frozen run: its first step and the D and displaced count there. */
 export interface SettleState { quietSince: number | null; frozenSince?: number | null; frozenD?: number; frozenDisplaced?: number; steadySince?: number | null; steadyD?: number }
 
-/** Whether one observed state counts as quiet under `rule`, for a structure of n bodies. */
-export function quietUnder(rule: SettleRule, r: Reductions, n: number): boolean {
+/** Whether one observed state counts as quiet under `rule`, for a structure of n bodies (`wave`: under a run window, no stragglers). */
+export function quietUnder(rule: SettleRule, r: Reductions, n: number, wave = false): boolean {
   if (r.nAwake === 0) return true;
   if (rule === 'v1') return r.maxSpeed < QUIET_SPEED && r.maxAngSpeed < QUIET_SPIN;
-  return r.nMoving <= settleAllowance(n) && r.ammoSpeed < QUIET_SPEED;
+  return r.nMoving <= (wave ? 0 : settleAllowance(n)) && r.ammoSpeed < QUIET_SPEED;
 }
 
 /**
@@ -257,11 +275,13 @@ export const frozenCandidate = (r: Reductions): boolean => r.maxSpeed < FROZEN_S
  * is awake (from SETTLE_MIN), and always at the rule's cap. `inFlight`: the shot's ammo has not yet
  * touched anything (Session: ammoInFlight), so no run counts and only the cap settles: a structure
  * at rest before the ammo arrives (asleep on Rapier, nothing awake) settled a far shot 20 steps after
- * the launch with the ball still in the air (agent playtest PT10).
+ * the launch with the ball still in the air (agent playtest PT10). `window`: a wave level's run window in steps
+ * (runWindowSteps), the cap instead of the rule's, with the settle waiting for the front to die (RUN_WINDOW_MAX's note).
  */
-export function settleUpdate(st: SettleState, r: Reductions, spawnStep: number, rule: SettleRule = 'v1', n = 0, d = 0, inFlight = false): { state: SettleState; settled: boolean } {
-  if (inFlight) return { state: rule === 'v4' ? { quietSince: null, frozenSince: null, steadySince: null } : rule === 'v3' ? { quietSince: null, frozenSince: null } : { quietSince: null }, settled: r.step - spawnStep >= settleCap(rule) };
-  const quiet = quietUnder(rule, r, n);
+export function settleUpdate(st: SettleState, r: Reductions, spawnStep: number, rule: SettleRule = 'v1', n = 0, d = 0, inFlight = false, window?: number): { state: SettleState; settled: boolean } {
+  const cap = settleCap(rule, window), wave = window !== undefined;
+  if (inFlight) return { state: rule === 'v4' ? { quietSince: null, frozenSince: null, steadySince: null } : rule === 'v3' ? { quietSince: null, frozenSince: null } : { quietSince: null }, settled: r.step - spawnStep >= cap };
+  const quiet = quietUnder(rule, r, n, wave);
   const quietSince = quiet ? (st.quietSince ?? r.step) : null;
   const old = r.step - spawnStep;
   let state: SettleState = { quietSince }, frozen = false;
@@ -273,13 +293,15 @@ export function settleUpdate(st: SettleState, r: Reductions, spawnStep: number, 
     frozen = state.frozenSince != null && r.step - state.frozenSince + 1 >= FROZEN_STEPS;
   }
   if (rule === 'v4') {
-    // A steady run continues while D stays within STEADY_D of where it began; otherwise it starts over here.
-    const keep = st.steadySince != null && Math.abs(d - st.steadyD!) < STEADY_D;
-    state.steadySince = keep ? st.steadySince : r.step;
+    // A steady run continues while D stays within STEADY_D of where it began (and, under a run window, while nothing is
+    // fast: a wave's D creeps); otherwise it starts over here.
+    const fast = wave && !frozenCandidate(r);
+    const keep = !fast && st.steadySince != null && Math.abs(d - st.steadyD!) < STEADY_D;
+    state.steadySince = keep ? st.steadySince : fast ? null : r.step;
     state.steadyD = keep ? st.steadyD : d;
-    if (r.step - state.steadySince! + 1 >= STEADY_STEPS) frozen = true;
+    if (state.steadySince != null && r.step - state.steadySince + 1 >= STEADY_STEPS) frozen = true;
   }
-  const settled = old >= settleCap(rule) || (old >= SETTLE_MIN && (r.nAwake === 0 || frozen || (quietSince !== null && r.step - quietSince + 1 >= SETTLE_QUIET)));
+  const settled = old >= cap || (old >= SETTLE_MIN && (r.nAwake === 0 || frozen || (quietSince !== null && r.step - quietSince + 1 >= SETTLE_QUIET)));
   return { state, settled };
 }
 

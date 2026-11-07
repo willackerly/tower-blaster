@@ -80,6 +80,12 @@ describe('level files', () => {
     expect(bad({ substeps: 2 })).toThrow(/level.physics: unknown key substeps/);
     expect(bad({ sleep: 1 })).toThrow(/level.physics.sleep must be/);
     expect(bad({ sleep: true, bounce: 0.4 })).toThrow(/level.physics.sleep does not go with bounce/);
+    // C22: bodies that start asleep (with sleep), and a wave level's run window.
+    expect(parseLevelDef(JSON.parse(levelJson({ ...def, physics: { sleep: true, asleep: true } }))).physics).toEqual({ sleep: true, asleep: true });
+    expect(bad({ asleep: true })).toThrow(/level.physics.asleep needs level.physics.sleep: true/);
+    expect(bad({ sleep: true, asleep: 'yes' })).toThrow(/level.physics.asleep must be/);
+    expect(parseLevelDef(JSON.parse(levelJson({ ...def, runWindow: 75 }))).runWindow).toBe(75);
+    expect(() => parseLevelDef({ ...structuredClone(L2), runWindow: 12 })).toThrow(/level.runWindow must be seconds over 30/);
     expect(() => parseLevelDef({ ...structuredClone(L2), settle: 'v9' })).toThrow(/level.settle must be v1 or v2 or v3 or v4: v9/);
   });
 
