@@ -10,7 +10,7 @@ export const GAME_CSS = `
   .kg-panel { position: fixed; background: rgba(17, 20, 28, 0.8); color: #e8ebf2; border-radius: 10px; padding: 12px 14px; backdrop-filter: blur(6px); }
   .kg-hud, .kg-result { font-variant-numeric: tabular-nums; }
   .kg-hud kbd, .kg-result kbd, .kg-help kbd { font: 600 11px/1 ui-monospace, monospace; padding: 2px 4px; border-radius: 3px; background: #3a4459; color: #e8ebf2; margin-right: 2px; }
-  .kg-hud .bad, .kg-result .bad { color: #f0806a; } .kg-hud .ok, .kg-result .ok { color: #8fd3b6; } .kg-hud .small, .kg-result .small { font-size: 12px; }
+  .kg-hud .bad, .kg-result .bad { color: #f0806a; } .kg-hud .hint { color: #b9c0cf; } .kg-hud .ok, .kg-result .ok { color: #8fd3b6; } .kg-hud .small, .kg-result .small { font-size: 12px; }
   body.ended .kg-hud { opacity: 0.25; }
   .kg-hud .title { font-size: 17px; font-weight: 650; margin-bottom: 4px; }
   .kg-hud .row { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
@@ -27,6 +27,11 @@ export const GAME_CSS = `
   .kg-hud .bar i { display: block; height: 100%; background: linear-gradient(90deg, #8fd3b6, #f7b955, #f0806a); }
   .kg-banner { position: fixed; top: 22%; left: 0; right: 0; text-align: center; pointer-events: none; font: 800 44px/1.45 system-ui, sans-serif; letter-spacing: 0.04em; color: #fff; text-shadow: 0 3px 18px rgba(0, 0, 0, 0.45); opacity: 0; }
   .kg-banner.show { animation: kg-banner 1.4s ease-out; }
+  .kg-frozen { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); padding: 6px 18px; border-radius: 10px; background: rgba(14, 34, 64, 0.55); border: 1px solid rgba(140, 200, 255, 0.6); color: #e4f2ff; font: 600 20px/1.3 system-ui, sans-serif; letter-spacing: 0.03em; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 0.15s; z-index: 3; }
+  .kg-frozen b { font-weight: 900; letter-spacing: 0.14em; color: #9fd4ff; }
+  .kg-frozen kbd { font: inherit; font-size: 0.8em; padding: 0 5px; border: 1px solid rgba(228, 242, 255, 0.6); border-radius: 4px; }
+  .kg-frozen.on { opacity: 1; }
+  @media (max-width: 640px) { .kg-frozen { top: 110px; font-size: 16px; } } /* under the phone status strip, clear of the docked tray at the bottom (#244) */
   .kg-banner.crack { color: #f0806a; }
   .kg-result { top: 50%; left: 50%; transform: translate(-50%, -50%); min-width: 300px; max-height: calc(100vh - 24px); overflow-y: auto; box-sizing: border-box; display: none; padding: 20px 24px; font: 14px/1.45 system-ui, sans-serif; }
   .kg-result.show { display: block; animation: kg-rise 0.3s ease-out; }

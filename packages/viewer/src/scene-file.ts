@@ -58,7 +58,7 @@ export interface SceneFile {
    * absent for none; scoring, autobank, settle, freeze and physics: the game's rule overrides, ViewerConfig.keystone,
    * absent when not overridden); absent: the sandbox.
    */
-  rules?: { mode: 'keystone'; hitstop: boolean; slowmo: boolean; budget?: number; tailskip?: boolean; follow?: boolean; shake?: boolean; frames?: FrameMode; rapid?: boolean; undo?: number; launch?: LaunchMode; balls?: BallStyle; marks?: boolean; coats?: boolean; sun?: SunMode; fx?: EffectStyle; spent?: boolean; shots?: Shot[]; rack?: RackItem[] } & LevelRules;
+  rules?: { mode: 'keystone'; hitstop: boolean; slowmo: boolean; budget?: number; tailskip?: boolean; follow?: boolean; shake?: boolean; frames?: FrameMode; rapid?: boolean; undo?: number; launch?: LaunchMode; balls?: BallStyle; marks?: boolean; coats?: boolean; sun?: SunMode; fx?: EffectStyle; spent?: boolean; pullanim?: boolean; frozenlook?: boolean; shots?: Shot[]; rack?: RackItem[] } & LevelRules;
   /** How the scene is framed without a camera, and the field of view (ViewerConfig.view; absent, as in files saved before it: today's DEFAULT_FRAMING, so their saved camera shows at 45 rather than 50 degrees). */
   view: Framing;
   /** Collision sound: on, material, set and every knob (absent in older files: off, the defaults; no set: real). */
@@ -81,7 +81,7 @@ export function sceneFile(c: ViewerConfig, name: string, camera: CameraPose | nu
     look: { preset: c.look, real: { ...REAL_DEFAULTS, ...c.real } },
     camera,
     view: { ...c.view },
-    ...(c.rules === 'keystone' ? { rules: { mode: c.rules, hitstop: c.feel.hitStop, slowmo: c.feel.slowMo, ...(c.feel.budgetMs !== DEFAULT_FEEL.budgetMs ? { budget: c.feel.budgetMs } : {}), ...(c.feel.tailSkip ? {} : { tailskip: false }), ...(c.feel.follow ? { follow: true } : {}), ...(c.feel.shake ? { shake: true } : {}), ...(c.feel.frames !== DEFAULT_FEEL.frames ? { frames: c.feel.frames } : {}), ...(c.feel.rapid ? {} : { rapid: false }), ...(c.feel.undoMB !== DEFAULT_FEEL.undoMB ? { undo: c.feel.undoMB } : {}), ...(c.feel.launch !== DEFAULT_FEEL.launch ? { launch: c.feel.launch } : {}), ...(c.feel.balls !== DEFAULT_FEEL.balls ? { balls: c.feel.balls } : {}), ...(c.feel.marks ? {} : { marks: false }), ...(c.feel.coats ? {} : { coats: false }), ...(c.feel.sun !== DEFAULT_FEEL.sun ? { sun: c.feel.sun } : {}), ...(c.feel.fx !== DEFAULT_FEEL.fx ? { fx: c.feel.fx } : {}), ...(c.feel.spent ? {} : { spent: false }), ...(c.shots?.length ? { shots: c.shots.map((x) => ({ ...x })) } : {}), ...(c.rack ? { rack: [...c.rack] } : {}), ...structuredClone(c.keystone) } } : {}),
+    ...(c.rules === 'keystone' ? { rules: { mode: c.rules, hitstop: c.feel.hitStop, slowmo: c.feel.slowMo, ...(c.feel.budgetMs !== DEFAULT_FEEL.budgetMs ? { budget: c.feel.budgetMs } : {}), ...(c.feel.tailSkip ? {} : { tailskip: false }), ...(c.feel.follow ? { follow: true } : {}), ...(c.feel.shake ? { shake: true } : {}), ...(c.feel.frames !== DEFAULT_FEEL.frames ? { frames: c.feel.frames } : {}), ...(c.feel.rapid ? {} : { rapid: false }), ...(c.feel.undoMB !== DEFAULT_FEEL.undoMB ? { undo: c.feel.undoMB } : {}), ...(c.feel.launch !== DEFAULT_FEEL.launch ? { launch: c.feel.launch } : {}), ...(c.feel.balls !== DEFAULT_FEEL.balls ? { balls: c.feel.balls } : {}), ...(c.feel.marks ? {} : { marks: false }), ...(c.feel.coats ? {} : { coats: false }), ...(c.feel.sun !== DEFAULT_FEEL.sun ? { sun: c.feel.sun } : {}), ...(c.feel.fx !== DEFAULT_FEEL.fx ? { fx: c.feel.fx } : {}), ...(c.feel.spent ? {} : { spent: false }), ...(c.feel.pullAnim ? {} : { pullanim: false }), ...(c.feel.frozenLook ? {} : { frozenlook: false }), ...(c.shots?.length ? { shots: c.shots.map((x) => ({ ...x })) } : {}), ...(c.rack ? { rack: [...c.rack] } : {}), ...structuredClone(c.keystone) } } : {}),
     sound: { ...c.sound },
   };
 }
@@ -237,7 +237,7 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
   }
   if (root.rules !== undefined) {
     const r = object(root.rules, 'rules');
-    only(r, ['mode', 'hitstop', 'slowmo', 'budget', 'tailskip', 'follow', 'shake', 'frames', 'rapid', 'undo', 'launch', 'balls', 'marks', 'coats', 'sun', 'fx', 'spent', 'shots', 'rack', 'scoring', 'autobank', 'settle', 'freeze', 'physics'], 'rules');
+    only(r, ['mode', 'hitstop', 'slowmo', 'budget', 'tailskip', 'follow', 'shake', 'frames', 'rapid', 'undo', 'launch', 'balls', 'marks', 'coats', 'sun', 'fx', 'spent', 'pullanim', 'frozenlook', 'shots', 'rack', 'scoring', 'autobank', 'settle', 'freeze', 'physics'], 'rules');
     q.set('rules', str(r.mode, 'rules.mode'));
     if (r.hitstop !== undefined) q.set('keystone.hitstop', bool(r.hitstop, 'rules.hitstop') ? '1' : '0');
     if (r.slowmo !== undefined) q.set('keystone.slowmo', bool(r.slowmo, 'rules.slowmo') ? '1' : '0');
@@ -255,6 +255,8 @@ export function parseSceneFile(text: string): { config: ViewerConfig; name: stri
     if (r.sun !== undefined) q.set('keystone.sun', str(r.sun, 'rules.sun'));
     if (r.fx !== undefined) q.set('keystone.fx', str(r.fx, 'rules.fx'));
     if (r.spent !== undefined) q.set('keystone.spent', bool(r.spent, 'rules.spent') ? '1' : '0');
+    if (r.pullanim !== undefined) q.set('keystone.pullanim', bool(r.pullanim, 'rules.pullanim') ? '1' : '0');
+    if (r.frozenlook !== undefined) q.set('keystone.frozenlook', bool(r.frozenlook, 'rules.frozenlook') ? '1' : '0');
     if (r.shots !== undefined) q.set('keystone.shots', shotsText(r.shots));
     // The rack as its URL key (rackOf checks the names against the level).
     if (r.rack !== undefined) {
