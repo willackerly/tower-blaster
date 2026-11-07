@@ -4,7 +4,7 @@ import {
   pulseSpectrum, CLASSIC_SOUND_MATERIALS, REAL1_SOUND_MATERIALS, SOUND_MATERIALS, type SoundMaterial,
 } from '@tb/audio';
 import { rng } from '@tb/scenarios';
-import { MIN_MODE_HZ } from '../src/modes.ts';
+import { BL_CLICK_LEAD, BL_CLICK_MAX, clickShape, MIN_MODE_HZ } from '../src/modes.ts';
 import { framesOf, renderLadder, script } from '../src/ladder-cli.ts';
 
 const pine: SoundMaterial = CLASSIC_SOUND_MATERIALS.pine, acrylic: SoundMaterial = SOUND_MATERIALS.acrylic, stone: SoundMaterial = REAL1_SOUND_MATERIALS.stone; // the free plank (the real set's is damped as in a pile, A9); the plain Hertz cube (the default's adds a face contact)
@@ -97,6 +97,43 @@ describe('contact and click', () => {
     const a = clickKernel(pine, 4e-4, 192000), b = clickKernel(pine, 8e-4, 192000);
     expect(Math.abs(a.reduce((s, x) => s + x, 0)) / Math.max(...a)).toBeLessThan(0.02);
     expect(Math.max(...a) / Math.max(...b)).toBeCloseTo(4, 1);
+  });
+});
+
+describe('band-limited clicks (A7)', () => {
+  const SR = 48000;
+  // One sine cycle of D samples: |C(w)| = w0 |2 sin(w D / 2)| / |w0^2 - w^2|, w0 = 2 pi / D (w in radians a sample).
+  const exact = (D: number, f: number) => { const w = (2 * Math.PI * f) / SR, w0 = (2 * Math.PI) / D; return Math.abs((w0 * 2 * Math.sin((w * D) / 2)) / (w0 * w0 - w * w)); };
+  const dtft = (x: ArrayLike<number>, f: number) => { let re = 0, im = 0; for (let i = 0; i < x.length; i++) { const a = (2 * Math.PI * f * i) / SR; re += x[i]! * Math.cos(a); im -= x[i]! * Math.sin(a); } return Math.hypot(re, im); };
+  const band = (x: ArrayLike<number> | null, D: number, lo: number, hi: number) => { let e = 0; for (let f = lo + 12.5; f < hi; f += 25) { const v = x ? dtft(x, f) : exact(D, f); e += v * v; } return e; };
+  const BANDS = [[250, 500], [500, 1000], [1000, 2000], [2000, 4000], [4000, 8000], [8000, 12000], [12000, 16000], [16000, 20000]] as const;
+  const worst = (x: ArrayLike<number>, D: number) => {
+    const total = band(null, D, 25, 20000);
+    return Math.max(...BANDS.map(([lo, hi]) => { const e = band(null, D, lo, hi); return e < 1e-4 * total ? 0 : Math.abs(10 * Math.log10(band(x, D, lo, hi) / e)); }));
+  };
+  const sampled = (D: number) => Array.from({ length: Math.ceil(D) }, (_, i) => Math.sin((2 * Math.PI * (i + 0.5)) / D));
+
+  it('a short click is the continuous pulse to 20 kHz, band for band, where the sampled one droops or aliases', () => {
+    for (const D of [2.5, 3, 5, 8, 12, 16, 24, 48]) {
+      const h = clickShape(D);
+      expect(worst(h, D), `D ${D}`).toBeLessThan(0.3);
+      expect(Math.abs(h.reduce((a, x) => a + x, 0)), `D ${D}: no net pressure`).toBeLessThan(1e-4 * D);
+      expect(h.length - 2 * BL_CLICK_LEAD - Math.ceil(D)).toBeGreaterThanOrEqual(0); expect(h.length - 2 * BL_CLICK_LEAD - Math.ceil(D)).toBeLessThanOrEqual(2);
+    }
+    // The sampled cycle: 1.5 dB off or worse in some band at every D under 24 samples (droop at the top, aliasing under ~5).
+    for (const D of [2.5, 3, 5, 8, 12, 16, 24]) expect(worst(sampled(D), D), `D ${D}`).toBeGreaterThan(1.5);
+    expect(clickShape(12)).toBe(clickShape(12.01)); // quantised to 0.5% and cached
+  });
+
+  it('only clickBand limited clicks are band-limited, and only under BL_CLICK_MAX samples', () => {
+    const lim = { ...stone, clickBand: 'limited' as const }, T = 12 / 192000;
+    expect(clickKernel(stone, T, 192000).length).toBe(12);
+    expect(clickKernel(lim, T, 192000).length).toBe(clickShape(12).length);
+    expect(clickKernel(lim, (BL_CLICK_MAX + 1) / 192000, 192000).length).toBe(BL_CLICK_MAX + 1);
+    // The same pulse at the same scale: the limited kernel's low end is the sampled one's.
+    const a = clickKernel(stone, T, 192000), b = clickKernel(lim, T, 192000);
+    expect(dtft(b, 200) / dtft(a, 200)).toBeCloseTo(1, 1); // within 0.15 dB (the sampled cycle's own aliasing, and the 0.5% quantum)
+    expect(() => parseSoundMaterial({ clickBand: 'sinc' } as never, stone)).toThrow(/clickBand/);
   });
 });
 

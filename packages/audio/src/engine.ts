@@ -42,7 +42,7 @@
 // limiting does not crackle.
 import { binOf, DV_EDGES, TOP_FIELDS, type AudioFrame } from './frame.ts';
 import type { SoundMaterial } from './material.ts';
-import { C_AIR, clickFilter, clickKernel, contactTime, mass, RHO_AIR, radiatedClick, DENSE_BANDS, denseField, forceSpectrum, gauss, modes, roughness, roughTime, soundSize, type Modes } from './modes.ts';
+import { BL_CLICK_MAX, C_AIR, clickFilter, clickKernel, contactTime, mass, RHO_AIR, radiatedClick, DENSE_BANDS, denseField, forceSpectrum, gauss, modes, roughness, roughTime, soundSize, type Modes } from './modes.ts';
 
 export const BLOCK = 128;
 const RING = 64; // blocks of scheduling horizon (171 ms at 48 kHz)
@@ -178,6 +178,11 @@ interface MatState {
   /** Click resonator per (bin, sector): its period D (samples, per bin), 2 cos(2 pi / D), state, input and the input's last D samples. */
   cD: Int32Array; cc: Float64Array; cy1: Float64Array; cy2: Float64Array; cx: Float32Array; cring: Float64Array[];
   cLast: Float64Array; // per (bin, sector): absolute sample of its last input (-Infinity: none)
+  /**
+   * Per bin: a click shorter than BL_CLICK_MAX samples plays as its band-limited kernel instead (A7; null: the
+   * resonator), overlap-added per (bin, sector) into cAcc (BLOCK + the kernel's length).
+   */
+  cFir: (Float32Array | null)[]; cAcc: Float64Array[];
   clickPeak: Float64Array; // per bin: impulse into the click resonator per (m/s of dv per m)
   /** Radiation filter of the bank's clicks (clickFilter; null: the compact dipole), its per-sector state [x1 x2 y1 y2] and bus. */
   cf: [number, number, number, number, number] | null; cfz: Float64Array; cbus: Float64Array;
@@ -334,6 +339,7 @@ export class CollapseEngine {
       cD: new Int32Array(DV_EDGES.length), cc: new Float64Array(DV_EDGES.length),
       cy1: new Float64Array(DV_EDGES.length * S), cy2: new Float64Array(DV_EDGES.length * S),
       cx: keep ? old.cx : new Float32Array(DV_EDGES.length * S * BLOCK), cring: [], cLast: new Float64Array(DV_EDGES.length * S).fill(-Infinity),
+      cFir: [], cAcc: [],
       cf: clickFilter(m, this.sr, edge), cfz: new Float64Array(4 * S), cbus: new Float64Array(S * BLOCK),
       clickPeak: new Float64Array(DV_EDGES.length), binT: new Float64Array(DV_EDGES.length), w: new Float64Array(md.freq.length),
       gritAmp: Math.sqrt(gritEnergy(m, edge)),
@@ -355,12 +361,15 @@ export class CollapseEngine {
       // cycle of the kernel's sine is D samples, and the same impulse negated D samples later ends it
       // (u = x - x[n - D]). Scaled so one impulse carries the exact kernel's energy (clickKernel) for a
       // unit dv at 1 m; the cycle's energy is D / 2 / sin(th)^2.
-      const D = Math.max(4, Math.round(T * this.sr)), th = (2 * Math.PI) / D;
+      const D = Math.max(4, Math.round(T * this.sr)), th = (2 * Math.PI) / D, kernel = clickKernel(m, T, this.sr, edge);
       st.cD[bin] = D; st.cc[bin] = 2 * Math.cos(th);
+      // A short click (A7) is its band-limited kernel itself: an impulse of A plays A times it.
+      const fir = m.clickBand === 'limited' && T * this.sr < BL_CLICK_MAX ? kernel : null;
+      st.cFir.push(fir);
       let ek = 0;
-      for (const x of clickKernel(m, T, this.sr, edge)) ek += x * x;
-      st.clickPeak[bin] = Math.sqrt(ek / (D / 2)) * Math.sin(th);
-      for (let s = 0; s < S; s++) st.cring.push(new Float64Array(D));
+      for (const x of kernel) ek += x * x;
+      st.clickPeak[bin] = fir ? 1 : Math.sqrt(ek / (D / 2)) * Math.sin(th);
+      for (let s = 0; s < S; s++) { st.cring.push(new Float64Array(fir ? 0 : D)); st.cAcc.push(new Float64Array(fir ? BLOCK + fir.length : 0)); }
     }
     const dense = denseField(m, st.binT, edge, Math.min(18000, 0.45 * this.sr));
     if (dense) {
@@ -375,8 +384,8 @@ export class CollapseEngine {
     // A click under way keeps playing through a change that keeps its period.
     if (keep) for (let r = 0; r < st.cring.length; r++) {
       const bin = Math.floor(r / S);
-      if (old.cD[bin] !== st.cD[bin]) continue;
-      st.cring[r] = old.cring[r]!; st.cy1[r] = old.cy1[r]!; st.cy2[r] = old.cy2[r]!; st.cLast[r] = old.cLast[r]!;
+      if (old.cD[bin] !== st.cD[bin] || old.cAcc[r]?.length !== st.cAcc[r]!.length) continue;
+      st.cring[r] = old.cring[r]!; st.cy1[r] = old.cy1[r]!; st.cy2[r] = old.cy2[r]!; st.cLast[r] = old.cLast[r]!; st.cAcc[r] = old.cAcc[r]!;
     }
     // Ringing cracks: a crack is a pulse shorter than any contact (flat over the modes, the shortest
     // contact's dense row), with no rigid-body click (it carries no momentum). Its energy for A = 1:
@@ -469,6 +478,25 @@ export class CollapseEngine {
     }
   }
 
+  /** A short click's (bin, sector) r for this block: its impulses overlap-add their band-limited kernel (A7). */
+  private firClick(st: MatState, r: number, h: Float32Array): void {
+    const acc = st.cAcc[r]!, L = h.length, o = r * BLOCK, out = st.cf ? st.cbus : this.sector, so = (r % this.sectors) * BLOCK;
+    let last = st.cLast[r]!;
+    // Idle: no input this block, and the last kernel has played out.
+    if (!st.cIn[r] && this.now - last >= L) return;
+    st.cIn[r] = 0;
+    this.work += BLOCK;
+    for (let i = 0; i < BLOCK; i++) {
+      const x = st.cx[o + i]!;
+      if (x === 0) continue;
+      st.cx[o + i] = 0; last = this.now + i;
+      for (let j = 0; j < L; j++) acc[i + j]! += x * h[j]!;
+    }
+    for (let i = 0; i < BLOCK; i++) out[so + i]! += acc[i]!;
+    acc.copyWithin(0, BLOCK); acc.fill(0, L);
+    st.cLast[r] = last;
+  }
+
   private voice(mat: number, dv: number, dist: number, pan: number, z: number, at: number): void {
     const st = this.mats[mat];
     if (!st) return;
@@ -551,6 +579,8 @@ export class CollapseEngine {
         if (peak < 1e-7) { st.live[r] = 0; st.nLive--; st.y1[r] = 0; st.y2[r] = 0; }
       }
       for (let r = 0; r < st.cring.length; r++) {
+        const fir = st.cFir[Math.floor(r / S)];
+        if (fir) { this.firClick(st, r, fir); continue; }
         const D = st.cD[Math.floor(r / S)]!, c = st.cc[Math.floor(r / S)]!, ring = st.cring[r]!, o = r * BLOCK, so = (r % S) * BLOCK;
         let y1 = st.cy1[r]!, y2 = st.cy2[r]!, last = st.cLast[r]!;
         // Idle: no input for a period (the ring holds only zeros) and the last cycle ended.

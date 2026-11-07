@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BLOCK, CLASSIC_SOUND_MATERIALS, CollapseEngine, contactTime, DV_EDGES, normInv, type SoundMaterial } from '@tb/audio';
+import { BL_CLICK_MAX, BLOCK, CLASSIC_SOUND_MATERIALS, clickKernel, CollapseEngine, contactTime, DV_EDGES, normInv, type SoundMaterial } from '@tb/audio';
 
 // The click and the bank's mechanics, on G6's materials (the click is the same in both sets; the real
 // set's roughness and dense field add their own sound, covered in realism.test.ts).
@@ -56,7 +56,7 @@ describe('CollapseEngine', () => {
   // The bank's click used to be an impulse into a damped band-pass, differentiated: right energy, but
   // its first sample was a full-band spike, so a 1 m stone block's 60 Hz thump came out as a tick
   // 34-46 dB too bright at 1-4 kHz, and a stone collapse (all bank) as crackle.
-  it.each([['stone, 1 m blocks', SOUND_MATERIALS.stone, 1], ['stone, 0.25 m', SOUND_MATERIALS.stone, 0.25], ['stone, Kapla-size', SOUND_MATERIALS.stone, 0.0234], ['acrylic', SOUND_MATERIALS.acrylic, 1], ['pine', pine, 1]] as const)('the bank plays the exact click kernel, band for band (%s)', (_name, m, edge) => {
+  it.each([['stone, 1 m blocks', SOUND_MATERIALS.stone, 1], ['stone, 0.25 m', SOUND_MATERIALS.stone, 0.25], ['stone, Kapla-size', SOUND_MATERIALS.stone, 0.0234], ['stone, Kapla-size, band-limited', { ...SOUND_MATERIALS.stone, clickBand: 'limited' }, 0.0234], ['acrylic', SOUND_MATERIALS.acrylic, 1], ['pine', pine, 1], ['pine, band-limited', { ...pine, clickBand: 'limited' }, 1]] as const)('the bank plays the exact click kernel, band for band (%s)', (_name, m, edge) => {
     const quiet = { ...m, ringDb: -Infinity, gritDb: -Infinity }, bin = 2, dv = DV_EDGES[bin] * Math.SQRT2; // the bin's own contact time
     const play = (voice: boolean) => {
       const e = new CollapseEngine({ sampleRate: SR, seed: 1, fullScale: 1e6 });
@@ -66,11 +66,28 @@ describe('CollapseEngine', () => {
     const fg = octaves(play(true)), bank = octaves(play(false)), total = fg.reduce((a, b) => a + b, 0);
     // Within 1 dB where the click is (bands with 1% of its energy), 3 dB in its faint skirts: the bank's
     // cycle is a whole number of samples (20 for acrylic and pine, so up to 2.5% off the contact time).
-    // A click under 16 samples (stone at Kapla size: 8) is sampled too coarsely for its top octave in
-    // either path: against the band-limited pulse the kernel reads 16 kHz 4.6 dB low and the bank 4.8 dB
-    // high, so that octave is left out for it (a band-limited kernel for both would fix it).
-    const D = Math.round(contactTime(m, dv, edge) * SR);
-    fg.forEach((x, k) => { if (x > 1e-4 * total && (D >= 16 || k < 10)) expect(Math.abs(db(bank[k]! / x)), `octave ${16 * 2 ** k} Hz`).toBeLessThan(x > 0.01 * total ? 1 : 3); });
+    // A sampled click under 16 samples (stone at Kapla size: 8) is too coarse for its top octave in either
+    // path: against the band-limited pulse the kernel reads 16 kHz 4.6 dB low and the bank 4.8 dB high, so
+    // that octave is left out for it. A band-limited one (clickBand limited, the real set: A7) is the same
+    // kernel in both, to within float rounding, so every octave holds.
+    const D = Math.round(contactTime(m, dv, edge) * SR), limited = (m as SoundMaterial).clickBand === 'limited' && D < BL_CLICK_MAX;
+    fg.forEach((x, k) => { if (x > 1e-4 * total && (D >= 16 || k < 10 || limited)) expect(Math.abs(db(bank[k]! / x)), `octave ${16 * 2 ** k} Hz`).toBeLessThan(limited ? 0.3 : x > 0.01 * total ? 1 : 3); });
+    // Band-limited, the two differ by one gain (the bank's level is 0.17 dB under the voice's on every click,
+    // sampled or not): flat to 0.05 dB across every octave, the top one included (sampled at Kapla size: +9 dB at 16 kHz).
+    if (limited) { const d = fg.flatMap((x, k) => (x > 1e-4 * total ? [db(bank[k]! / x)] : [])); expect(Math.max(...d) - Math.min(...d)).toBeLessThan(0.05); }
+  });
+
+  it('a band-limited click (A7) ends after its kernel, and its bank row goes idle', () => {
+    const m: SoundMaterial = { ...SOUND_MATERIALS.stone, clickBand: 'limited', ringDb: -Infinity, gritDb: -Infinity }, edge = 0.0234;
+    const e = engine(1, m, { fullScale: 1 }); e.setMaterial(0, m, edge);
+    e.lowcut = 0; e.limiter.process = () => {};
+    const T = contactTime(m, DV_EDGES[3] * Math.SQRT2, edge), L = clickKernel(m, T, SR, edge).length;
+    expect(T * SR).toBeLessThan(BL_CLICK_MAX);
+    const { mono } = run(e, 200, (b) => b === 0 && e.push(frame([{ bin: 3, count: 1, a2: 1 }])));
+    const first = mono.findIndex((x) => x !== 0), peak = Math.max(...mono.map(Math.abs));
+    expect(first).toBeGreaterThan(0);
+    expect(Math.max(...mono.subarray(first + L).map(Math.abs))).toBeLessThan(1e-9 * peak);
+    const work = e.work; run(e, 20); expect(e.work).toBe(work);
   });
 
   it('a click ends after one contact time: nothing rings on', () => {

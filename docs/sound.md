@@ -182,7 +182,7 @@ shorter than ~16 samples (stone blocks under ~3 cm: 8 samples at Kapla
 size) is sampled too coarsely for its top octave, in the voices' kernel and
 in the bank alike. Against the band-limited pulse, 16 kHz reads 4.6 dB low
 in one and 4.8 dB high in the other. That band is 20+ dB under the click's
-own. Band-limited kernels for both would fix it.
+own. Band-limited kernels for both would fix it (A7 did, for the real set: Band-limited clicks, below).
 
 Stone city before and after, energy above 1 kHz: -27 dB of the total before,
 -37 dB after. The audio thread's cost is unchanged (both ~15% of a VM core;
@@ -764,6 +764,43 @@ shorter decays leave fewer resonators ringing. Inside A3's budget.
 
 Clips for listening (before, after): /mnt/project-files/sound/kapla/ (knock, clatter, the 2k topple, B5's
 grenade shot level-free).
+
+## Band-limited clicks (A7, 2026-11-07)
+
+The click of a body's own acceleration is one sine cycle as long as the contact (modes.ts clickKernel).
+Sampled at mid-sample, a cycle of D samples is not the continuous pulse: against its exact spectrum,
+|C(w)| = w0 |2 sin(w D / 2)| / |w0^2 - w^2|, octave by octave (dB):
+
+| D (samples) | 0.5-1 kHz | 2-4 kHz | 8-12 kHz | 12-16 kHz | 16-20 kHz |
+|---|---|---|---|---|---|
+| 2.5 | +11.4 | +1.6 | -0.9 | -0.2 | +1.0 |
+| 3 | +1.6 | +1.6 | +1.2 | +0.6 | -1.0 |
+| 8 | +0.2 | +0.2 | -0.3 | -1.6 | -3.3 |
+| 16 | +0.1 | 0.0 | -0.6 | -1.6 | -3.7 |
+| 24 | 0.0 | 0.0 | -0.7 | -1.7 | |
+| 64 | 0.0 | 0.0 | | | |
+
+(blank: under 1e-4 of the click's energy). It droops in the top octaves and aliases under ~5 samples. The bank's
+click, a resonator with a whole-sample period of at least 4, was further off: at Kapla-size stone, +9 dB at
+16 kHz against the voice's. The real set's Kapla planks (12-24 samples), ice pieces at B5's h (20-29) and
+small stone blocks (8 samples at Kapla size) click in that range.
+
+New key `clickBand`: `'sampled'` (absent, G6's) or `'limited'`. Limited, a click under BL_CLICK_MAX (64)
+samples is the pulse convolved with a Kaiser-windowed sinc (cutoff 0.45 of the rate, half-width 24 samples,
+beta 8; modes.ts clickShape): within 0.3 dB of the continuous spectrum in every octave to 20 kHz, with no net
+pressure. Shapes are quantised to 0.5% of D and cached (a few hundred at most, ~30 us each). The bank plays
+such a click as the same kernel, overlap-added per (bin, sector) (engine.ts firClick), so a bank click and a
+voice click are one kernel to within one gain (0.17 dB, the bank's level on every click, sampled or not).
+A band-limited click starts 24 samples (0.5 ms) after its onset; a voice's modes start at the onset.
+
+Every material of the real set is limited; real1 and classic keep G6's sampled clicks (classic still hashes
+bit for bit). The judge barely moves, as a fix this far up should: the 2k Kapla topple 0.92 -> 0.95, the pine
+ladder 0.69 -> 0.71 (mean of knock, clatter, tumble), stone and ice at 5 cm within 0.01.
+
+Cost (cost-cli on the 2k Kapla capture, 23,726 impacts, this VM, best of 5; sampled -> limited): pine at
+Kapla size 3.9% -> 4.2% of a core, stone at 0.117 m 5.3% -> 5.3%, stone at 0.5 m 10.6% -> 10.4%, ice 12.6%
+-> 12.5%, acrylic 19.7% -> 19.6%. Within the run-to-run noise except pine's +0.3 points (its bank rows are
+FIRs of 60-70 taps instead of 20-sample resonators); inside A3's budget.
 
 ## Plan (each step lands with its test)
 
