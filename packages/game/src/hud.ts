@@ -501,7 +501,9 @@ export function tallyHtml(level: LevelDef, score: LevelScore | null, over: strin
  * at once and tallies, and is drawn again with the score when it settles.
  * Two groups, `.c1` (name, the score lines and the total) and `.c2` (stamp, stars, badge, lot sheet and
  * the buttons): one column as before, two side by side on a phone held sideways (GAME_CSS, docked).
- * Score lines slam in one by one, then the stamp and stars.
+ * Score lines slam in one by one, then the stamp and stars. An outcome level's sub line gives its share down,
+ * except on a hold level (U3), whose metric is the share pulled: the stamp and the Pulled line carry it, and a
+ * "% down" beside them was a second metric (PT35).
  */
 /**
  * The phone strip's toggle (layout.ts card strip, PT30): the strip shows the name, stamp, stars, reason and buttons in
@@ -530,7 +532,7 @@ export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: n
   const worlds = score.worlds && !score.mason ? ` · ${score.worlds.cleared} of ${score.worlds.of} worlds cleared` : '';
   const fz = score.freezes ? ` · freezes used ${score.freezes.used}/${score.freezes.total}` : '';
   const lost = score.heritageStarsLost ? `<div class="lost bad" style="animation-delay:${after + 0.7}s">Heritage cracked: ${score.heritageStarsLost} star${score.heritageStarsLost === 1 ? '' : 's'} lost</div>` : '';
-  const sub = `${shotsText}${'outcome' in score ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''}${worlds}${score.mason ? '' : ` · leverage ${fmtLeverage(score.leverage)}${tierText ? ` (${tierText})` : ''}`}${fz}`;
+  const sub = `${shotsText}${'outcome' in score && level.objective.kind !== 'hold' ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''}${worlds}${score.mason ? '' : ` · leverage ${fmtLeverage(score.leverage)}${tierText ? ` (${tierText})` : ''}`}${fz}`;
   // The mode's card (mode-ui.ts, PT27): its rows, stamp and words; a reason on a failed round; HERITAGE LOST in red.
   const card = cardModel(level, score, mode.facts, { sub, stamp: score.stamp }, mode.modeUi ?? true);
   const rows = card.rows.map((r) => `<div class="line fact"><span>${esc(r.label)}</span><span class="${r.tone ?? ''}">${esc(r.value)}</span></div>`).join('');

@@ -8,6 +8,7 @@ import { chorusViewOption } from './chorusview.ts';
 import { budgetMs } from './budget.ts';
 import { camera } from './camera.ts';
 import { coats } from './coats.ts';
+import { duelLead } from './duellead.ts';
 import { follow } from './follow.ts';
 import { frames } from './frames.ts';
 import { frozenAim } from './frozenaim.ts';
@@ -52,6 +53,7 @@ export const OPTIONS = [
   turnView,
   arcs,
   handoff,
+  duelLead,
   undoMB,
   launch,
   balls,

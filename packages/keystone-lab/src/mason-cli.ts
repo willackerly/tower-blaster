@@ -19,7 +19,9 @@ const worlds = Array.from({ length: K }, (_, k) => k);
 
 for (const def of MASON_LEVEL_DEFS.filter((d) => !ids.length || ids.includes(d.id))) {
   const list: MasonBuild[] = [...MASON_SOLUTIONS[def.id]!, ...(flags.has('--knife') ? [MASON_KNIFE[def.id]!] : []), ...(flags.has('--wrong') ? MASON_WRONG[def.id]! : [])];
-  console.log(`${def.id} ${def.name}: stars ${JSON.stringify(def.mason!.stars)}, from the authors' records ${JSON.stringify(masonStarsFrom(def, MASON_SOLUTIONS[def.id]!))}`);
+  let fromRecords: string;
+  try { fromRecords = JSON.stringify(masonStarsFrom(def, MASON_SOLUTIONS[def.id]!)); } catch (e) { fromRecords = `none yet (${(e as Error).message})`; } // a level being tuned has no records
+  console.log(`${def.id} ${def.name}: stars ${JSON.stringify(def.mason!.stars)}, from the authors' records ${fromRecords}`);
   for (const b of list.filter((x) => x.label.includes(match))) {
     const built = masonBuild(def, b.steps);
     if ('refused' in built) { console.log(`  ${b.label}: REFUSED ${built.refused}`); continue; }
