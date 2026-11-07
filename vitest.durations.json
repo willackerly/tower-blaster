@@ -53,6 +53,8 @@
   "packages/game/test/launch-e2e.test.ts": 18,
   "packages/game/test/level-start-e2e.test.ts": 45,
   "packages/game/test/level-start-gpu.test.ts": 150,
+  "packages/game/test/light-e2e.test.ts": 60.0,
+  "packages/game/test/light.test.ts": 0.5,
   "packages/game/test/load-cost.test.ts": 0,
   "packages/game/test/lot-e2e.test.ts": 5.2,
   "packages/game/test/marks-e2e.test.ts": 9.7,
@@ -114,7 +116,7 @@
   "packages/keystone-lab/test/fork.test.ts": 64.6,
   "packages/keystone-lab/test/freeze.test.ts": 1.1,
   "packages/keystone-lab/test/goal-lab.test.ts": 13.5,
-  "packages/keystone-lab/test/ice.test.ts": 4.5,
+  "packages/keystone-lab/test/ice.test.ts": 9.0,
   "packages/keystone-lab/test/lot-sheets-L2.test.ts": 188.8,
   "packages/keystone-lab/test/lot-sheets.test.ts": 112,
   "packages/keystone-lab/test/page-retry.test.ts": 0,
@@ -334,5 +336,7 @@
   "packages/weapons/test/runtime.test.ts": 2.7,
   "packages/weapons/test/spec.test.ts": 0.1,
   "packages/weapons/test/tiers.test.ts": 0.2,
-  "packages/weapons/test/yield.test.ts": 0.1
+  "packages/weapons/test/yield.test.ts": 0.1,
+  "packages/game/test/coats-e2e.test.ts": 60.0,
+  "packages/game/test/ice-pale-e2e.test.ts": 75.0
 }

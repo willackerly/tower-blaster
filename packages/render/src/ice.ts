@@ -69,20 +69,27 @@ export interface IceParams {
   blur: number;
   /** White rime along the edges of a face, 0 (none) to 1. */
   rime: number;
+  /**
+   * The share of the sun an ice block's shadow lets through, 0 (an opaque shadow, as stone's) to 1 (none). The
+   * shadow map holds one depth per texel, so the caster is a screen door: that share of its texels, rounded to
+   * ninths, is left open (fsIceShadow, an ordered 3 x 3 pattern), and the receivers' shadow filter averages them
+   * into a lighter shadow (0.7 opens 6 of 9).
+   */
+  shadow: number;
 }
 
 /** Green and blue absorption as shares of red's: ice's own spectrum, roughly (it absorbs red about 10x as much as blue). */
 export const ICE_SPECTRUM: V3 = [1, 0.3, 0.1];
 
 export const DEFAULT_ICE: IceParams = {
-  ior: 1.31, absorb: 0.5, cloud: 0.8, bubbles: 0.1, glint: 2, glintSize: 0.025, frost: 0.12, depth: 1, bounces: 2, crack: 1, blur: 2, rime: 0.2,
+  ior: 1.31, absorb: 0.5, cloud: 0.8, bubbles: 0.1, glint: 2, glintSize: 0.025, frost: 0.12, depth: 1, bounces: 2, crack: 1, blur: 2, rime: 0.2, shadow: 0.7,
 };
 
 /** URL knobs ice.<key>: each IceParams field with its accepted range. */
 export const ICE_KNOBS: Record<keyof IceParams, { min: number; max: number; int?: true }> = {
   ior: { min: 1, max: 2.5 }, absorb: { min: 0, max: 20 }, cloud: { min: 0, max: 20 }, bubbles: { min: 0, max: 1 },
   glint: { min: 0, max: 10 }, glintSize: { min: 0.002, max: 0.1 }, frost: { min: 0, max: 1 }, depth: { min: 0, max: 10 },
-  bounces: { min: 0, max: 4, int: true }, crack: { min: 0, max: 4 }, blur: { min: 0, max: 16 }, rime: { min: 0, max: 1 },
+  bounces: { min: 0, max: 4, int: true }, crack: { min: 0, max: 4 }, blur: { min: 0, max: 16 }, rime: { min: 0, max: 1 }, shadow: { min: 0, max: 1 },
 };
 
 /** From URL keys ice.<knob> (ICE_KNOBS), absent ones at DEFAULT_ICE. Refuses unknown knobs and values outside their range. */

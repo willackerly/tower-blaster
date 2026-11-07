@@ -48,6 +48,10 @@ describe('ice knobs (URL keys ice.<knob>)', () => {
     expect(() => parseIceOptions(new URLSearchParams('ice.ior=0.5'))).toThrow(/from 1 to 2.5/);
     expect(() => parseIceOptions(new URLSearchParams('ice.bounces=1.5'))).toThrow(/whole number/);
     expect(() => parseIceOptions(new URLSearchParams('ice.absorb='))).toThrow();
+    // The shadow's share of the sun let through (PT15): 0 opaque as stone, 1 none.
+    expect(DEFAULT_ICE.shadow).toBe(0.7);
+    expect(parseIceOptions(new URLSearchParams('ice.shadow=0')).shadow).toBe(0);
+    expect(() => parseIceOptions(new URLSearchParams('ice.shadow=1.5'))).toThrow(/from 0 to 1/);
     for (const [k, r] of Object.entries(ICE_KNOBS)) expect(DEFAULT_ICE[k as keyof typeof DEFAULT_ICE]).toBeGreaterThanOrEqual(r.min);
   });
 

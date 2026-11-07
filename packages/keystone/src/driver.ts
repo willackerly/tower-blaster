@@ -396,7 +396,7 @@ export class Driver {
     this.push(r.events);
     const placed = this.ice.placed(r.events.filter((e): e is SpawnEvent => e.kind === 'spawn').map((e) => this.idOf(e)));
     this.session.shatter(r.shatter.body);
-    feedback.push({ t: 'shatter', step: placed.step, body: placed.body, pieces: placed.pieces, dv: r.shatter.dv });
+    feedback.push({ t: 'shatter', step: placed.step, body: placed.body, pieces: placed.pieces, dv: r.shatter.dv, cracks: placed.cracks });
   }
 
   /** Every ice body with its crack as it stands (IceBreaker.surfaces): what the game paints as ice on a load or an undo. */
