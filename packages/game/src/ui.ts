@@ -150,7 +150,8 @@ export const GAME_CSS = `
   .kg-frozen.on { opacity: 1; }
   @media (max-width: 640px) { .kg-frozen { top: 110px; font-size: 16px; } } /* under the phone status strip, clear of the docked tray at the bottom (#244) */
   .kg-banner.crack { color: #f0806a; }
-  .kg-result { top: 50%; left: 50%; transform: translate(-50%, -50%); min-width: 300px; max-height: calc(100vh - 24px); overflow-y: auto; box-sizing: border-box; display: none; padding: 20px 24px; font: 14px/1.45 system-ui, sans-serif; }
+  /* z-index: the card is above every panel (PT21: the fuse panel drew over it), under the door (10) and the duel hand-over (30). */
+  .kg-result { z-index: 5; top: 50%; left: 50%; transform: translate(-50%, -50%); min-width: 300px; max-height: calc(100vh - 24px); overflow-y: auto; box-sizing: border-box; display: none; padding: 20px 24px; font: 14px/1.45 system-ui, sans-serif; }
   .kg-result.show { display: block; animation: kg-rise 0.3s ease-out; }
   /* The docked card (layout.ts, PT4): aside on the right, below the Menu button, sliding in; its buttons stay in view while the rest scrolls. */
   .kg-result.dock { top: 64px; right: 12px; left: auto; transform: none; width: 360px; min-width: 0; max-height: calc(100% - 76px); padding-bottom: 0; }

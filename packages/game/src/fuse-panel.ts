@@ -7,8 +7,11 @@ import { delayCss, MAX_SNAPS, northOnScreen, panelTimeline, RELAY_CSS, SWEEP_DIR
 import { FUSE_PANEL_SHARE } from './view.ts';
 
 export const FUSE_CSS = `
-  .kg-fuse { right: 12px; bottom: 12px; width: 300px; max-height: calc(100vh - 140px); overflow-y: auto; font: 13px/1.35 system-ui, sans-serif; display: none; }
-  .kg-fuse.show { display: block; }
+  .kg-fuse { right: 12px; bottom: 12px; width: 300px; max-height: calc(100vh - 140px); box-sizing: border-box; overflow: hidden; font: 13px/1.35 system-ui, sans-serif; display: none; }
+  /* A column whose rows alone scroll (PT21): the head, the Sweep and the Plunger stay in sight whatever the panel's height. */
+  .kg-fuse.show { display: flex; flex-direction: column; }
+  .kg-fuse > * { flex: none; }
+  .kg-fuse > .rows { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
   .kg-fuse.off .rows, .kg-fuse.off .sweep { opacity: 0.4; pointer-events: none; }
   .kg-fuse .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
   .kg-fuse .head b { font-size: 15px; }
@@ -34,7 +37,20 @@ export const FUSE_CSS = `
   .kg-fuse .relays i { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 50%; vertical-align: -1px; }
   .kg-fuse button.plunger { width: 100%; font: 700 15px/1 system-ui, sans-serif; padding: 9px 0; border: 0; border-radius: 7px; background: #c8402e; color: #fff; cursor: pointer; }
   .kg-fuse button.plunger:disabled { background: #4a3a3a; color: #9aa3b8; cursor: default; }
+  .kg-fuse .fold { display: none; width: 100%; margin-bottom: 6px; font: inherit; border: 0; border-radius: 5px; background: #2b3242; color: #e8ebf2; cursor: pointer; padding: 3px 8px; text-align: left; }
+  /* The round is over: the card is the screen's (PT21); Undo or Retry takes the card away and brings the panel back. */
+  body.ended .kg-fuse.show { display: none; }
+  /* A phone (or a short window): the per-charge rows fold behind Delays (the Sweep sets them all), one row of directions. */
+  @media (max-width: 640px), (max-height: 500px) {
+    .kg-fuse .fold { display: block; }
+    .kg-fuse:not(.open) .rows { display: none; }
+    .kg-fuse .sweep { grid-template-columns: repeat(8, 1fr); }
+    body.kg-touch .kg-fuse .sweep button, body.kg-touch .kg-fuse .sp button, body.kg-touch .kg-fuse .fold { min-height: 30px; }
+  }
+  /* Upright, a band at the bottom (on the docked HUD's tray: FusePanel.dock); its height is view.ts FUSE_PANEL_SHARE's. */
   @media (max-width: 640px) { .kg-fuse { left: 8px; right: 8px; width: auto; bottom: 8px; max-height: ${FUSE_PANEL_SHARE * 100}vh; } }
+  /* Sideways, down the right side under the Menu button (the docked HUD's rail is on the left). */
+  @media (orientation: landscape) and (max-height: 500px) { .kg-fuse { right: 8px; bottom: 8px; width: 300px; max-height: calc(100vh - 72px); } }
 `;
 
 export interface FusePanelHooks {
@@ -49,6 +65,10 @@ export class FusePanel {
   private dir = 'W';
   private spacing = 6;
   private enabled = false;
+  /** Whether the per-charge rows are unfolded where they fold (a phone: the Delays button, PT21). */
+  private rowsOpen = false;
+  /** The panel's bottom edge set by dock, px from the screen's bottom (null: the stylesheet's). */
+  private docked: number | null = null;
   private drag: { k: number; track: HTMLElement } | null = null;
   /** The compass needle's last angle (radians clockwise from screen-up), so a still camera writes no style. */
   private north = NaN;
@@ -87,6 +107,17 @@ export class FusePanel {
     n.style.transform = `rotate(${a.toFixed(3)}rad)`;
   }
 
+  /**
+   * Stand the panel `bottom` px above the screen's bottom (upright on a phone: on the docked HUD's tray, PT21),
+   * or back to the stylesheet's place (null). Called every frame on a level with a timeline; writes on change only.
+   */
+  dock(bottom: number | null): void {
+    if (bottom !== null) bottom = Math.round(bottom);
+    if (bottom === this.docked) return;
+    this.docked = bottom;
+    this.el.style.bottom = bottom === null ? '' : `${bottom}px`;
+  }
+
   /** Press the plunger (key Enter, the button): false when there is no timeline or the game refused. */
   press(): boolean {
     if (!this.timeline || !this.enabled) return false;
@@ -105,9 +136,11 @@ export class FusePanel {
     this.el.innerHTML = `<div class="head"><b class="compass"><small>N</small><span class="needle" title="North, as the camera sees it" style="transform:rotate(${(Number.isFinite(this.north) ? this.north : 0).toFixed(3)}rad)"></span>Timeline</b><span>${t.charges.length} charges, last at ${t.span.toFixed(1)} s</span></div>`
       + `<div class="sweep">${SWEEP_DIRS.map((d) => `<button data-act="sweep" data-dir="${d.name}" class="${d.name === this.dir ? 'on' : ''}" title="Fall ${d.name}: the ${d.name} row goes first">${d.name}</button>`).join('')}</div>`
       + `<div class="sp"><span>Sweep spacing</span><button data-act="sp-">-</button><b>${(this.spacing / 10).toFixed(1)} s</b><button data-act="sp+">+</button><button data-act="clear" style="width:auto;padding:3px 8px">All at 0</button></div>`
+      + `<button class="fold" data-act="rows" aria-expanded="${this.rowsOpen}">${this.rowsOpen ? 'Delays ▾' : 'Delays ▸'} <span>${t.charges.length} charges</span></button>`
       + `<div class="rows">${rows}</div>`
       + (t.relays.length ? `<p class="relays"><i style="background:${RELAY_CSS}"></i>${t.relays.length} relay${t.relays.length > 1 ? 's' : ''} on storey ${[...new Set(t.relays.map((x) => x.storey))].join(', ')}: they go off when jolted</p>` : '')
       + `<button class="plunger" data-act="plunger"${this.enabled ? '' : ' disabled'}><kbd>Enter</kbd> Plunger</button>`;
+    this.el.classList.toggle('open', this.rowsOpen);
   }
 
   private onClick(e: MouseEvent): void {
@@ -115,6 +148,7 @@ export class FusePanel {
     if (!t || !b) return;
     const act = b.dataset.act, k = Number(b.dataset.k);
     if (act === 'plunger') { this.press(); return; }
+    if (act === 'rows') this.rowsOpen = !this.rowsOpen;
     if (act === 'inc' || act === 'dec') { t.set(k, t.snaps[k]! + (act === 'inc' ? 1 : -1)); t.selected = k; }
     if (act === 'sweep') { this.dir = b.dataset.dir!; t.sweep(this.dir, this.spacing); }
     if (act === 'sp+' || act === 'sp-') { this.spacing = Math.max(1, Math.min(10, this.spacing + (act === 'sp+' ? 1 : -1))); t.sweep(this.dir, this.spacing); }
