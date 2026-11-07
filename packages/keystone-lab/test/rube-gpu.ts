@@ -5,7 +5,7 @@
 // every pinned body (the shelves, the authored ramps, the bin's ramp and bumper) ends exactly
 // where it was authored, as the GPU stores it (f32). SwiftShader in CI; Metal with TB_CHANNEL=chrome.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { LevelDef } from '@tb/keystone';
+import { type LevelDef, RUBE_END_AFTER } from '@tb/keystone';
 import { requireWebGPU } from '@tb/testkit';
 import { type BrowserCastPlayer, openBrowserCastPlayer } from '../src/cast-browser.ts';
 import { build } from '../src/rube.ts';
@@ -37,6 +37,7 @@ export function rubeGpuSuite(def: LevelDef): void {
         const r = await player.rube(b.def);
         console.log(`${def.id} ${sol.family} on ${player.adapter}: ${r.cleared ? 'clear' : 'FAIL'}, rung at ${r.rungAt} of ${r.steps} steps, pins ${r.pinnedMove}, ${(r.ms / 1000).toFixed(1)} s`);
         expect(r.cleared, `${sol.label} clears`).toBe(true);
+        expect(r.steps - r.rungAt, `${sol.label}: steps from the ring to the end (PT32)`).toBe(RUBE_END_AFTER * 60);
         expect(r.pinnedMove, `${sol.label}: pins move (${r.pinnedAt})`).toBe(0);
       }
     }, 10 * MINUTES);

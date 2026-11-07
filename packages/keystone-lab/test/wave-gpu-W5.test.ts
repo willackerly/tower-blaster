@@ -1,4 +1,4 @@
-// W5 Firebreak on the GPU solver (wave-gpu.ts): the street pushed from its starter, the second relay pulled 2 s
+// W5 Firebreak on the GPU solver (wave-gpu.ts), Steer and Cut's representative on a PR (O5): the street pushed from its starter, the second relay pulled 2 s
 // later while the wave runs (a Cut level's pulls go in only then): the slums fall, the village stands, cleared
 // (SwiftShader: D 0.430, Rapier 0.434).
 import { W5 } from '@tb/keystone';

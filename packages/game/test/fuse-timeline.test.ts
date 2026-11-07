@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { B1, compileLevel, foldCandidate, FUSE_LEVELS, RL1, Session } from '@tb/keystone';
 import { type Orbit, viewProj } from '@tb/render/camera';
-import { delayColour, LOT_COLOUR, LOT_SPACING, lotBeads, MAX_SNAPS, northOnScreen, panelTimeline, RELAY_COLOUR, relayCharges, SNAP_STEPS, sweepRanks, SWEEP_DIRS, Timeline, timelineCharges, timelineOverlay } from '../src/fuse-timeline.ts';
+import { arrowBeads, COMPASS_CELLS, COMPASS_COLOUR, compassArrow, delayColour, LOT_COLOUR, LOT_SPACING, lotBeads, MAX_SNAPS, northOnScreen, panelTimeline, planBeads, RELAY_COLOUR, relayCharges, SNAP_STEPS, sweepRanks, SWEEP_DIRS, Timeline, timelineCharges, timelineOverlay, YARD_COLOUR, yardArrow } from '../src/fuse-timeline.ts';
 
 const c = compileLevel(foldCandidate('FC-2')); // a 3 x 3 frame: nine cutters on the ground storey
 
@@ -135,5 +135,58 @@ describe('reading the scene', () => {
       expect(Math.abs(Math.atan2(Math.sin(northOnScreen(yaw, pitch) - want), Math.cos(northOnScreen(yaw, pitch) - want)))).toBeLessThan(1e-3);
       }
     }
+  });
+});
+
+describe('the plan in the world (PT24)', () => {
+  const byId = (id: string) => compileLevel(FUSE_LEVELS.find((d) => d.id === id)!);
+  /** The arrow's heading, degrees clockwise from north (-z): W is 270, N 0. */
+  const heading = (a: { tail: [number, number]; tip: [number, number] }) => (((Math.atan2(a.tip[0] - a.tail[0], -(a.tip[1] - a.tail[1])) * 180) / Math.PI) + 360) % 360;
+  const inLot = (c: ReturnType<typeof compileLevel>, p: [number, number]) => p[0] >= c.lot.min[0] && p[0] <= c.lot.max[0] && p[1] >= c.lot.min[1] && p[1] <= c.lot.max[1];
+
+  it('the yard arrow points from the building into the yard: F1 west, F2 north (the playtest\'s wrong way), F3 north-west (a corner lot), F4 and F5 west', () => {
+    const want: Record<string, number> = { F1: 270, F2: 0, F3: 315, F4: 270, F5: 270 };
+    for (const [id, deg] of Object.entries(want)) {
+      const c = byId(id), a = yardArrow(c)!;
+      expect(a, id).not.toBeNull();
+      expect(Math.abs(heading(a) - deg), `${id}: heading ${heading(a)}`).toBeLessThan(1);
+      // From outside every charge host (the building) to inside the lot, at least two cells long.
+      const cell = c.frame.unit * c.frame.pitch;
+      for (const t of timelineCharges(c)) expect(Math.hypot(a.tail[0] - t.at[0], a.tail[1] - t.at[2]), `${id} ${t.label}`).toBeGreaterThan(cell);
+      expect(inLot(c, a.tip), `${id}: tip ${a.tip}`).toBe(true);
+      expect(Math.hypot(a.tip[0] - a.tail[0], a.tip[1] - a.tail[1])).toBeGreaterThan(2 * cell);
+    }
+    // No yard arrow on a level that is not a fold, nor where the lot is centred on the building (F2's frame with its lot cut back to the building).
+    expect(yardArrow(compileLevel(B1))).toBeNull();
+    const centred = compileLevel({ ...FUSE_LEVELS[1]!, lot: { min: [-2.04, -2.04], max: [2.04, 2.04] } });
+    expect(yardArrow(centred)).toBeNull();
+  });
+
+  it('the ground compass points north, COMPASS_CELLS long, outside the lot and off every body\'s footprint', () => {
+    for (const def of FUSE_LEVELS) {
+      const c = byId(def.id), a = compassArrow(c), cell = c.frame.unit * c.frame.pitch, m = c.meta;
+      expect(heading(a), def.id).toBeCloseTo(0, 9);
+      expect(a.tail[1] - a.tip[1]).toBeCloseTo(COMPASS_CELLS * cell, 9);
+      expect(a.tail[0] > c.lot.max[0] || a.tail[0] < c.lot.min[0], `${def.id}: beside the lot`).toBe(true);
+      for (let i = 0; i < m.n; i++) {
+        const hit = Math.abs(a.tail[0] - m.home[3 * i]!) < m.half[3 * i]! && Math.max(a.tail[1], a.tip[1]) > m.home[3 * i + 2]! - m.half[3 * i + 2]! && Math.min(a.tail[1], a.tip[1]) < m.home[3 * i + 2]! + m.half[3 * i + 2]!;
+        expect(hit, `${def.id}: body ${i} under the compass`).toBe(false);
+      }
+    }
+  });
+
+  it('arrow beads: a shaft from tail to tip on the ground and a two-barbed head behind the tip; the plan colours the yard green and the compass orange', () => {
+    const pts = arrowBeads({ tail: [0, 0], tip: [-6, 0] }, 0.5);
+    const beads = Array.from({ length: pts.length / 4 }, (_, k) => pts.slice(4 * k, 4 * k + 4));
+    expect(beads[0]!.slice(0, 3)).toEqual([0, beads[0]![3], 0]);
+    expect(beads.some((b) => b[0] === -6 && b[2] === 0)).toBe(true);
+    for (const b of beads) { expect(b[0]).toBeGreaterThanOrEqual(-6); expect(b[1]).toBe(b[3]); }
+    const barbs = beads.filter((b) => b[2] !== 0);
+    expect(barbs.filter((b) => b[2]! > 0).length).toBe(barbs.filter((b) => b[2]! < 0).length);
+    for (const b of barbs) expect(b[0]).toBeGreaterThan(-6); // back from the tip
+    const f1 = byId('F1'), plan = planBeads(f1)!;
+    expect(plan.colours.length).toBe((arrowBeads(yardArrow(f1)!, 0.5).length + arrowBeads(compassArrow(f1), 0.5).length) / 4);
+    expect(new Set(plan.colours)).toEqual(new Set([YARD_COLOUR, COMPASS_COLOUR]));
+    expect(planBeads(compileLevel(B1))).toBeNull();
   });
 });
