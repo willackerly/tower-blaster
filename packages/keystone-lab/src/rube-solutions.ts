@@ -4,7 +4,7 @@
 // the obvious wrong builds that must fail. Programs, not part lists: each one goes
 // through the real build tool (BuildSession: face hits, snap, overlap and budget), so
 // a test that replays them checks the bin as well as the level. The tests replay them
-// on the reference (test/rube.test.ts) and on the GPU (test/rube-gpu.test.ts).
+// on the reference (test/rube.test.ts) and on the GPU (test/rube-gpu-RL*.test.ts).
 import type { BuildSession, Hit, P2 } from '@tb/keystone';
 import { type BuildStep, ground, top } from './rube.ts';
 

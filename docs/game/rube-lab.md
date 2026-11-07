@@ -16,7 +16,7 @@ Before any level shipped, three contraption puzzles were prototyped headless on 
 | RL2 Round the Corner | 222 (0) | 39, 32 robust | **turn** (a fixed bumper at -30 to -60 degrees) 3, (a free beam) 3, (a free 4 x 2 wall, 2 of 7 robust) 8; **relay** (a domino run curving off the ball's line to the bell) 6 | nothing; a straight run along the ball's line (it runs into the backstop) |
 | RL3 Top Shelf | 70 (21) | 20, 18 robust | **ramp** (a fixed ramp up onto the shelf) 3; **topple** (a domino run into a plank on end, which falls onto the bell) 6 | nothing; a stair of cubes (the ball cannot climb a step) |
 
-One build per family is recorded in `packages/keystone-lab/src/rube-solutions.ts` (the first of each level's list is its cheapest, the parts par), with the wrong builds; `test/rube.test.ts` replays them on the reference and `test/rube-gpu.test.ts` on the GPU.
+One build per family is recorded in `packages/keystone-lab/src/rube-solutions.ts` (the first of each level's list is its cheapest, the parts par), with the wrong builds; `test/rube.test.ts` replays them on the reference and `test/rube-gpu-RL*.test.ts` on the GPU.
 
 What the gate taught (each changed a level before it shipped):
 
@@ -64,7 +64,7 @@ A pinned part ignores the ground and other pinned bodies in the overlap check, a
 |---|---|
 | `packages/keystone/test/rube.test.ts` | `pieceQuat`; tilt and pin compile and hash, order-independent; validation of pins and bells; the gate levels validate clean on gpu and rapier settings; `bellRung`; the session keeps a bell sticky and clears; the bin (ramp foot flush within 2e-6 h, refused into a free body, ball, bumper, cost, JSON hash); `rubeStars` |
 | `packages/keystone-lab/test/rube.test.ts` | On the reference: two or more families per puzzle clear, every wrong build is buildable and fails, pinned bodies move exactly 0, the parts par is the cheapest recorded clear |
-| `packages/keystone-lab/test/rube-gpu.test.ts` | On the GPU (SwiftShader in CI, Metal with `TB_CHANNEL=chrome`), through the game's cast page: the bare level fails, the recorded solutions clear, pinned bodies end exactly where authored as f32 |
+| `packages/keystone-lab/test/rube-gpu-RL*.test.ts` (one file per level, rube-gpu.ts) | On the GPU (SwiftShader in CI, Metal with `TB_CHANNEL=chrome`), through the game's cast page: the bare level fails, the recorded solutions clear, pinned bodies end exactly where authored as f32 |
 | `packages/viewer/test/level-file.test.ts` | Every Rube level and a built RL1 round-trip through the level file with the same hash; malformed pins, radii, regions and charge arms are refused, saying where |
 
 ## Alternatives considered

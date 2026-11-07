@@ -1,10 +1,11 @@
-// Rube Lab on the GPU solver (M10, docs/game/rube-lab.md), through the game's cast page
-// (the game's own engine and settings): each gate puzzle's recorded solutions clear and
-// its bare level fails, as on the reference (rube.test.ts), and every pinned body (the
-// shelves, the authored ramps, the bin's ramp and bumper) ends exactly where it was
-// authored, as the GPU stores it (f32). SwiftShader in CI; Metal with TB_CHANNEL=chrome.
+// Rube Lab on the GPU solver (M10, docs/game/rube-lab.md), one level per test file
+// (rube-gpu-RL*.test.ts, so each file stays well under CI's per-file budget on SwiftShader),
+// through the game's cast page (the game's own engine and settings): each gate puzzle's
+// recorded solutions clear and its bare level fails, as on the reference (rube.test.ts), and
+// every pinned body (the shelves, the authored ramps, the bin's ramp and bumper) ends exactly
+// where it was authored, as the GPU stores it (f32). SwiftShader in CI; Metal with TB_CHANNEL=chrome.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { RUBE_GATE } from '@tb/keystone';
+import type { LevelDef } from '@tb/keystone';
 import { requireWebGPU } from '@tb/testkit';
 import { type BrowserCastPlayer, openBrowserCastPlayer } from '../src/cast-browser.ts';
 import { build } from '../src/rube.ts';
@@ -12,18 +13,19 @@ import { RUBE_SOLUTIONS } from '../src/rube-solutions.ts';
 
 const MINUTES = 60_000;
 
-let player: BrowserCastPlayer | null = null;
-beforeAll(async () => {
-  try {
-    player = await openBrowserCastPlayer({ ...(process.env.TB_CHANNEL ? { channel: process.env.TB_CHANNEL } : {}) });
-  } catch (e) {
-    if (requireWebGPU()) throw e;
-  }
-}, 3 * MINUTES);
-afterAll(async () => { await player?.close(); });
+/** Registers the GPU test of one gate level: its bare level fails, its recorded solutions clear, its pins hold. */
+export function rubeGpuSuite(def: LevelDef): void {
+  let player: BrowserCastPlayer | null = null;
+  beforeAll(async () => {
+    try {
+      player = await openBrowserCastPlayer({ ...(process.env.TB_CHANNEL ? { channel: process.env.TB_CHANNEL } : {}) });
+    } catch (e) {
+      if (requireWebGPU()) throw e;
+    }
+  }, 3 * MINUTES);
+  afterAll(async () => { await player?.close(); });
 
-describe('Rube Lab on the GPU solver', () => {
-  for (const def of RUBE_GATE) {
+  describe('Rube Lab on the GPU solver', () => {
     it(`${def.id} ${def.name}: the recorded solutions clear, the bare level fails, pins hold`, async (ctx) => {
       if (!player) return ctx.skip();
       expect(player.engine).toBe('gpu');
@@ -38,5 +40,5 @@ describe('Rube Lab on the GPU solver', () => {
         expect(r.pinnedMove, `${sol.label}: pins move (${r.pinnedAt})`).toBe(0);
       }
     }, 10 * MINUTES);
-  }
-});
+  });
+}
