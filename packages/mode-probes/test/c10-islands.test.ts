@@ -7,10 +7,11 @@
 // the cost per body against the 9.6k block on Metal) runs with
 // pnpm probe:modes C10.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { DEFAULT_ISLAND_REACH } from '@tb/engine-api';
+import { DEFAULT_ISLAND_REACH, reduceIslands, type Snapshot } from '@tb/engine-api';
 import { requireWebGPU } from '@tb/testkit';
 import { probeById } from '../src/index.ts';
-import { C10, type C10Case, c10Islands, c10Spec, c10World, type C10Result } from '../src/c10-islands.ts';
+import { C10, type C10Case, C10_PREDS, c10Islands, c10Spec, c10World, type C10Result, fixedCounts } from '../src/c10-islands.ts';
+import { CELL } from '../src/x8-islands.ts';
 import { openProbePage, type ProbePage, runProbe } from '../src/session.ts';
 
 const full = (arm: C10Case['arm'], world = -1): C10Case => ({ arm, level: { W: 5, D: 5, H: 6 }, K: 64, world, presettle: 300, readAfter: 240 });
@@ -45,6 +46,30 @@ describe('C10 scenes', () => {
     expect(probeById('C10')).toBe(C10);
     expect(C10.cases('full')).toHaveLength(1 + 64 + 1);
     expect(C10.cases('ci')).toHaveLength(1 + 6);
+  });
+
+  it('the per-island histogram equals fixedCounts per world; a cube that drops exactly one layer splits f64 and fixed point', () => {
+    const c = { ...full('islands'), K: 3 }, isl = c10Islands(c), scene = isl.pack(), per = 150;
+    const n = scene.bodies.length, p0 = new Float64Array(3 * n), pos = new Float32Array(3 * n);
+    scene.bodies.forEach((b, i) => { for (let a = 0; a < 3; a++) p0[3 * i + a] = Math.fround(b.pos[a]!); });
+    pos.set(p0);
+    const at = (k: number, local: number) => 3 * isl.idOf(k, local);
+    // Island 1: cube 0 drops one layer and rests 0.2 um past the threshold (f64: down; fixed point at 2^-16: exactly -0.5, not down);
+    // cube 1 drops two layers (down and moved in both); cube 2 slides 2 m along x (moved only).
+    pos[at(1, 0) + 1] = p0[at(1, 0) + 1]! - 0.5000002;
+    pos[at(1, 1) + 1] = p0[at(1, 1) + 1]! - 1;
+    pos[at(1, 2)] = p0[at(1, 2)]! + 2;
+    // Island 2 (farther out, larger f32 ulp in x): cube 5 moves 0.3 m along z.
+    pos[at(2, 5) + 2] = p0[at(2, 5) + 2]! + 0.3;
+    const s = { count: n, pos } as unknown as Snapshot;
+    const r = reduceIslands(isl, s, C10_PREDS, { refs: [p0] });
+    const fixed = [0, 1, 2].map((k) => fixedCounts(s, isl.idsOf(k).slice(0, per), p0));
+    expect(fixed.map((f) => [f.down, f.moved, f.split])).toEqual([[0, 0, 0], [1, 3, 1], [0, 1, 0]]);
+    expect([...r.counts[0]!]).toEqual(fixed.map((f) => f.down));
+    expect([...r.counts[1]!]).toEqual(fixed.map((f) => f.moved));
+    // The f64 rule counts island 1's first cube as down: comparing it with the histogram is what failed the first full run.
+    const f64Down = isl.idsOf(1).slice(0, per).filter((i) => p0[3 * i + 1]! - pos[3 * i + 1]! > CELL).length;
+    expect(f64Down).toBe(2);
   });
 });
 
