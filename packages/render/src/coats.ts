@@ -4,7 +4,7 @@
 // and heritage violet. A coat replaces the palette colour, so its hue is the same whatever the look.
 //
 // The coat is two bits of a slot's fx record (fx.ts word 1, bits 22-23), set with Renderer.setCoats and
-// kept through every other setFx until clearFx, as a mark is (marks.ts). Boxes only. The scene pass
+// kept through every other setFx until clearFx, as a mark is (marks.ts). Boxes and spheres (a bell, PT26). The scene pass
 // takes COAT_LINEAR[coat] as the block's base colour; the look's lighting, the stone's detail (real look),
 // the carving and the role tint and glow then apply as to any block, so a felled crown still flashes.
 //
