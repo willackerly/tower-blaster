@@ -13,7 +13,14 @@ import { RETROFIT_SOLUTIONS, RETROFIT_WRONG, retrofitBuild } from '../src/retrof
 
 const MINUTES = 60_000;
 
+/** On a PR, A6 stands for the retrofit family (CI rule O5); A7 and A8 run with PHYSICS_GPU_SLOW=1 (nightly) or on Metal (TB_CHANNEL). */
+const SLOW = !!process.env.TB_CHANNEL || process.env.PHYSICS_GPU_SLOW === '1';
+
 export function retrofitGpuSuite(def: LevelDef): void {
+  if (!SLOW && def.id !== 'A6') {
+    describe.skip(`Aftershock retrofits on the GPU solver (${def.id}: PHYSICS_GPU_SLOW=1)`, () => { it('runs nightly', () => {}); });
+    return;
+  }
   let player: BrowserCastPlayer | null = null;
   beforeAll(async () => {
     try {

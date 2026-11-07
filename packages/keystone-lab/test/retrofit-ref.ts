@@ -13,7 +13,14 @@ import { RETROFIT_SOLUTIONS, RETROFIT_WRONG, retrofitBuild } from '../src/retrof
 const MINUTES = 60_000;
 const JOBS = Math.max(1, Math.min(4, availableParallelism()));
 
+/** On a PR, A6 stands for the retrofit family (CI rule O5); A7 and A8 run with PHYSICS_GPU_SLOW=1 (nightly). */
+const SLOW = process.env.PHYSICS_GPU_SLOW === '1';
+
 export function retrofitRefSuite(def: LevelDef): void {
+  if (!SLOW && def.id !== 'A6') {
+    describe.skip(`Aftershock retrofit gate on the reference (${def.id}: PHYSICS_GPU_SLOW=1)`, () => { it('runs nightly', () => {}); });
+    return;
+  }
   describe('Aftershock retrofit gate on the reference', () => {
     it(`${def.id} ${def.name}: bare falls, two families of bracing within the budget save it, the wrong builds do not`, async () => {
       const c = compileLevel(def), budget = def.build!.budget!;
