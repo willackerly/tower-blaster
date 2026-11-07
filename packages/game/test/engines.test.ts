@@ -75,6 +75,15 @@ describe('the level\'s physics block reaches the engine', () => {
     expect(v.iterations).toBe(20);
     expect(v.gapSlop ?? 0).toBe(0); // off: the variant leaves it out
   });
+  it('sleep reaches the GPU engine when the block turns it on, and only then', () => {
+    const on = compileLevel({ ...L1, physics: { sleep: true } });
+    expect(gpuEngineOptions(on)).toEqual({ ...gpuOptions(on), sleep: true });
+    expect((makeEngine('gpu', on).info.variant as Record<string, unknown>).sleep).toBe(true);
+    expect(gpuEngineOptions(compileLevel({ ...L1, physics: { sleep: false } })).sleep).toBeUndefined();
+    expect((makeEngine('gpu', compileLevel(L1)).info.variant as Record<string, unknown>).sleep).toBeUndefined();
+    // The compiled scene sleeps either way (Rapier, and the GPU when its option is on).
+    expect(on.scene.sleep).toBe(true);
+  });
   it('an override from the URL marks the level custom: the session records no cast stars', () => {
     const cast = { ...L1, scoring: 'outcome' as const, stars: { metric: 'collapse' as const, t2: 0, t3: 0 } };
     const play = (def: LevelDef) => {

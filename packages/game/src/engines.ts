@@ -88,10 +88,12 @@ export function gpuParams(c: CompiledLevel): GpuParams {
 
 /**
  * gpuOptions with the pair room a round of the level asked for (`pairsPerBody`, play.ts roomAfter), else
- * the level's physics block's when it sets one, else every pair.
+ * the level's physics block's when it sets one, else every pair; and per-body sleep when the block turns
+ * it on (PhysicsBlock.sleep: off by default, since par lines and casts are pinned without it).
  */
 export function gpuEngineOptions(c: CompiledLevel, pairsPerBody?: number): GpuEngineOptions {
-  return gpuOptions(c, pairsPerBody ?? physicsOf(c.def).pairsPerBody);
+  const p = physicsOf(c.def);
+  return { ...gpuOptions(c, pairsPerBody ?? p.pairsPerBody), ...(p.sleep ? { sleep: true } : {}) };
 }
 
 /**
