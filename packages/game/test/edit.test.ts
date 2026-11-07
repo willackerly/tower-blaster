@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import type { Vec3 } from '@tb/engine-api';
 import { compileLevel, type LevelDef } from '@tb/keystone';
 import { EditController, GHOST_BAD, GHOST_OK } from '../src/index.ts';
+import { applyEditAction, editHtml } from '../src/edit-panel.ts';
 
 const level: LevelDef = {
   id: 'EDIT', name: 'edit', version: 1, world: 0, lot: { min: [-10, -10], max: [10, 10] }, crownLine: 1, objective: { kind: 'crowns' }, par: 1,
@@ -77,6 +78,31 @@ describe('edit controller', () => {
     // The authored block may not be erased outside author mode.
     e.move({ origin: [0.25, 0.25, -10], dir: [0, 0, 1] });
     expect(e.hover).toBe(-1);
+  });
+
+  it('[ and ] slide the plank along its length off the pointer, to its reach; the panel offers Slide only for what slides', () => {
+    const e = new EditController(level);
+    e.select('plank');
+    expect(e.hold.item).toBe('plank');
+    e.move(at(-4, 0));
+    const x0 = e.ghost!.boxes[0]!.c[0], step = (1.02 * 0.5) / 2;
+    expect(e.key(']')).toBe(true);
+    expect(e.key(']')).toBe(true);
+    expect(e.ghost!.boxes[0]!.c[0] - x0).toBeCloseTo(2 * step, 9);
+    expect(e.status()).toMatch(/^Plank, 0°, slid \+2 · /);
+    for (let i = 0; i < 6; i++) e.key('[');
+    expect(e.hold.slide).toBe(-4);
+    expect(e.key('[')).toBe(false);
+    expect(e.message).toBe('slid as far as it goes');
+    expect(e.ghost!.boxes[0]!.c[0] - x0).toBeCloseTo(-4 * step, 9);
+    expect(editHtml(e)).toMatch(/data-a="slide" data-d="1"/);
+    expect(applyEditAction(e, { a: 'slide', d: 1 })).toBe(true);
+    expect(e.hold.slide).toBe(-3);
+    // A cube does not slide: no Slide buttons, and the key says why.
+    e.key('1');
+    expect(e.key(']')).toBe(false);
+    expect(e.message).toBe('this piece does not slide');
+    expect(editHtml(e)).not.toMatch(/data-a="slide"/);
   });
 
   it('a level that offers no brush keeps the place tool; author mode has no budget', () => {

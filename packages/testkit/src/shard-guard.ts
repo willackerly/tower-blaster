@@ -1,8 +1,8 @@
 // `pnpm ci:guard` (CI's static job): fails when vitest.durations.json is
-// stale (a test file with no time, or a time for a file that is gone) or when
-// a shard of the plan ci.yml runs is estimated over the limit, and warns about
-// files whose recorded time is over what one file may take (an error once O5
-// has brought them all under it). Prints the plan either way.
+// stale (a test file with no time, or a time for a file that is gone), when a
+// file CI runs has a recorded time over what one file may take, or when a
+// shard of the plan ci.yml runs is estimated over the limit. Prints the plan
+// either way.
 import { globSync, readFileSync } from 'node:fs';
 import { checkShards, type Durations, planShards, shardLoad, shardWall } from './shard.ts';
 
@@ -17,7 +17,7 @@ const nightlyOnly = Object.keys(JSON.parse(readFileSync(`${root}vitest.nightly.j
 const files = all.filter((f) => !nightlyOnly.includes(f));
 const ci = readFileSync(`${root}.github/workflows/ci.yml`, 'utf8');
 
-const problems: string[] = [], warnings: string[] = [];
+const problems: string[] = [];
 for (const f of nightlyOnly) if (!all.includes(f)) problems.push(`vitest.nightly.json: ${f} is not a test file`);
 const count = Number(/--shard=\$\{\{ matrix\.shard \}\}\/(\d+)/.exec(ci)?.[1]);
 const matrix = /^\s*shard:\s*\[([^\]]*)\]/m.exec(ci)?.[1]?.split(',').map((x) => Number(x.trim()));
@@ -27,12 +27,11 @@ else {
   planShards(files, durations, count).forEach((s, i) => {
     console.log(`shard ${i + 1}/${count}: ${String(s.length).padStart(3)} files, ${String(Math.round(shardLoad(s, durations))).padStart(5)} s recorded, ~${(shardWall(s, durations) / 60).toFixed(1)} min estimated`);
   });
-  for (const p of checkShards(files, durations, count, LIMITS, all)) (p.kind === 'file' ? warnings : problems).push(p.kind === 'stale' ? `stale: ${p.message}` : p.message);
+  for (const p of checkShards(files, durations, count, LIMITS, all)) problems.push(p.kind === 'stale' ? `stale: ${p.message}` : p.message);
 }
-for (const w of warnings) console.log(`::warning::${w}`);
 for (const p of problems) console.log(`::error::${p}`);
 if (problems.length) {
   console.log(`\n${problems.length} problem(s). Record times in CI-runner seconds (each shard's "Shard file times" step logs them; \`pnpm durations --from-log\` merges them), split files over ${LIMITS.file} s, or add shards in ci.yml.`);
   process.exit(1);
 }
-console.log(`ok: ${files.length} test files (${nightlyOnly.length} more nightly only), ${count} shards, none over ${LIMITS.shard / 60} min estimated${warnings.length ? `; ${warnings.length} file(s) over ${LIMITS.file} s (warnings above)` : `, no file over ${LIMITS.file} s`}`);
+console.log(`ok: ${files.length} test files (${nightlyOnly.length} more nightly only), ${count} shards, none over ${LIMITS.shard / 60} min estimated, no file over ${LIMITS.file} s`);

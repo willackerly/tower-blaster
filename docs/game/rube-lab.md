@@ -29,6 +29,7 @@ What the gate taught (each changed a level before it shipped):
 RL4 and RL5 (M10b) chain two of those families each, and the gate (the same bot, `pnpm rube:gate RL4 RL5`) taught three more things:
 
 - **A bumper turns the ball by its own angle, not twice it.** With no restitution (the default, `Bounce` off) the ball slides along the face it hits and leaves along it, losing the speed across it; a -45 degree bumper sends the ball off at 45 degrees, not 90. Turners are aimed at the bell along their own face.
+- **A run ends 1.5 s after the bell rings** (`LevelDef.end`, `RUBE_END_AFTER`, agent playtest PT32). Before, a solved run sat to the 10 s cap while the ball and parts rolled on (8 of the 10 recorded builds); the ring decides the outcome, since a bell stays rung. See docs/game/settle-v4.md, "A level's own end".
 - **The settle clock is the time limit.** A level ends 600 steps (about 10 s) after the release when nothing has rung, so a contraption that works but is slow fails: on RL5's first, shallower start ramp a slab's 0.25 h edge took most of the runner's speed and the crawling ball was cut off before the pocket. RL5's start ramp is 30 degrees for that reason, and its slab builds still ring at steps 480 to 550 of 600, which is why that family is the narrower one.
 - **A fast ball hops a gap a slow one cannot.** At 30 degrees the runner cleared RL5's first 1.5 h gap with no help and a bumper alone rang the bell; the gap is 2 h.
 

@@ -177,8 +177,8 @@ describe('the shipped Aftershock levels', () => {
   const SITE: Record<string, string> = { A1: 'QC-1', A2: 'QC-3', A3: 'QC-2', A4: 'QC-4', A5: 'QC-5' };
 
   it('are the gated sites exactly, valid, with energy stars cast against their own hash and a budget the brute end is over', () => {
-    expect(AFTERSHOCK_LEVELS.map((l) => l.id)).toEqual(Object.keys(SITE));
-    for (const l of AFTERSHOCK_LEVELS) {
+    expect(AFTERSHOCK_LEVELS.filter((d) => !d.build).map((l) => l.id)).toEqual(Object.keys(SITE));
+    for (const l of AFTERSHOCK_LEVELS.filter((d) => !d.build)) {
       const c = compileLevel(l), site = compileLevel(quakeCandidate(SITE[l.id]!));
       expect(validateLevel(c).filter((i) => !i.warning)).toEqual([]);
       // The physics the gate judged: the same bodies, gravity and steps; only the id, name, budget and stars differ.
@@ -198,7 +198,7 @@ describe('the shipped Aftershock levels', () => {
 
 describe('the shipped levels\' aces', () => {
   it('each ace is the cast\'s best quake: its energy is the stars\' best, inside the budget and the third star', () => {
-    for (const l of AFTERSHOCK_LEVELS) {
+    for (const l of AFTERSHOCK_LEVELS.filter((d) => !d.build)) {
       const c = compileLevel(l), ace = l.solutions!.ace![0]! as QuakeShot;
       expect(quakeEnergy(c, ace)).toBeCloseTo(l.stars!.best!, 6);
       expect(quakeRefusal(c, ace)).toBeNull();
