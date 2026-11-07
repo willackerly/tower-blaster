@@ -36,7 +36,8 @@ new rule).
 **Heat** (`fr.heat` 2): the palette colour glows along the face's edges (30% of the half extent in),
 a tenth of it in the middle, and never turns white.
 
-**Roles** (`scene.ts rolePaint`): cracked heritage flashes teal (emissive 0.2) and stays teal; an undo or
+**Roles** (`scene.ts rolePaint`): cracked heritage flashes red and stays painted the lost red (PT28, below; at
+first it flashed teal at emissive 0.2 and stayed teal); an undo or
 a line restores felled crowns and cracked heritage as play leaves them (no steady glow).
 
 **Reset** (`Renderer.resetEffects`): every particle dead, buckets full, queued impacts dropped, every body
@@ -88,9 +89,34 @@ one still goes off). Undo checkpoints keep the spent state.
 - `packages/game/test/effects-damage.test.ts`: the emitter fed a real Rapier shot's impacts on L1: a marble
   that moves nothing spawns 6 sparks, the par cannonball 4,369, a grenade 11,723 (classic: 19, 4,450,
   17,574); fired-body kinds, spent paint, role paint, feel keys.
+- `packages/game/test/heritage-lost-e2e.test.ts` and `heritage-lost-looks-e2e.test.ts` (shared
+  `heritage-lost-check.ts`): on L3 a cracked heritage block's record is a red flash at the break
+  (`GameHandle.fxOf`), its pixels red and the intact ones teal in candy, hazy and real, and Undo and Retry
+  give the glaze back. That such a record draws a red flash brighter than the red it keeps is
+  `render.test` 'FX tint, glow, flash' (a fixed frame clock: a SwiftShader frame can outlast the fade).
 - `packages/game/test/effects-e2e.test.ts`: on the game page, every effect count is 0 after Retry, Undo
   and a level load; a fired ram is a ram, spent once settled (or kept live with `keystone.spent=0`), and
   an undo restores it as it was.
+
+## Lost heritage (PT28, agent playtest 2)
+
+Judges read "28 cracked" on the HUD over a cathedral that still looked whole: a cracked block kept its teal
+and differed from an intact one only for its flash (`B2-novice-desktop-07-result`,
+`T-B2A-novice-desktop-02-shot-1-64-steps`). Under `keystone.fx=damage` a cracked heritage block is now
+painted the lost red, `HERITAGE_LOST` (sRGB #A1342A, OKLCh L 0.48 C 0.15 hue 29), with the duel inks' coat
+(`COAT_PAINT`: the tint is the colour, the same in every look), and it flashes that red at the break (glow
+0.6, fading over 0.9 s). The shield stays carved: the block you had to keep, lost. Undo, Retry and loads
+restore the glaze (their `clearFx` and `setCoats`). Classic keeps the look before PT2.
+
+Measured on L3 (Rapier, SwiftShader; heritage-lost e2e): the lost block's mean hue is 27 to 29 degrees in
+candy, hazy and real, against 171 to 178 for the intact ones beside it. Lit, the two are close in lightness
+in candy and hazy (0.53 both) and 0.05 apart in real, so the cue is the hue; the unit test holds the red
+0.15 darker than the glaze as authored.
+
+Alternatives considered: a carved crack glyph (a fourth mark: the mark field is two bits, all in use, so a
+layout change in the shared fx word); desaturating the glaze (reads as shade, not loss, and fails in the
+real look's grey light); hiding the shield (removes the reminder of what was lost). Red has one known
+cost: its hue is the aim beads' and the HUD's crack banner, kept apart by lightness (L 0.48 against 0.73).
 
 ## Look review (SwiftShader frames, 2026-11-06)
 
