@@ -8,13 +8,16 @@
   /* The page; the HUD, banner and result card are styled by @tb/game ui.ts (GAME_CSS), shared with the viewer. */
   html, body { margin: 0; height: 100%; overflow: hidden; background: #d0dbe9; font: 14px/1.45 system-ui, sans-serif; }
   canvas { display: block; width: 100vw; height: 100vh; height: 100dvh; touch-action: none; -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; cursor: crosshair; }
-  #hud { top: 12px; left: 12px; min-width: 250px; }
+  /* :where keeps the HUD's place weightless, so the docked phone HUD (ui.ts DOCK_CSS) places it instead. */
+  :where(#hud) { top: 12px; left: 12px; min-width: 250px; }
   #help { bottom: 12px; left: 12px; font-size: 12px; color: #9aa3b8; }
   #error { top: 40%; left: 50%; transform: translate(-50%, -50%); max-width: 520px; display: none; }
-  @media (max-width: 640px) { #help { display: none; } #hud { min-width: 0; max-width: calc(100vw - 112px); box-sizing: border-box; } }
+  @media (max-width: 640px) { :where(#help) { display: none; } :where(#hud) { min-width: 0; max-width: calc(100vw - 112px); box-sizing: border-box; } }
   /* A phone has no other place to learn the gestures in play: its short touch line stays (ui.ts TOUCH_HELP). */
-  @media (max-width: 640px) { body.kg-touch #help { display: block; right: 12px; } }
+  @media (max-width: 640px) { body.kg-touch :where(#help) { display: block; right: 12px; } }
   body.kg-touch #help { color: #c3cad8; }
+  /* The touch hint goes once the first shot is in (play.ts sets body.kg-shot; docs/game/phone-hud.md). */
+  body.kg-touch.kg-shot #help { display: none; }
 </style>
 </head>
 <body>

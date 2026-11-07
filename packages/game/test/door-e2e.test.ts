@@ -129,7 +129,11 @@ describe('front door', () => {
     await page.locator('.kg-door [data-act="marks"][data-arg="on"]').click();
     expect(await hits()).toBe(4);
     await page.locator('.kg-door [data-act="marks"][data-arg="off"]').click();
-    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('tb.settings.v1')!))).toEqual({ sound: false, look: 'real', sharp: 1, camera: 'dynamic', rapid: false, duelView: false, launch: 'level', marks: false, quality: 'auto' });
+    // Layout (docs/game/phone-hud.md): Classic takes the HUD out of its docked class at once.
+    expect(await page.evaluate(() => document.getElementById('hud')!.classList.contains('kg-dock'))).toBe(true);
+    await page.locator('.kg-door [data-act="layout"][data-arg="classic"]').click();
+    expect(await page.evaluate(() => document.getElementById('hud')!.classList.contains('kg-dock'))).toBe(false);
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('tb.settings.v1')!))).toEqual({ sound: false, look: 'real', sharp: 1, camera: 'dynamic', rapid: false, duelView: false, launch: 'level', marks: false, layout: 'classic', quality: 'auto' });
     expect(await page.evaluate(() => window.__game.maxDpr)).toBe(1);
     expect(new URLSearchParams(await page.evaluate(() => location.search)).has('look')).toBe(false);
 

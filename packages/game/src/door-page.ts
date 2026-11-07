@@ -117,6 +117,7 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
       case 'duelview': set({ duelView: arg === 'on' }); break;
       case 'launch': set({ launch: arg === 'level' ? 'level' : 'high' }); break;
       case 'marks': set({ marks: arg === 'on' }); break;
+      case 'layout': set({ layout: arg === 'classic' ? 'classic' : 'docked' }); break;
       case 'reset':
         if (armedReset) { o.progress.reset(); armedReset = false; } else armedReset = true;
         draw();
