@@ -21,7 +21,7 @@ Each run writes `results/mode-probes/<id>-<size>-<time>.{json,md}`. `--size ci` 
 | X3 | Towers as dominoes | M6 Steer | CI size: cube and Kapla towers topple on, a bonded pier stops the front | **PASS**: cube towers 24/24 always; bonded piers all or nothing (38%); Kapla dies after 2-3 |
 | X4 | Cantilevers and hollows hold | M1 Hollow, M8 | CI size: stacks, span and brick arch behave | **PASS at 40 iterations, FAIL at 20**: at 20 the 95% stack falls and the arch wall creeps 1.1 cm; at 40 both hold (wall 3.8 mm; the creep over the hole is single bricks falling slowly) |
 | X5 | Pinned anchors solid | C8 | CI size: pins exactly still, bodies on them match the ground | **PASS**: pins exactly still, flood KS p >= 0.64 |
-| X6 | Resonance under a gravity schedule; far-blast shove | M7 | CI size: no sign of resonance (rocking-block behaviour); far kick exact | **FAIL, as predicted**: no resonance; 0.5 Hz is worst for every height; kick exact. M7 follow-up: threshold curves and the choice-matters gate pass on 3 sites ("On levels") |
+| X6 | Resonance under a gravity schedule; far-blast shove | M7 | CI size: no sign of resonance (rocking-block behaviour); far kick exact | **FAIL, as predicted**: no resonance; 0.5 Hz is worst for every height; kick exact. M7 follow-up: threshold curves and the choice-matters gate pass on all 5 sites ("On levels") |
 | X7 | (optional) 1.5x domino amplifier | showcase | not planned | not run |
 | X8 | Islands behave like solo worlds | C10 | CI size: outcomes match; a world tracks its f32 coordinates (mm) more than the shared solve (solo at origin cm apart) | **PASS** (wrecking ball): KS p 0.39 / 0.52 against solo; islands cost 0.66 of the block per body; no world reproduces exactly, only distributions |
 
@@ -297,12 +297,13 @@ Aftershock's design search (docs/game/aftershock.md; `pnpm keystone:quake`, keys
 | QC-1 Slow Sway | col8 C, col4 P, col7 C, col3 P | **PASS** | 0.20 g 0.8 Hz 1.5 s: 100%, towers 1.000 | 0%, towers 0.500 | 36 of 325 |
 | QC-3 Big Brother | col4 C, slab8x2 P, col4 C | **PASS** | 0.40 g 1 Hz 1 s: 100%, towers 1.000 | 0%, towers 0.667 | 56 of 325 |
 | QC-4 Short Sharp Shock | col3 C, col8 P, col4 C, col7 P | **PASS** | 0.50 g 1 Hz 1.5 s: 100%, towers 1.000 | 0%, towers 0.500 | 4 of 325 |
-| QC-2 Cross Grain | rod walls, condemned across, protected yawed | pending | | | |
-| QC-5 Fault Line | rod wall C, slab8x2 P, col4 C, rod wall P yawed | pending | | | |
+| QC-2 Cross Grain (row along x) | rod walls: C laid along x, P along z | **PASS** | 0.30 g 1 Hz 1 s at 90 deg: 100%, towers 1.000 | 0%, towers 0.500 | 179 of 975 (all at 90 deg; none at 0 or 45) |
+| QC-5 Fault Line | rod wall C, slab8x2 P, col4 C, rod wall P | **PASS** | 0.40 g 1 Hz 1 s along x: 100%, towers 1.000 | 0%, towers 0.500 | 38 of 975 (37 along x, 1 at 45) |
 
-- The naive quake fails every site: at 0.3 Hz for 12 s it is a slow tilt held long enough to fell everything slender, protected or not, and it costs 14 to 26 kJ against the best quakes' 35 to 209 J.
+- The naive quake fails every site: at 0.3 Hz for 12 s it is a slow tilt held long enough to fell everything slender, protected or not, and it costs 14 to 47 kJ against the best quakes' 35 to 284 J.
 - On Short Sharp Shock the band is narrow: 0.50, 0.60 and 0.65 g at 1 Hz for 1.5 s meet it on all 8 builds, 0.55 g on 6 of 8. That is chaos at the edge, which is why the gate confirms on nudged builds; the level ships last in the set.
-- These sites ship as A1 to A3 (aftershock.md, "Levels"), their stars cast on energy from these plays. The GPU solver (SwiftShader) clears Short Sharp Shock with 0.60 g, 1 Hz, 1.5 s and replays bit for bit; the Metal run of the confirm stage goes through the Mac queue.
+- The axis is decisive on the wall sites: Cross Grain's first layout (row along z) met at 0 deg in 182 of 325 grid quakes, at 45 deg in 1, at 90 in none; it was turned so the answer is not the dial's starting axis, and the turned site was searched again (the row above).
+- These sites ship as A1 to A5 (aftershock.md, "Levels"), their stars cast on energy from these plays. On the GPU solver (SwiftShader) each shipped level's ace clears it, and a quake replays bit for bit; the Metal run of the confirm stage goes through the Mac queue.
 
 ## X8 Islands behave like solo worlds
 

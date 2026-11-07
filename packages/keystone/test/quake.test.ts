@@ -174,7 +174,7 @@ describe('quake scoring', () => {
 });
 
 describe('the shipped Aftershock levels', () => {
-  const SITE: Record<string, string> = { A1: 'QC-1', A2: 'QC-3', A3: 'QC-4' };
+  const SITE: Record<string, string> = { A1: 'QC-1', A2: 'QC-3', A3: 'QC-2', A4: 'QC-4', A5: 'QC-5' };
 
   it('are the gated sites exactly, valid, with energy stars cast against their own hash and a budget the brute end is over', () => {
     expect(AFTERSHOCK_LEVELS.map((l) => l.id)).toEqual(Object.keys(SITE));

@@ -3,7 +3,7 @@
 // move the dial; a click on the towers fires nothing; Enter starts the quake the dial shows; the camera does not move
 // while the ground shakes; and the page ends where runSession ends the same line headless and where its own replay
 // ends it (a quake replays bit for bit). Rapier, for speed: the shipped levels' physics on the GPU solver is
-// keystone-lab quake-aces-gpu.test.ts.
+// keystone-lab test quake-aces.ts.
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
 import { A1, compileLevel, runSession, type Shot, snapshotHash } from '@tb/keystone';

@@ -97,10 +97,11 @@ export function quakeCandidate(id: string): LevelDef {
  * A shipped Aftershock level: a candidate site that passed the gate, under its own id and name, with the budget and
  * the energy stars the search cast for it (keystone-lab quake-search.ts quakeStars). The towers are the site's
  * exactly, so the physics the gate judged is the physics played; the id, the budget and the stars are not physics.
- * The star lines are joules, an input the same on every engine; whether a quake clears the level is the engine's, and
- * the aces clear every shipped level on the GPU solver (keystone-lab quake-aces-gpu.test.ts), so the stars are
- * the game engine's (engine 'gpu': onEngine marks them custom elsewhere). The stars record the shipped level's hash (castStars drops them if the towers ever change); the ace is the cast's
- * best quake, the three-star play tests replay.
+ * The star lines are joules, an input the same on every engine; whether a quake clears the level is the engine's,
+ * and the aces clear every shipped level on the GPU solver (keystone-lab test quake-aces.ts), so the stars are the
+ * game engine's (engine 'gpu': onEngine marks them custom elsewhere). The stars record the shipped level's hash
+ * (castStars drops them if the towers ever change); the ace is the cast's best quake, the three-star play tests
+ * replay.
  */
 const q = (peak: number, hz: number, sec: number, axis = 0): QuakeShot => ({ ammo: QUAKE, peak, hz, sec, axis });
 
@@ -115,12 +116,16 @@ function shipped(site: string, id: string, name: string, ace: QuakeShot, cast: {
 
 /**
  * Aftershock's levels in teaching order (docs/game/aftershock.md, "Levels"; the search's numbers in
- * docs/game/mode-probes.md, X6 "On levels"): amplitude first (many quakes clear Slow Sway), then size, then the
- * short sharp shock that only a narrow band of the dial clears. Cast on the reference engine over the 325-quake
- * grid, the confirm stage on 8 nudged builds.
+ * docs/game/mode-probes.md, X6 "On levels"): amplitude first (many quakes clear Slow Sway), then size, then the axis
+ * (Cross Grain's walls), then the short sharp shock only a narrow band of the dial clears, and last two levers at
+ * once (Fault Line: the axis for the walls and a short 1 Hz jolt for the column against the big tower). Cast on the
+ * reference engine over the dial grid (325 quakes along x, 975 over three axes for the wall sites), the confirm
+ * stage on 8 nudged builds.
  */
 export const A1: LevelDef = shipped('QC-1', 'A1', 'Slow Sway', q(25, 10, 10), { t2: 200, t3: 39, best: 34.91481483474812, budget: 800, n: 325, hash: '567eb703f042c3a2' });
 export const A2: LevelDef = shipped('QC-3', 'A2', 'Big Brother', q(40, 10, 10), { t2: 720, t3: 180, best: 162.51259268537308, budget: 2900, n: 325, hash: '21116792ca85189b' });
-export const A3: LevelDef = shipped('QC-4', 'A3', 'Short Sharp Shock', q(50, 10, 15), { t2: 280, t3: 240, best: 209.4888890084887, budget: 1200, n: 325, hash: 'a0bd42eaa16e5973' });
+export const A3: LevelDef = shipped('QC-2', 'A3', 'Cross Grain', q(25, 10, 10, 90), { t2: 2000, t3: 130, best: 114.26666673190293, budget: 8000, n: 975, hash: 'a79c199d0db089ae' });
+export const A4: LevelDef = shipped('QC-4', 'A4', 'Short Sharp Shock', q(50, 10, 15), { t2: 280, t3: 240, best: 209.4888890084887, budget: 1200, n: 325, hash: '45fe7a6f75ff5f0a' });
+export const A5: LevelDef = shipped('QC-5', 'A5', 'Fault Line', q(40, 10, 10), { t2: 1400, t3: 320, best: 284.39703719940286, budget: 5600, n: 975, hash: 'd0da8dd2abf44dbd' });
 
-export const AFTERSHOCK_LEVELS: readonly LevelDef[] = [A1, A2, A3];
+export const AFTERSHOCK_LEVELS: readonly LevelDef[] = [A1, A2, A3, A4, A5];

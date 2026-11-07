@@ -69,7 +69,7 @@ slowest, longest) is brute force, and the levels are built so that brute force f
 - **Heritage judged standing** (`heritage: 'standing'`): a protected tower is broken only if, at a settle, its top
   has dropped 0.3 h below home or tilts past 15 degrees (`heritageFallen`). The default pose rule breaks heritage
   the first step it moves 0.3 h, and a tower that rocks through a quake and stands moves more than that: under the
-  pose rule the gate's best quake on Short Sharp Shock breaks the tall tower it spares (`quake.test.ts`, same end
+  pose rule the gate's best quake on Short Sharp Shock (A4) breaks the tall tower it spares (`quake.test.ts`, same end
   hash, different judgement).
 - **Sites** (keystone `aftershock-towers.ts`, `aftershock-levels.ts`): towers named by id, `col<n>`, `slab<n>x<w>`,
   `wall<n>x<w>`, with `-<material>` and `-anchor` (bottom storey pinned). `aftershockLevel` builds the LevelDef: the
@@ -97,13 +97,18 @@ Results are in docs/game/mode-probes.md, X6 "On levels".
 |---|---|---|---|---|---|
 | A1 | Slow Sway | col8 C, col4 P, col7 C, col3 P | amplitude | 0.25 g, 1 Hz, 1 s (35 J) | 36 of 325 |
 | A2 | Big Brother | col4 C, slab8x2 P, col4 C | size | 0.40 g, 1 Hz, 1 s (163 J) | 56 of 325 |
-| A3 | Short Sharp Shock | col3 C, col8 P, col4 C, col7 P | duration | 0.50 g, 1 Hz, 1.5 s (209 J) | 4 of 325 |
+| A3 | Cross Grain | rod walls: C laid along x, P along z | axis | 0.25 g, 1 Hz, 1 s at 90 degrees (114 J) | 179 of 975: all at 90 degrees |
+| A4 | Short Sharp Shock | col3 C, col8 P, col4 C, col7 P | duration | 0.50 g, 1 Hz, 1.5 s (209 J) | 4 of 325 |
+| A5 | Fault Line | rod wall C, slab8x2 P, col4 C, rod wall P | axis and a short jolt | 0.40 g, 1 Hz, 1 s along x (284 J) | 38 of 975: 37 along x, 1 at 45 |
 
-C: condemned, P: protected. The axis sites (QC-2 Cross Grain, QC-5 Fault Line) are in mode-probes.md with their
-gate results; they ship when they pass.
+C: condemned, P: protected. Cross Grain's first search passed with its answer along x, the dial's starting axis
+(182 of 325 grid quakes met it at 0 degrees, 1 at 45, none at 90): the axis lever is real, but a player who never
+touched it was right by default. Its row now runs along x, so the answer is 90 degrees (179 of 325 there, none at 0
+or 45). Fault Line's answer stays along x: by then the player has met the axis, and its new lever is the jolt. The
+dial's starting quake (0.3 g, 1 Hz, 3 s along x) clears no level.
 
-Order: A1 first because many quakes clear it (a gentle 1 Hz jolt, or a slow sway sized to the slender towers); A3
-last because only a narrow band of the dial clears it. Each level's towers are its candidate site's exactly
+Order: A1 first because many quakes clear it (a gentle 1 Hz jolt, or a slow sway sized to the slender towers); A4
+late because only a narrow band of the dial clears it; A5 last because it needs two levers at once. Each level's towers are its candidate site's exactly
 (`quake.test.ts` compares the compiled scenes), so the physics the gate judged is the physics played.
 
 ## Scoring and stars
@@ -118,7 +123,9 @@ Agreed with the scores thread (PT9/PT16, docs/game/scoring.md):
 - **The cast** (`quakeStars`, cheap: the search's own plays): T3 is the cheapest confirmed quake's energy times 1.1;
   T2 the median energy of the grid quakes that met the objective on the screen; both rounded up to two figures.
   The budget is 4 times T2: room to explore, none for the dial's brute end. Since the energy is the shot's, only
-  "met" depends on the engine.
+  "met" depends on the engine, and every shipped level's ace clears it on the GPU solver
+  (`quake-aces.ts`, SwiftShader), so the stars are marked for the game's engine (`engine: 'gpu'`; the
+  game marks stars cast for another engine custom).
 - The ace (`solutions.ace`) is the cast's best quake.
 
 ## The quake designer
@@ -126,7 +133,8 @@ Agreed with the scores thread (PT9/PT16, docs/game/scoring.md):
 `packages/game/src/quake-panel.ts`, in the HUD's control tray in place of power and height while the Quake chip is
 selected:
 
-- Four dial rows with minus and plus buttons (touch sized on a phone) and keys: Strength Q/E (5% g), Frequency A/D
+- Four dial rows with minus and plus buttons (44 px on an upright phone, where the docked tray shows them as two
+  columns with the seismograph, meter and Start on one line, and the lone Quake chip hidden) and keys: Strength Q/E (5% g), Frequency A/D
   and Duration Z/X (along fixed stops inside the level's range), Axis C/V (the level's axis step, wrapping at 180).
 - A seismograph: the side load the towers will feel, read off the very field events the engine gets.
 - A compass: the axis as the camera sees it (the axis azimuth plus the camera's yaw), so "across the walls" reads
@@ -147,7 +155,7 @@ ground's, seen from the ground, so the view stays put and the towers rock in it.
 - **Far-blast shove** (X6 claim 6: a far flat-core blast is a uniform kick, exact today): one jolt is one lever,
   duration and frequency are lost, and a kick reads as a blast, not a quake. Kept as `joltEvent` for other modes.
 - **Preset quake library** (pick one of N named quakes): the fallback if the dial had proved unreadable. The dial
-  passed the gate on three sites, and a library hides the levers the levels teach. The seismograph shows the dial
+  passed the gate on five sites, and a library hides the levers the levels teach. The seismograph shows the dial
   as a quake, which is what a preset name would have bought.
 - **Transient (pose) heritage rule**: breaks towers that rock and stand. Replaced by judging standing at the settle.
 - **Cube walls for the axis lever**: not direction-sensitive. Bonded rod walls are.
@@ -165,6 +173,12 @@ ground's, seen from the ground, so the view stays put and the towers rock in it.
   Shock (best clears it, the naive and a long quake fail), nudged builds.
 - `keystone-lab/test/quake-gpu.test.ts` (GPU solver, SwiftShader in CI): replay bit for bit, the window quake
   clears Short Sharp Shock, and Chromium computes Node's quake keys.
+- `keystone-lab/test/quake-aces.ts` (GPU solver, two test files): each shipped level's ace clears it as shipped, heritage
+  whole, inside the third star.
+- `game/test/quake-e2e.test.ts` (game page, Rapier): keys and buttons set the dial, a click aims nothing, Enter
+  starts the quake, the camera does not move, the page ends where `runSession` does and replays bit for bit; on
+  phones every dial button and Start is on screen (upright, the designer tray covers at most 36% while the quake is
+  set, against 30% for a launcher's tray, and goes once the quake is fired).
 - `game/test/quake-panel.test.ts`: the dial, the seismogram, the compass, the energy meter and budget, the HUD slot.
 
 ## Follow-ups
