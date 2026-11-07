@@ -27,7 +27,7 @@ import { type CardForward, hudHtml, meterTicks, trialText, type MeterTick, nextS
 import { hudInsets, type Layout, type ScreenInsets } from './layout.ts';
 import { type GoalLine, goalsHudHtml, goalsResultHtml } from './lot-hud.ts';
 import { duelHudHtml, duelResultHtml, handoffHtml, scoreFloatHtml } from './duel-hud.ts';
-import { arcBeads, duelMarks, duelView, joinOverlays, type Overlay, turnCue, turnCueText, TurnSwing } from './duel-view.ts';
+import { arcBeads, duelEndView, duelMarks, duelView, joinOverlays, launcherAz, type Overlay, turnCue, turnCueText, TurnSwing } from './duel-view.ts';
 import { FollowCam } from './follow.ts';
 import { CameraJuice, contactJuice } from './juice.ts';
 import { alphaAt, arrived, DEFAULT_FEEL, newArrivals, Pacer, type PaceFeel, SLOW_TAG_BELOW, slowTag, SpeedMeter, TailSkip } from './pacing.ts';
@@ -897,7 +897,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** The player orbited, panned or zoomed: the follow camera lets go for this shot, the turn view's swing for this turn. */
   const grabCamera = () => { follow.grab(); swing.grab(); };
   /** The HUD's turn cue now: which way to drag to reach the side to fire, between shots in a duel (none while the turn view swings). */
-  const cueNow = () => (duel && !duel.result.over && duel.shooter === null && !swing.active ? turnCue(duel.def.sides[duel.turn].arc, azFromYaw(orbit.yaw)) : null);
+  const cueNow = () => (duel && !duel.result.over && duel.shooter === null && !swing.active ? turnCue(duel.def.sides[duel.turn].arc, aimAz()) : null);
+  /** The launcher's azimuth for the view now: behind the camera, or in a duel with the table's lead (duel-view.ts launcherAz; PT34). */
+  const aimAz = () => (duel ? launcherAz(orbit.yaw, duel.def, feel.duelLead) : azFromYaw(orbit.yaw));
   const courses = () => Math.ceil(c.height / c.frame.unit);
 
   /** Loads queued or in flight: the frame loop stops stepping the outgoing level and keeps drawing it. */
@@ -1360,13 +1362,16 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       // The opening view, once the level's HUD is drawn (its lot sheet and rows set above): docked on a phone, the view
       // keeps clear of the HUD's measured band (PT3b), not the upright guess. A duel's sides are what its view is about
       // (duel-view.ts): it opens on the classic view, framed as before; the turn view (when on) then swings to the side to fire.
-      // (A duel's HUD reads the view's yaw and is not measured: it keeps its framing.)
+      // A duel's HUD reads the view's yaw (the first load has none yet): it is measured once its classic view is set,
+      // and that view made again in the band (PT30).
       const hud = duel ? undefined : (drawHud(), dockedHud());
-      handle.openingHud = hud ?? null;
       orbit = viewOf(c, viewAspect(), undefined, undefined, undefined, { mode: duel ? 'classic' : feel.view, insets: openingInsets(viewAspect(), panelTimeline(c) !== null, innerWidth), hud });
+      const band = duel ? (drawHud(), dockedHud()) : hud;
+      if (duel && band) orbit = viewOf(c, viewAspect(), undefined, undefined, undefined, { mode: 'classic', hud: band });
+      handle.openingHud = band ?? null;
     }
     // A duel opens (and Same start reopens) on the first player's side, as each turn after does (duel-view.ts).
-    if (duel && feel.turnView) orbit = duelView(c, duel.def, duel.turn, viewAspect());
+    if (duel && feel.turnView) orbit = duelView(c, duel.def, duel.turn, viewAspect(), dockedHud());
     // The real look's sun counts from the opening view (light.ts), set as a level loads and kept by a retry.
     if (!retry) viewSun.yaw = orbit.yaw;
     syncDuel();
@@ -1454,7 +1459,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         if (p?.reachable) lit = p.shot.body;
       } else if (hit) {
         aimHit = { body: hit.body, point: hit.point };
-        aimed = shotFor(c, selected, azFromYaw(orbit.yaw), power, hit.point, substeps, launchNow());
+        aimed = shotFor(c, selected, aimAz(), power, hit.point, substeps, launchNow());
         if (aimed) {
           contact = arcContact(c, driver.snapshot, aimed.shot, substeps);
           beads = previewBeads(c, aimed.shot, hit.point, substeps, 40, 2, contact);
@@ -1612,14 +1617,18 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
             syncDuel();
             floatScore();
             // Decided before the racks are spent: end the round here (a bank, once this step's feedback is done).
-            if (r.over) queueMicrotask(() => { if (driver.session.phase === 'aiming') bank(); });
+            if (r.over) {
+              queueMicrotask(() => { if (driver.session.phase === 'aiming') bank(); });
+              // The turn view's last move: back to the whole table, both keeps (duel-view.ts duelEndView; PT34).
+              if (feel.turnView) { follow.grab(); swing.start(orbit, duelEndView(c, viewAspect(), dockedHud())); }
+            }
             else {
               selected = nextSelection(side.rack, duel.left[duel.turn], null);
               // Pass the device: the hand-over card, or (without it) a banner.
               if (feel.handoff) showHandoff();
               else banner(`${side.name}'s turn`);
               // The turn view: swing to the next player's over-the-shoulder view (the follow camera, if on, lets go).
-              if (feel.turnView) { follow.grab(); swing.start(orbit, duelView(c, duel.def, duel.turn, viewAspect())); }
+              if (feel.turnView) { follow.grab(); swing.start(orbit, duelView(c, duel.def, duel.turn, viewAspect(), dockedHud())); }
               // The kings' marks: the shield goes to the king of the player to fire.
               applyMarks();
             }
@@ -2152,8 +2161,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (k === 'k') skip();
     if (k === 't') freeze();
     if (k === 'f') fireOpener();
-    // In a duel, R after the result is a rematch (the other side starts), as the card's first button says.
-    if (k === 'r' && !e.ctrlKey && !e.metaKey) void (duel?.result.over ? load(1 - levelIdx).catch(fail) : handle.retry());
+    // In a duel, R after the result is a rematch (the other side starts), as the card's first button says; mid-duel it
+    // does nothing (PT34: no restart in a hot-seat match, and R meaning two things).
+    if (k === 'r' && !e.ctrlKey && !e.metaKey && !(duel && !duel.result.over)) void (duel ? load(1 - levelIdx).catch(fail) : handle.retry());
     // U, or the platform's undo chord (Ctrl+Z, Cmd+Z on a Mac); not in a duel, whose turns are the players'.
     if (!duel && ((k === 'u' && !e.ctrlKey && !e.metaKey) || (k === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey))) { e.preventDefault(); void handle.undo(); }
     if (!duel && k === 'n' && step(levelIdx, 1)) void load(levelIdx + 1).catch(fail);
@@ -2224,7 +2234,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       opener: !stepping && regrowT === null && s.phase === 'aiming' && (openerNow() !== null || trialReady()), ticks,
       ...(c.def.mason ? { trial: trialText(handle.trial, masonWorlds(c.def.mason)) } : {}),
       // While the turn view swings or the hand-over card shows, the aim is the old side's: no refusal, cue or warning (PT5's red line mid-swing).
-      ...(duel ? { duel: swing.active || handle.handoff ? duelHudHtml(duel) : duelHudHtml(duel, s.phase === 'aiming' && aimed ? duel.refuse(aimed.shot) : null, azFromYaw(orbit.yaw), s.phase === 'aiming' && aimHit !== null && duel.owned[duel.turn].includes(aimHit.body)) } : {}),
+      ...(duel ? { duel: swing.active || handle.handoff ? duelHudHtml(duel) : duelHudHtml(duel, s.phase === 'aiming' && aimed ? duel.refuse(aimed.shot) : null, aimAz(), s.phase === 'aiming' && aimHit !== null && duel.owned[duel.turn].includes(aimHit.body)) } : {}),
       ...(selected === QUAKE && dial ? { quake: quakeHud(dial) } : {}),
       ...(c.def.freeze !== undefined ? { freezes: { left: s.freezesLeft, total: c.def.freeze, frozen, can: canFreeze() } } : {}),
     }, goalsHudHtml(handle.goals, sheetOpen));
