@@ -190,6 +190,7 @@
   "packages/physics-gpu/test/engine-rest.test.ts": 68.5,
   "packages/physics-gpu/test/engine-restitution-anchors.test.ts": 74.1,
   "packages/physics-gpu/test/engine-restitution-cap.test.ts": 67.4,
+  "packages/physics-gpu/test/engine-restitution-jam.test.ts": 12,
   "packages/physics-gpu/test/engine-restitution-records.test.ts": 136.8,
   "packages/physics-gpu/test/engine-restitution-supports.test.ts": 141.5,
   "packages/physics-gpu/test/engine-restitution-variants.test.ts": 13,

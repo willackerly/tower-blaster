@@ -306,12 +306,14 @@ export const RestSlot = defineStruct(
   [
     ['vnTarget', 'vec4f', 'per point q: the normal velocity the pass raises it to (-e vn0 if it bounces, the solve\'s vn if it is a support)'],
     ['P', 'vec4f', 'per point q: the normal impulse the pass has applied there so far, N s (>= 0)'],
-    ['lin', 'vec3f', 'this round\'s linear impulse on body b, the sum of dP n (body a takes -lin)'],
+    ['lin', 'vec3f', 'this round\'s linear impulse on body b, the sum of dP n over the rows its anchors do not cut (the jam guard)'],
     ['flags', 'u32', 'bits 0-3: point q bounces; bits 4-7: point q is a support; bit 8 (ground slots): the body is in a bouncing manifold'],
     ['angB', 'vec3f', 'this round\'s angular impulse on body b, the sum of dP (rbw x n)'],
     ['b', 'u32', 'body b of the slot'],
     ['angA', 'vec3f', 'this round\'s angular impulse on body a, the sum of -dP (raw x n)'],
     ['split', 'u32', 'ground slots: the pass\'s manifolds the body is in (its mass split); 0 if it is not in the pass'],
+    ['linA', 'vec3f', 'this round\'s linear impulse on body a, the sum of -dP n over the rows its anchors do not cut'],
+    ['pad0', 'u32'],
   ],
   'Restitution pass state per contact slot (allocated only while AvbdParams.restitution is on).',
 );

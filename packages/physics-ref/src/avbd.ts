@@ -386,6 +386,18 @@ export interface AvbdParams {
    */
   restitutionAnchorSpeed?: number;
   /**
+   * The jam guard of anchors (see restitute(), "Anchors"): a row of the pass
+   * on a body anchors hold takes none of the bounce (it is held) when the
+   * part of it outside the anchors' directions, in M^1/2 coordinates, is
+   * under this fraction of its length. A row the anchors hold all but a
+   * fraction f of moves the body 1/f times as fast as a free row would to
+   * meet the same target, so a small f throws a seated body (a jam). Default
+   * 0.2 (RESTITUTION_DEFAULTS): at most 5 times; a number in [0, 1].
+   * 1e-4 (ANCHOR_TOL, the tolerance of the anchors' own basis) is the pass
+   * as it was before the guard.
+   */
+  restitutionAnchorCut?: number;
+  /**
    * The energy cap of the restitution pass (see restitute(), "Energy cap"):
    * the pass gives each island (bodies joined by this step's contacts) back at
    * most the energy the solve took from it this step, scaling the island's
@@ -453,12 +465,12 @@ export const DEFAULT_AVBD: AvbdParams = {
 };
 
 /** The restitution keys' defaults while AvbdParams.restitution is on (Box2D's threshold is 1 m/s too; rounds: see restitute()). */
-export const RESTITUTION_DEFAULTS = { restitutionThreshold: 1, restitutionRounds: 8, restitutionAnchors: true, restitutionAnchorSpeed: 0.25, restitutionEnergyCap: true } as const;
+export const RESTITUTION_DEFAULTS = { restitutionThreshold: 1, restitutionRounds: 8, restitutionAnchors: true, restitutionAnchorSpeed: 0.25, restitutionAnchorCut: 0.2, restitutionEnergyCap: true } as const;
 
 /** Anchors (restitute()): the least cosine between a support's normal into the body it holds and up (60 degrees from vertical). */
 export const ANCHOR_UP = 0.5;
-/** Anchors: a row whose part outside the held directions is under this fraction of its length is held. */
-const ANCHOR_TOL = 1e-4;
+/** Anchors: a row whose part outside the directions already in the basis is under this fraction of its length adds none (and before restitutionAnchorCut, the pass's cut). */
+export const ANCHOR_TOL = 1e-4;
 
 /** AvbdParams.records: 0 points, 1 the exact record (here the same as 0), 2 the centre-friction record. */
 export const RECORD_MODES = [0, 1, 2] as const;
@@ -495,6 +507,8 @@ export function checkRestitution(p: Partial<AvbdParams>): void {
   if (r !== undefined && !(Number.isInteger(r) && r >= 1)) throw new Error(`AvbdParams.restitutionRounds must be an integer >= 1, got ${r}`);
   const sp = p.restitutionAnchorSpeed;
   if (sp !== undefined && !(Number.isFinite(sp) && sp >= 0)) throw new Error(`AvbdParams.restitutionAnchorSpeed must be a finite number >= 0, got ${sp}`);
+  const cut = p.restitutionAnchorCut;
+  if (cut !== undefined && !(cut >= 0 && cut <= 1)) throw new Error(`AvbdParams.restitutionAnchorCut must be a number in [0, 1], got ${cut}`);
 }
 
 /**
@@ -1055,6 +1069,28 @@ export class AvbdWorld {
    *   StepStats.restitution.anchorImpulse (so momentum = groundImpulse +
    *   anchorImpulse). With nothing to anchor to, a body is solved in rounds
    *   as before.
+   * - Jam guard (restitutionAnchorCut, default 0.2, 2026-11-06): a row of
+   *   the pass on an anchored body is cut (takes no impulse) when the part
+   *   of its M^-1/2 J outside Q is under that fraction f of its length. A
+   *   row the anchors hold all but f of reaches its target only by moving
+   *   the body along that part, 1/f times as fast as a free row would; at
+   *   the basis's own tolerance (ANCHOR_TOL, 1e-4, the cut before the guard)
+   *   that is up to 10^4 times. Measured: an S5 knock (e 0.6, 8 m/s, mass
+   *   ratio 5, cap off) threw a seated cube at 52 m/s and gained 73% of
+   *   |E0| at 1e-4, 3.7 v at 1e-2, nothing from 0.03 up; on the GPU, S5 at
+   *   10k (e 0.5) threw a resting ground cube to about 220 km/s, past the
+   *   energy cap's fixed-point range (restitution.ts). A cut row is held, as
+   *   an anchor row: the striker bounces off it as off what holds it. Why
+   *   0.2: the pass has no friction, so a seated body's free rows slide
+   *   freely, where Coulomb friction (mu 0.6) would hold a strike within 31
+   *   degrees of the support's normal (a linear row's free fraction up to
+   *   0.51); the cut stops short of that, as f mixes in rotation. In a
+   *   search of 600 small scenes (1-3 cube columns, a ball of mass ratio 1-50
+   *   at any aim, e 0.6) the pass sped an anchored cube past (1 + e) v in 21
+   *   at 1e-4 and 1e-2, 16 at 0.1, 10 at 0.2, 8 at 0.3 and 5 at 0.5 (one
+   *   2-cube column: 34.4 m/s at a 5.1 m/s, 50 kg ball through 0.03, 8.6 at
+   *   0.1). What remains are those squirts, 2-4 v at mass ratio 50, not
+   *   jams. The reference's tests pass at 0.1, 0.2 and 0.3.
    * - The points of one manifold are solved together: each round first takes
    *   the impulse at their centroid that brings the centroid's normal
    *   velocity to the mean target (exact line search along equal per-point
@@ -1187,6 +1223,7 @@ export class AvbdWorld {
     // body holds it exactly.
     const anchorsOn = p.restitutionAnchors ?? RESTITUTION_DEFAULTS.restitutionAnchors;
     const restSpeed = p.restitutionAnchorSpeed ?? RESTITUTION_DEFAULTS.restitutionAnchorSpeed;
+    const anchorCut = p.restitutionAnchorCut ?? RESTITUTION_DEFAULTS.restitutionAnchorCut;
     const gv = this.gravity, gl = Math.hypot(gv[0], gv[1], gv[2]);
     const up: Vec3 = gl > 0 ? [-gv[0] / gl, -gv[1] / gl, -gv[2] / gl] : [0, 0, 0];
     const seated = new Uint8Array(n);
@@ -1280,7 +1317,7 @@ export class AvbdWorld {
       halfInv(i, J, px);
       const n0 = Math.hypot(...px);
       for (const q of qs) { let d = 0; for (let r = 0; r < 6; r++) d += q[r]! * px[r]!; for (let r = 0; r < 6; r++) px[r] = px[r]! - d * q[r]!; }
-      if (!(Math.hypot(...px) > ANCHOR_TOL * n0)) { out.fill(0); return; }
+      if (!(Math.hypot(...px) > anchorCut * n0)) { out.fill(0); return; }
       halfInv(i, px, out);
       for (let r = 0; r < 6; r++) out[r] = out[r]! * s;
     };

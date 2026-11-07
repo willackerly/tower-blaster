@@ -418,6 +418,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
         threshold: p.restitutionThreshold ?? RESTITUTION_DEFAULTS.restitutionThreshold, rounds: p.restitutionRounds ?? RESTITUTION_DEFAULTS.restitutionRounds,
         groundRestitution: scene.ground?.restitution ?? 0, combine: scene.restitutionCombine ?? DEFAULT_RESTITUTION_COMBINE,
         anchors: p.restitutionAnchors ?? RESTITUTION_DEFAULTS.restitutionAnchors, anchorSpeed: p.restitutionAnchorSpeed ?? RESTITUTION_DEFAULTS.restitutionAnchorSpeed,
+        anchorCut: p.restitutionAnchorCut ?? RESTITUTION_DEFAULTS.restitutionAnchorCut,
         energyCap: p.restitutionEnergyCap ?? RESTITUTION_DEFAULTS.restitutionEnergyCap,
       } : null, anchors);
       const sleep = sleeps ? new SleepPass(device, sleepRuleOf(this.opts), this.capacity, bodies, props, np.manifolds, bp.total) : null;
