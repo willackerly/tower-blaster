@@ -106,6 +106,12 @@ export interface SoundMaterial {
    */
   clickModel?: 'dipole' | 'sphere';
   /**
+   * How a click shorter than BL_CLICK_MAX samples is sampled (A7, modes.ts clickShape): 'sampled' (absent, G6's)
+   * one sine cycle at mid-sample, which droops up to 4 dB in its top octaves and aliases under ~5 samples;
+   * 'limited' band-limited, the continuous pulse's spectrum within 0.3 dB to 20 kHz, 0.5 ms later.
+   */
+  clickBand?: 'sampled' | 'limited';
+  /**
    * The dense modes above the mode table (shell walls and solid cubes have thousands): played as a
    * statistical field, band noise per (sector, half-octave) decaying at each band's loss factor, with
    * the energy the same modes would carry (modal density x the table's per-mode law). dB over that;
@@ -190,7 +196,7 @@ export const REAL1_SOUND_MATERIALS = {
  * 6.8). Ice: a burst of cracks over 80 ms on every hit, the same landing (Crack, Breaking; 2.5 dB from
  * 39 real ice recordings). Pine (Kapla) is a plank in a pile (A9, docs/sound.md, Kapla). The step 2b sounds stay as set 'real1'.
  */
-export const SOUND_MATERIALS = {
+const REAL_BASE = {
   ...REAL1_SOUND_MATERIALS,
   // Step 3 (a tower): at a tower's speeds grit at GRIT_SHARE read as fireworks, so stone and ice cap it
   // lower; levelDb brings each back to real1's loudness (the takes were picked level-free).
@@ -202,6 +208,12 @@ export const SOUND_MATERIALS = {
   // The energy law as every other real material; no roughness (planed wood is smooth: with it a topple reads Fireworks).
   pine: { ...CLASSIC_SOUND_MATERIALS.pine, law: 'energy', eta: 0.045 },
 } as const satisfies Record<keyof typeof CLASSIC_SOUND_MATERIALS, SoundMaterial>;
+/** Every real material's short clicks band-limited (A7): Kapla planks, ice pieces and small blocks click in 12-64 samples. */
+const limited = <M extends SoundMaterial>(m: M) => ({ ...m, clickBand: 'limited' as const });
+export const SOUND_MATERIALS = {
+  pine: limited(REAL_BASE.pine), acrylic: limited(REAL_BASE.acrylic), stone: limited(REAL_BASE.stone), plaster: limited(REAL_BASE.plaster),
+  iron: limited(REAL_BASE.iron), ice: limited(REAL_BASE.ice), rubber: limited(REAL_BASE.rubber), steel: limited(REAL_BASE.steel),
+} as const satisfies Record<keyof typeof CLASSIC_SOUND_MATERIALS, SoundMaterial>;
 
 /** A named material set: 'real' (SOUND_MATERIALS, the default), 'real1' (the real set before step 2c's stone and ice) or 'classic' (G6's). */
 export type SoundSet = 'real' | 'real1' | 'classic';
@@ -211,7 +223,7 @@ export const soundMaterials = (set: SoundSet = 'real'): Record<keyof typeof SOUN
 
 const POSITIVE = ['E', 'nu', 'rho', 'eta', 'R', 'mstar'] as const;
 
-const KEYS = new Set(['model', 'dims', 'size', 'wall', 'walls', 'plateModes', 'E', 'G', 'nu', 'rho', 'eta', 'jitter', 'R', 'Ec', 'mstar', 'ringDb', 'clickDb', 'gritDb', 'gritRate', 'gritSpread', 'gritRing', 'face', 'levelDb', 'gritShare', 'roughDb', 'roughT', 'overlap', 'clickModel', 'denseDb', 'law']);
+const KEYS = new Set(['model', 'dims', 'size', 'wall', 'walls', 'plateModes', 'E', 'G', 'nu', 'rho', 'eta', 'jitter', 'R', 'Ec', 'mstar', 'ringDb', 'clickDb', 'gritDb', 'gritRate', 'gritSpread', 'gritRing', 'face', 'levelDb', 'gritShare', 'roughDb', 'roughT', 'overlap', 'clickModel', 'clickBand', 'denseDb', 'law']);
 
 /** A material from JSON-ish input over `base` (a whole material when absent); throws on a value that can't make sound. */
 export function parseSoundMaterial(input: Partial<Record<keyof SoundMaterial, unknown>>, base?: SoundMaterial): SoundMaterial {
@@ -233,6 +245,7 @@ export function parseSoundMaterial(input: Partial<Record<keyof SoundMaterial, un
   if (out.law !== undefined && out.law !== 'velocity' && out.law !== 'energy') throw new Error(`sound material law must be velocity or energy: ${String(out.law)}`);
   if (out.plateModes !== undefined && !(Number.isInteger(out.plateModes) && out.plateModes >= 1 && out.plateModes <= 16)) throw new Error('sound material plateModes must be an integer 1-16');
   if (out.clickModel !== undefined && out.clickModel !== 'dipole' && out.clickModel !== 'sphere') throw new Error(`sound material clickModel must be dipole or sphere: ${String(out.clickModel)}`);
+  if (out.clickBand !== undefined && out.clickBand !== 'sampled' && out.clickBand !== 'limited') throw new Error(`sound material clickBand must be sampled or limited: ${String(out.clickBand)}`);
   if (out.overlap !== undefined && !(out.overlap >= 0.1 && out.overlap <= 10)) throw new Error('sound material overlap must be 0.1 to 10');
   if (out.gritRate !== undefined && !(out.gritRate >= 0.1 && out.gritRate <= 60)) throw new Error('sound material gritRate must be 0.1 to 60 grains per m/s');
   if (out.face !== undefined && !(out.face >= 0 && out.face <= 1)) throw new Error('sound material face must be 0 to 1');

@@ -18,7 +18,9 @@
 //   snd.dv=0.25         slowest speed change that sounds, m/s
 //   snd.voices=8        loudest impacts a frame played as their own voices
 //   snd.lowcut=35       master high-pass, Hz (0: off): below it only headroom is spent
+//   snd.room=hall       the room (room.ts): auto (the look's: the real look's hall, else outdoor) | off | outdoor | hall
 import { SOUND_MATERIALS, SOUND_SETS, type SoundMaterial, type SoundSet } from './material.ts';
+import { type Room, ROOMS } from './room.ts';
 
 export type SoundMaterialName = keyof typeof SOUND_MATERIALS;
 export const SOUND_MATERIAL_NAMES = Object.keys(SOUND_MATERIALS) as SoundMaterialName[];
@@ -43,16 +45,18 @@ export interface SoundOptions extends Record<SoundKnob, number> {
   on: boolean;
   material: SoundMaterialName | 'auto';
   set: SoundSet;
+  room: Room | 'auto';
 }
 
 export const DEFAULT_SOUND: SoundOptions = {
-  on: false, material: 'auto', set: 'real',
+  on: false, material: 'auto', set: 'real', room: 'auto',
   ...(Object.fromEntries(Object.entries(SOUND_KNOBS).map(([k, v]) => [k, v.def])) as Record<SoundKnob, number>),
 };
 
 /** Throws unless every knob is in range (and voices whole). */
 export function checkSound(o: SoundOptions): SoundOptions {
   if (!SOUND_SETS.includes(o.set)) throw new Error(`snd.set must be one of ${SOUND_SETS.join(', ')}: ${String(o.set)}`);
+  if (o.room !== 'auto' && !(ROOMS as readonly string[]).includes(o.room)) throw new Error(`snd.room must be auto or one of ${ROOMS.join(', ')}: ${String(o.room)}`);
   if (o.material !== 'auto' && !SOUND_MATERIAL_NAMES.includes(o.material)) throw new Error(`snd.mat must be auto or one of ${SOUND_MATERIAL_NAMES.join(', ')}: ${String(o.material)}`);
   for (const k of Object.keys(SOUND_KNOBS) as SoundKnob[]) {
     const r = SOUND_KNOBS[k], v = o[k];
@@ -74,6 +78,8 @@ export function parseSoundOptions(q: URLSearchParams): SoundOptions {
   if (mat !== null) o.material = mat as SoundOptions['material'];
   const set = q.get('snd.set');
   if (set !== null) o.set = set as SoundSet;
+  const room = q.get('snd.room');
+  if (room !== null) o.room = room as SoundOptions['room'];
   for (const k of Object.keys(SOUND_KNOBS) as SoundKnob[]) {
     const v = q.get(`snd.${k}`);
     if (v !== null) o[k] = v.trim() === '' ? NaN : Number(v);
@@ -86,6 +92,7 @@ export function writeSoundOptions(o: SoundOptions, q: URLSearchParams): void {
   if (o.on) q.set('snd', '1');
   if (o.material !== DEFAULT_SOUND.material) q.set('snd.mat', o.material);
   if (o.set !== DEFAULT_SOUND.set) q.set('snd.set', o.set);
+  if (o.room !== DEFAULT_SOUND.room) q.set('snd.room', o.room);
   for (const k of Object.keys(SOUND_KNOBS) as SoundKnob[]) if (o[k] !== DEFAULT_SOUND[k]) q.set(`snd.${k}`, String(o[k]));
 }
 

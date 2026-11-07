@@ -352,13 +352,59 @@ export function denseField(m: SoundMaterial, binT: ArrayLike<number>, bodyEdge =
 }
 
 /**
+ * Clicks shorter than this many samples are band-limited (A7, clickShape). Sampled at mid-sample, one sine cycle
+ * of D samples droops in its top octaves (12-20 kHz: -1.6 to -3.9 dB at D 8-24, -0.6 dB at 8 kHz up to D 64)
+ * and aliases below D ~ 5 (+1.6 dB everywhere at D 3, +11 dB at 500 Hz at D 2.5); a click this long or longer
+ * has under 1e-4 of its energy where the droop is.
+ */
+export const BL_CLICK_MAX = 64;
+/** The band-limited click's lead, samples: half its windowed-sinc filter (0.5 ms at 48 kHz). */
+export const BL_CLICK_LEAD = 24;
+const BL_FC = 0.45, BL_BETA = 8, BL_SUB = 8, BL_STEP = Math.log(1.005);
+const blCache = new Map<number, Float32Array>();
+
+function besselI0(x: number): number {
+  let s = 1, t = 1;
+  for (let k = 1; k < 40 && t > 1e-12 * s; k++) { t *= (x / (2 * k)) ** 2; s += t; }
+  return s;
+}
+
+/**
+ * One cycle of sin(2 pi t / D) (t and D in samples), band-limited: convolved with a Kaiser-windowed sinc
+ * (cutoff 0.45 of the rate, half-width BL_CLICK_LEAD samples, beta 8), so its sampled spectrum is the
+ * continuous pulse's within 0.3 dB to 20 kHz at 48 kHz and nothing aliases. It starts BL_CLICK_LEAD samples
+ * early (out[BL_CLICK_LEAD] is the pulse's start). D is quantised to 0.5% steps and the shapes cached:
+ * a few hundred at most, ~30 us each to build.
+ */
+export function clickShape(D: number): Float32Array {
+  const key = Math.round(Math.log(D) / BL_STEP), hit = blCache.get(key);
+  if (hit) return hit;
+  const Dq = Math.exp(key * BL_STEP), W = BL_CLICK_LEAD, n = Math.ceil(Dq) + 2 * W + 1, out = new Float64Array(n);
+  const i0 = besselI0(BL_BETA), steps = Math.ceil(Dq * BL_SUB), dt = Dq / steps;
+  for (let j = 0; j < steps; j++) {
+    const tau = (j + 0.5) * dt, c = Math.sin((2 * Math.PI * tau) / Dq) * dt;
+    for (let i = Math.max(0, Math.ceil(tau)); i <= Math.min(n - 1, Math.floor(tau + 2 * W)); i++) {
+      const u = i - W - tau;
+      if (Math.abs(u) >= W) continue;
+      const x = 2 * BL_FC * u, sinc = x === 0 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x);
+      out[i]! += c * 2 * BL_FC * sinc * (besselI0(BL_BETA * Math.sqrt(1 - (u / W) ** 2)) / i0);
+    }
+  }
+  const f = Float32Array.from(out);
+  blCache.set(key, f);
+  return f;
+}
+
+/**
  * The click of the body's own acceleration (a compact dipole on its axis), Pa at 1 m per m/s of dv,
  * sampled at `sr` over the pulse: p = rho_air 3V / (8 pi c) * da/dt, da/dt = (2 pi dv / T^2) sin(2 pi t / T).
+ * With clickBand 'limited', under BL_CLICK_MAX samples it is band-limited (clickShape) and starts BL_CLICK_LEAD samples early.
  */
 export function clickKernel(m: SoundMaterial, T: number, sr: number, bodyEdge = 1): Float32Array {
+  const k = ((RHO_AIR * 3 * volume(m, bodyEdge)) / (8 * Math.PI * C_AIR)) * 10 ** (m.clickDb / 20) * ((2 * Math.PI) / (T * T));
+  if (m.clickBand === 'limited' && T * sr < BL_CLICK_MAX) return clickShape(T * sr).map((x) => k * x);
   const n = Math.max(2, Math.ceil(T * sr)), out = new Float32Array(n);
-  const k = ((RHO_AIR * 3 * volume(m, bodyEdge)) / (8 * Math.PI * C_AIR)) * 10 ** (m.clickDb / 20);
-  for (let i = 0; i < n; i++) out[i] = k * ((2 * Math.PI) / (T * T)) * Math.sin((2 * Math.PI * (i + 0.5)) / (sr * T));
+  for (let i = 0; i < n; i++) out[i] = k * Math.sin((2 * Math.PI * (i + 0.5)) / (sr * T));
   return out;
 }
 

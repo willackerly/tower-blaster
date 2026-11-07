@@ -16,6 +16,7 @@
   "packages/audio/test/modes.test.ts": 0.4,
   "packages/audio/test/options.test.ts": 0.1,
   "packages/audio/test/realism.test.ts": 18.2,
+  "packages/audio/test/room.test.ts": 1.5,
   "packages/audio/test/tap.test.ts": 0.1,
   "packages/bench/test/run.test.ts": 1,
   "packages/engine-api/test/blast.test.ts": 0,

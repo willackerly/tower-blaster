@@ -6,12 +6,13 @@
 // The frames are what the tap would post (buildFrame's definition: dv, distance, pan, material, pitch),
 // built directly from the script, so a step isolates the synth from the physics.
 // usage: tsx packages/audio/src/ladder-cli.ts out=dir [steps=knock,clatter,tumble mats=stone,plaster set=real|classic
-//        edge=0.05 dist=0.6 name=tag m.<key>=<value> <knob>=<value>]
+//        edge=0.05 dist=0.6 name=tag m.<key>=<value> <knob>=<value> room=off|outdoor|hall size=1 tail=1]
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { BLOCK, CollapseEngine } from './engine.ts';
 import { type AudioFrame, binOf, cellOf, DV_EDGES, pitchZ, sectorOf, TOP_FIELDS } from './frame.ts';
 import { SOUND_SETS, type SoundMaterial, soundMaterials, type SoundSet } from './material.ts';
 import { SOUND_KNOBS, type SoundKnob, tunedMaterial } from './options.ts';
+import type { Room } from './room.ts';
 
 const SR = 48000, FPS = 60, SECTORS = 4, TOP = 8;
 
@@ -66,9 +67,10 @@ export function framesOf(hits: readonly Hit[], seconds: number): AudioFrame[] {
 }
 
 /** Renders frames through the collapse engine with one material: stereo, peak-normalised to 0.5 when asked. */
-export function renderLadder(frames: readonly AudioFrame[], m: SoundMaterial, edge: number, tail = 1): { L: Float32Array; R: Float32Array } {
+export function renderLadder(frames: readonly AudioFrame[], m: SoundMaterial, edge: number, tail = 1, room: Room = 'off', size = 1): { L: Float32Array; R: Float32Array } {
   const e = new CollapseEngine({ sampleRate: SR, seed: 1, fullScale: 3000 }); // far under the limiter: the ladder hears the synth, not the limiter
   e.setMaterial(0, m, edge);
+  e.setRoom(room, size);
   const n = Math.ceil(((frames.length / FPS + tail) * SR) / BLOCK), L = new Float32Array(n * BLOCK), R = new Float32Array(n * BLOCK);
   const l = new Float32Array(BLOCK), r = new Float32Array(BLOCK);
   let due = 0, b = 0;
@@ -88,7 +90,7 @@ function wav(path: string, L: Float32Array, R: Float32Array) {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const kv = Object.fromEntries(process.argv.slice(2).map((a) => a.split('=') as [string, string]));
-  const KEYS = new Set(['out', 'steps', 'mats', 'set', 'edge', 'dist', 'name', ...Object.keys(SOUND_KNOBS)]);
+  const KEYS = new Set(['out', 'steps', 'mats', 'set', 'edge', 'dist', 'name', 'room', 'size', 'tail', ...Object.keys(SOUND_KNOBS)]);
   for (const k of Object.keys(kv)) if (!KEYS.has(k) && !k.startsWith('m.')) throw new Error(`unknown option ${k}`);
   if (!kv.out) throw new Error('out= is required');
   const set = (kv.set ?? 'real') as SoundSet;
@@ -103,7 +105,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     for (const name of (kv.mats ?? Object.keys(mats).join(',')).split(',')) {
       if (!mats[name]) throw new Error(`unknown material ${name}`);
       const m = { ...tunedMaterial(mats[name]!, knobs), ...over } as SoundMaterial;
-      const { L, R } = renderLadder(framesOf(hits, seconds), m, edge);
+      const { L, R } = renderLadder(framesOf(hits, seconds), m, edge, Number(kv.tail ?? 1), (kv.room ?? 'off') as Room, Number(kv.size ?? 1));
       let peak = 0;
       for (let i = 0; i < L.length; i++) peak = Math.max(peak, Math.abs(L[i]!), Math.abs(R[i]!));
       const g = peak > 0 ? 0.5 / peak : 1; // level-free: the ladder compares timbre

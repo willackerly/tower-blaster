@@ -31,6 +31,7 @@ import { pullAnim } from './pullanim.ts';
 import { quakeGround } from './quakeground.ts';
 import { quality } from './quality.ts';
 import { rapid } from './rapid.ts';
+import { room } from './room.ts';
 import { shake } from './shake.ts';
 import { sharp } from './sharp.ts';
 import { sleepTint } from './sleeptint.ts';
@@ -84,4 +85,5 @@ export const OPTIONS = [
   launchSound,
   blastSound,
   kaplaSound,
+  room,
 ] as const;

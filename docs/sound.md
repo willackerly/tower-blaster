@@ -182,7 +182,7 @@ shorter than ~16 samples (stone blocks under ~3 cm: 8 samples at Kapla
 size) is sampled too coarsely for its top octave, in the voices' kernel and
 in the bank alike. Against the band-limited pulse, 16 kHz reads 4.6 dB low
 in one and 4.8 dB high in the other. That band is 20+ dB under the click's
-own. Band-limited kernels for both would fix it.
+own. Band-limited kernels for both would fix it (A7 did, for the real set: Band-limited clicks, below).
 
 Stone city before and after, energy above 1 kHz: -27 dB of the total before,
 -37 dB after. The audio thread's cost is unchanged (both ~15% of a VM core;
@@ -765,6 +765,125 @@ shorter decays leave fewer resonators ringing. Inside A3's budget.
 Clips for listening (before, after): /mnt/project-files/sound/kapla/ (knock, clatter, the 2k topple, B5's
 grenade shot level-free).
 
+## Band-limited clicks (A7, 2026-11-07)
+
+The click of a body's own acceleration is one sine cycle as long as the contact (modes.ts clickKernel).
+Sampled at mid-sample, a cycle of D samples is not the continuous pulse: against its exact spectrum,
+|C(w)| = w0 |2 sin(w D / 2)| / |w0^2 - w^2|, octave by octave (dB):
+
+| D (samples) | 0.5-1 kHz | 2-4 kHz | 8-12 kHz | 12-16 kHz | 16-20 kHz |
+|---|---|---|---|---|---|
+| 2.5 | +11.4 | +1.6 | -0.9 | -0.2 | +1.0 |
+| 3 | +1.6 | +1.6 | +1.2 | +0.6 | -1.0 |
+| 8 | +0.2 | +0.2 | -0.3 | -1.6 | -3.3 |
+| 16 | +0.1 | 0.0 | -0.6 | -1.6 | -3.7 |
+| 24 | 0.0 | 0.0 | -0.7 | -1.7 | |
+| 64 | 0.0 | 0.0 | | | |
+
+(blank: under 1e-4 of the click's energy). It droops in the top octaves and aliases under ~5 samples. The bank's
+click, a resonator with a whole-sample period of at least 4, was further off: at Kapla-size stone, +9 dB at
+16 kHz against the voice's. The real set's Kapla planks (12-24 samples), ice pieces at B5's h (20-29) and
+small stone blocks (8 samples at Kapla size) click in that range.
+
+New key `clickBand`: `'sampled'` (absent, G6's) or `'limited'`. Limited, a click under BL_CLICK_MAX (64)
+samples is the pulse convolved with a Kaiser-windowed sinc (cutoff 0.45 of the rate, half-width 24 samples,
+beta 8; modes.ts clickShape): within 0.3 dB of the continuous spectrum in every octave to 20 kHz, with no net
+pressure. Shapes are quantised to 0.5% of D and cached (a few hundred at most, ~30 us each). The bank plays
+such a click as the same kernel, overlap-added per (bin, sector) (engine.ts firClick), so a bank click and a
+voice click are one kernel to within one gain (0.17 dB, the bank's level on every click, sampled or not).
+A band-limited click starts 24 samples (0.5 ms) after its onset; a voice's modes start at the onset.
+
+Every material of the real set is limited; real1 and classic keep G6's sampled clicks (classic still hashes
+bit for bit). The judge barely moves, as a fix this far up should: the 2k Kapla topple 0.92 -> 0.95, the pine
+ladder 0.69 -> 0.71 (mean of knock, clatter, tumble), stone and ice at 5 cm within 0.01.
+
+Cost (cost-cli on the 2k Kapla capture, 23,726 impacts, this VM, best of 5; sampled -> limited): pine at
+Kapla size 3.9% -> 4.2% of a core, stone at 0.117 m 5.3% -> 5.3%, stone at 0.5 m 10.6% -> 10.4%, ice 12.6%
+-> 12.5%, acrylic 19.7% -> 19.6%. Within the run-to-run noise except pine's +0.3 points (its bank rows are
+FIRs of 60-70 taps instead of 20-sample resonators); inside A3's budget.
+
+## Room (A5, 2026-11-07)
+
+A1 found that a room made the old sound worse: a dry modal source in a room is a drum kit in a room. With
+the source fixed (the real set, A9, A7), A5 adds the room as an option, `@tb/audio` room.ts, after the dry mix
+and before the low cut and the limiter. It has two parts:
+
+- **early**: sparse reflections off what is far away (a hall's roof and walls; a tree line and a building
+  outdoors). They are taps on a delay line of the mono mix after a diffuser (four Schroeder allpasses, g 0.6),
+  each low-passed for the air it crossed and sent to one side.
+- **late**: a feedback delay network (Jot): eight prime-length delay lines mixed by an orthonormal Hadamard
+  matrix (a fast Walsh-Hadamard transform). Each line has a one-pole loop filter whose gains at DC and at 8 kHz
+  are exactly rt60's and rtHigh's for its length (`loopFilter`). It is fed by the diffuser after a pre-delay,
+  and its two outputs are orthogonal rows, so the sides are decorrelated (L/R correlation 0.0).
+
+Levels are energies against the dry sound: an impulse through each path carries `earlyDb` and `lateDb` of its
+energy (measured once per room, `pathEnergies`). So `lateDb` is the negative of the direct-to-reverberant
+ratio. The room idles, at zero cost, once its tail is 100 dB down after the input stops. Running, it takes
+0.6-0.8% of a core on this VM.
+
+| preset | rt60 / at 8 kHz | early | earlyDb | lateDb | measured RT60 125 Hz .. 8 kHz (octaves) |
+|---|---|---|---|---|---|
+| hall (Grand Hall, size x) | 3.0 / 1.3 s | roof 0.17 s, side walls 0.18-0.21, end walls 0.42-0.45 | -14 | -6 | 2.92 3.01 3.03 2.90 2.66 2.19 1.50 |
+| outdoor (size x as far) | 0.7 / 0.2 s | tree line 0.09 s (left), building 0.16 s (right) | -16 | -22 | 0.74 0.70 0.67 0.60 0.50 0.34 0.23 |
+
+The hall's listener stands at about half its critical distance (0.057 sqrt(V / RT60) = 17 m), so the late part
+is 6 dB under the direct sound. Echo density (the share of samples over one sd per 20 ms, 1 = Gaussian) is 0.5
+at 0.1 s and 0.9-1.0 by 0.2 s.
+
+**The judge, with a control.** The real share only means something against real sounds in the same room. So
+each preset was judged on 24 real recordings put through it: ESC-50 door knocks, glass, footsteps, cans,
+mouse clicks and fireworks, 4 of each. The synth was judged on 7 game mixes (L1-L5, the 2k Kapla topple, the
+city of stone at 0.5 m) and on 6 ladder clips (clatter and tumble for stone, plaster and ice at 0.5 m, 10 m off).
+
+| room | real recordings | game mixes | ladder |
+|---|---|---|---|
+| off (dry) | 0.88 | 0.90 | 0.77 |
+| **outdoor** | **0.89** | **0.94** | **0.93** |
+| hall | 0.60 | 0.84 | 0.76 |
+
+- **Outdoor leaves real recordings as they were** and lifts the synth on every set. L3, a glass-and-stone
+  scatter, goes from 0.75 ("Silence, Sound effect, Tick") to 0.91 (Glass, Chink); clatter of plaster goes from
+  0.68 (Animal, Inside small room) to 0.97 (Coin, Crackle, Crack).
+- **The hall costs real recordings 0.28.** The judge hears a big hall's impacts as percussion: a door knock
+  drops from 0.67 to 0.22, glass from 0.96 to 0.49. The synth loses only 0.06 there. So the hall is the
+  judge's blind spot, not the synth's fault, and it waits on listening.
+
+How the presets were found, on the control (real recordings, mean real share):
+
+- The first outdoor preset had a ground reflection at 3 ms and seven echoes out to 0.68 s: 0.63. The ground
+  reflection alone, with no echoes or tail, scored 0.59.
+  - Without the ground reflection, two echoes and the tail: 0.88.
+  - The ground reflection is left out on purpose. Its delay is the path difference, 2 h_s h_l / d: 0.4 ms for a
+    block at 0.25 m seen from 5 m up and 20 m away, 4 ms for one at 3 m. One fixed delay puts one comb on
+    hundreds of impacts at every height, where the true sum is incoherent, a 1-3 dB lift at low frequencies.
+  - The floor in the hall is left out for the same reason.
+- Seven echoes read as a rhythm (door knocks 0.67 to 0.18); two do not.
+- In the hall, the late level against the control: 0 dB 0.41, -6 dB 0.55, -12 dB 0.60 (all without the floor).
+  - The game mix at those levels: 0.75, 0.82, 0.89.
+  - -6 dB, half the critical distance, is where a camera over the table stands. -12 dB would put it 4 m from
+    the tower.
+
+**Alternatives weighed:**
+- Convolution with a measured or modelled response: exact, but a 3 s response is 144k taps. A partitioned FFT
+  convolution costs about 10x this, and recorded responses would have to come from the Mac, with their licences.
+- Schroeder/Freeverb comb banks: cheap, but they ring metallic on impulsive input, which a collapse is.
+- Velvet-noise convolution: thousands of taps a sample for a dense 3 s tail.
+
+**Options:**
+- Game: `keystone.room` = `outdoor` (the default: the game is played in an open field) | `hall` | `off` (dry,
+  as before). The classic set always plays dry.
+- Viewer: `snd.room` = `auto` (the real look's hall at its `real.hallSize` when the scene is in it, else
+  outdoor) | `off` | `outdoor` | `hall`.
+- The renderers take `room=` `size=` `tail=` (sound-sweep-cli, ladder-cli). The judge now also reports
+  AudioSet's environment labels per clip (`environment`). They barely move with any room (under 0.1), so they
+  are not a criterion.
+
+Not covered by the room: blasts and the launch whump play outside the worklet, dry; the blast has its own echo
+rumble (A6).
+
+Clips at game level, for each of L1, L3, L5, the Kapla topple and the stone city: off, outdoor and hall, in
+/mnt/project-files/sound/room/.
+
 ## Plan (each step lands with its test)
 
 1. S1 `@tb/audio` material config and mode derivation. Done (#93).
@@ -779,7 +898,7 @@ grenade shot level-free).
 5. S5 AudioWorklet engine (foreground, bank, sectors, limiter). Done; exact
    bank clicks, lookahead limiter and low cut 2026-10-30.
 6. S6 viewer Sound section and `snd.*` URL params. Done.
-7. S7 ground and hall: floor resonators, reverb tied to `real.env`.
+7. S7 ground and hall: reverb tied to `real.env`, done as A5 (Room above; the viewer's snd.room=auto). Floor resonators not yet.
 8. S8 granular non-modal layers: stone grit done (2026-11-01, Grit above); splinters and rubble sliding not yet.
 9. S9 calibration from recordings (example-guided, Ren et al. 2013). The realism judge (2026-11-05,
    Realism above) is the objective half; recordings of the actual materials would pin the levels.

@@ -12,7 +12,7 @@ import workletUrl from '@tb/audio/worklet?worker&url';
 import type { BodyDesc, Snapshot } from '@tb/engine-api';
 import type { V3 } from './math.ts';
 import type { ViewerConfig } from './params.ts';
-import { soundGain, soundMaterial, soundSlot } from './sound-config.ts';
+import { soundGain, soundMaterial, soundRoom, soundSlot } from './sound-config.ts';
 
 export type SoundStatus = 'off' | 'starting' | 'waiting' | 'on' | 'error';
 
@@ -46,6 +46,7 @@ export class ViewerSound {
     if (!this.ctx) { this.starting ??= this.start(); return; }
     this.send({ type: 'material', slot: 0, material: soundMaterial(c), edge: c.scale });
     this.send({ type: 'gain', gain: soundGain(c), lowcut: c.sound.lowcut });
+    this.send({ type: 'room', ...soundRoom(c) });
     this.resume();
   }
 
