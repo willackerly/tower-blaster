@@ -28,6 +28,8 @@ describe('fuse & fold on the game page', () => {
     const panel = page.locator('.kg-fuse.show');
     await expect.poll(() => panel.count()).toBe(1);
     expect(await panel.locator('.r').count()).toBe(charges);
+    // PT20: the stars hold on the GPU (cast on the reference, checked here), so nothing says custom.
+    expect(await page.locator('.custom').count()).toBe(0);
     const view0 = await page.evaluate(() => window.__game.view);
     // Sweep west at the default spacing, then two steps more (0.8 s between the rows).
     await panel.locator('button[data-dir="W"]').click();
@@ -43,6 +45,7 @@ describe('fuse & fold on the game page', () => {
     expect(fell.phase).toBe('cleared');
     expect(fell.collapse).toBeGreaterThan(0.6);
     expect(fell.fired).toBe(1);
+    expect(await page.locator('.custom').count()).toBe(0);
     // Retry, all at once: the frame drops a storey and stands.
     await page.evaluate(() => window.__game.retry());
     await ready(page, 5 * MINUTES);
