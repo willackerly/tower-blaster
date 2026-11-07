@@ -35,13 +35,14 @@
 // previous frame, so frames neither overlap nor leave gaps; the clock resyncs if
 // the two drift apart by more than `resync`.
 //
-// Master: Pa to full scale, a low cut (2nd-order Butterworth high-pass at
+// Master: Pa to full scale, the room (room.ts: off by default; setRoom), a low cut (2nd-order Butterworth high-pass at
 // `lowcut` Hz: below ~35 Hz no speaker plays it, yet a big block's thump puts
 // a third of its energy there, which only uses up headroom), then a lookahead
 // peak limiter (Limiter): gain changes are ramps, never steps, so heavy
 // limiting does not crackle.
 import { binOf, DV_EDGES, TOP_FIELDS, type AudioFrame } from './frame.ts';
 import type { SoundMaterial } from './material.ts';
+import { makeRoom, ROOMS, type Room, type RoomParams, type RoomVerb } from './room.ts';
 import { BL_CLICK_MAX, C_AIR, clickFilter, clickKernel, contactTime, mass, RHO_AIR, radiatedClick, DENSE_BANDS, denseField, forceSpectrum, gauss, modes, roughness, roughTime, soundSize, type Modes } from './modes.ts';
 
 export const BLOCK = 128;
@@ -276,6 +277,8 @@ export class CollapseEngine {
   private sector = new Float32Array(0);
   readonly limiter = new Limiter();
   readonly highpass = new HighPass();
+  private roomVerb: RoomVerb | null = null;
+  private roomKey = 'off';
   // Impulse buckets, by block: t (sample in block), material, class, sector, A, dv.
   private bt = new Uint16Array(RING * BUCKET);
   private bm = new Uint8Array(RING * BUCKET);
@@ -671,10 +674,23 @@ export class CollapseEngine {
     // Master: Pa to full scale, then the limiter.
     const g = this.muted ? 0 : 1 / this.fullScale;
     for (let i = 0; i < BLOCK; i++) { L[i]! *= g; R[i]! *= g; }
+    this.roomVerb?.process(L, R);
     if (this.lowcut > 0) this.highpass.process(L, R, this.lowcut, this.sr);
     this.limiter.process(L, R, this.sr);
     this.now += BLOCK;
   }
+
+  /** The room the collapse plays in (room.ts): off (dry, the default), outdoor, or hall at size x the Grand Hall. A change restarts the tail. */
+  setRoom(room: Room, size = 1, tune: Partial<RoomParams> = {}): void {
+    if (!(ROOMS as readonly string[]).includes(room)) throw new Error(`room must be one of ${ROOMS.join(', ')}: ${String(room)}`);
+    const key = room === 'off' ? 'off' : `${room}:${size}${Object.keys(tune).length ? `:${JSON.stringify(tune)}` : ''}`;
+    if (key === this.roomKey) return;
+    this.roomVerb = makeRoom(room, this.sr, size, tune);
+    this.roomKey = key;
+  }
+
+  /** The room now playing: 'off', or room:size. */
+  get room(): string { return this.roomKey; }
 
   /** Resonators with state or input (a cost probe). */
   liveResonators(): number {

@@ -12,6 +12,14 @@ describe('sound options', () => {
     writeSoundOptions(o, q);
     expect(q.toString()).toBe('snd=1&snd.mat=pine&snd.volume=-6&snd.pitch=-5&snd.voices=0');
     expect(parseSoundOptions(q)).toEqual(o);
+    // The room (A5): auto by default (the viewer resolves it from the look), and round-trips.
+    expect(DEFAULT_SOUND.room).toBe('auto');
+    for (const room of ['off', 'outdoor', 'hall'] as const) {
+      const r = parseSoundOptions(new URLSearchParams(`snd.room=${room}`)), w = new URLSearchParams();
+      expect(r.room).toBe(room);
+      writeSoundOptions(r, w);
+      expect(w.toString()).toBe(`snd.room=${room}`);
+    }
     const none = new URLSearchParams();
     writeSoundOptions(DEFAULT_SOUND, none);
     expect(none.toString()).toBe('');
@@ -23,6 +31,7 @@ describe('sound options', () => {
     expect(() => parseSoundOptions(new URLSearchParams('snd.volume=99'))).toThrow(/snd.volume/);
     expect(() => parseSoundOptions(new URLSearchParams('snd.damping='))).toThrow(/snd.damping/);
     expect(() => parseSoundOptions(new URLSearchParams('snd.voices=2.5'))).toThrow(/whole/);
+    expect(() => parseSoundOptions(new URLSearchParams('snd.room=cave'))).toThrow(/snd.room must be auto or one of off, outdoor, hall: cave/);
     for (const [k, r] of Object.entries(SOUND_KNOBS)) expect(r.def >= r.min && r.def <= r.max, k).toBe(true);
   });
 
