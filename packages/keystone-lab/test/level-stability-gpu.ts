@@ -13,15 +13,31 @@ import { REST_BOUND_M } from '../src/index.ts';
 
 const MINUTES = 60_000;
 export const channel = process.env.TB_CHANNEL;
-/** Every level runs: on a real GPU, or on SwiftShader when asked. */
+/** Every level runs: on a real GPU, or on SwiftShader when asked (up to SWIFT_SLOW_MAX bodies there). */
 export const ALL = Boolean(channel) || process.env.PHYSICS_GPU_SLOW === '1';
+/**
+ * The most bodies a level the GPU solver's slow tests load on SwiftShader (the nightly, PHYSICS_GPU_SLOW=1). There
+ * B2 (5,184) rested 25 min and B3 (10,000) passed 30 min with no result, losing the page for every level after it
+ * (nightly run 42394058839); B1 (1,000) took 313 s. Bigger levels run on a real GPU: the Mac run, TB_CHANNEL=chrome
+ * (docs/ci/nightly.md).
+ */
+export const SWIFT_SLOW_MAX = 2000;
+/** The most bodies a level loaded here may have: every level on a real GPU. */
+export const LOAD_MAX = channel ? Infinity : SWIFT_SLOW_MAX;
 export const STEPS = 300, CI_STEPS = 100;
 export const LEVELS_ALL = SERIES.flat().map((def) => ({ def, c: compileLevel(def) }));
+/** Every level is dealt over PARTS files (largest first, in turn), so no file holds the whole sweep on one worker. */
+export const PARTS = 3;
 
-/** The suite on the levels named, or on every level when `ids` is null. */
-export function gpuStabilitySuite(ids: readonly string[] | null, extra?: () => void): void {
+/** Part `part` (1..PARTS) of every level up to LOAD_MAX bodies, largest first, in turn. */
+export function levelsPart(part: number): typeof LEVELS_ALL {
+  return LEVELS_ALL.filter((l) => l.c.meta.n <= LOAD_MAX).sort((a, b) => b.c.meta.n - a.c.meta.n || (a.def.id < b.def.id ? -1 : 1)).filter((_, i) => i % PARTS === part - 1);
+}
+
+/** The suite on the levels named, or on part `part` of every level when `ids` is null. */
+export function gpuStabilitySuite(ids: readonly string[] | null, extra?: () => void, part = 1): void {
   const steps = ALL ? STEPS : CI_STEPS;
-  const levels: Array<{ def: LevelDef; c: ReturnType<typeof compileLevel> }> = ids ? LEVELS_ALL.filter((l) => ids.includes(l.def.id)) : LEVELS_ALL;
+  const levels: Array<{ def: LevelDef; c: ReturnType<typeof compileLevel> }> = ids ? LEVELS_ALL.filter((l) => ids.includes(l.def.id)) : levelsPart(part);
   if (ids && levels.length !== ids.length) throw new Error(`unknown level among ${ids.join(', ')}`);
   let player: BrowserCastPlayer | null = null;
   beforeAll(async () => {
