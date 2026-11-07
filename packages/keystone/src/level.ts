@@ -4,7 +4,7 @@
 // hash pins the exact scene a recorded solution was made against.
 import { type BodyDesc, massOf, quantiseVec3, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { DEFAULT_GAP, DEFAULT_UNIT, encodeTag, GRAVITY, MATERIALS, materialId, type MaterialName, type Role, ROLES } from './materials.ts';
-import { checkRunWindow, peOf_mJ, SETTLE_RULES, type SettleRule } from './rules.ts';
+import { checkEnd, checkRunWindow, type LevelEnd, peOf_mJ, SETTLE_RULES, type SettleRule } from './rules.ts';
 import { type Arm, armLoad, chargeIssues, levelArm, rackArms } from './arsenal.ts';
 import { loadIssues, loadTier } from '@tb/weapons';
 import { chargeWeaponOf, isLaunchItem, isRackItem, itemRef, type LevelWeapon, PLUNGER, QUAKE, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY, weaponOf } from './rack.ts';
@@ -223,6 +223,13 @@ export interface LevelDef {
    * otherwise. Absent: the rule's cap. Part of the hash when given.
    */
   runWindow?: number;
+  /**
+   * The level's own end condition (agent playtest PT32, rules.ts LevelEnd): `{ on: 'rung', after }` settles a shot
+   * `after` seconds after every bell of its bell objective has rung (Rube Lab: 1.5 s), however much is still rolling.
+   * It is part of the settle rule (settleUpdate's `done`): never before SETTLE_MIN, restarted by a flight or a hold,
+   * and the cap still ends a run that never rings. Absent: the settle rule alone. Part of the hash when given.
+   */
+  end?: LevelEnd;
   /**
    * Bullet Time (C2, docs/game/undercut-bullet-time.md): the most shots that may go in while another
    * runs, each cutting it (rapid fire, Session.fire); 0 allows none. Absent: no limit. The game lets
@@ -474,6 +481,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   if (def.physics) checkPhysics(def.physics);
   if (def.settle !== undefined) checkSettle(def.settle);
   if (def.runWindow !== undefined) checkRunWindow(def.runWindow);
+  if (def.end !== undefined) checkEnd(def.end, def.objective.kind);
   if (def.quake !== undefined) checkQuakeRules(def.quake);
   if (def.heritage !== undefined && def.heritage !== 'pose' && def.heritage !== 'standing') throw new Error(`heritage must be pose or standing: ${String(def.heritage)}`);
   const h = unitOf(def), p = pitchOf(def) * h;

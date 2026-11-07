@@ -16,7 +16,10 @@ export interface RubeResult {
   /** Bells rung at the end, of `bells`. */
   rung: number;
   bells: number;
-  /** Steps from the plunger to the step every bell had rung (-1: never), and to the session's end. */
+  /**
+   * Steps from the plunger to the step every bell had rung (-1: never), and to the session's end: both
+   * observed steps (Driver.snapshotStep), so a pipelined driver's one step in flight past the end is not counted.
+   */
   rungAt: number;
   steps: number;
   /**
@@ -41,7 +44,7 @@ export async function rubePlay(engine: PhysicsEngine, c: CompiledLevel, opts: Dr
   });
   return {
     cleared: r.session.phase === 'cleared', rung: r.session.crownLive.reduce((a, x) => a + x, 0), bells: c.meta.crowns.length,
-    rungAt, steps: r.steps - start, ...pins(pinnedWorst(c, r.snapshot, engine.info.backend.startsWith('webgpu'))), hash: snapshotHash(r.snapshot),
+    rungAt, steps: d.snapshotStep - start, ...pins(pinnedWorst(c, r.snapshot, engine.info.backend.startsWith('webgpu'))), hash: snapshotHash(r.snapshot),
   };
 }
 

@@ -107,6 +107,8 @@ export class Session {
   readonly settleRule: SettleRule;
   /** A wave level's run window in steps (LevelDef.runWindow, rules.ts runWindowSteps); undefined: the rule's cap. */
   readonly runWindow: number | undefined;
+  /** The level's end condition's wait in steps (LevelDef.end, rules.ts LevelEnd); undefined: none. */
+  readonly endSteps: number | undefined;
   /** Collapse fraction D now, for the HUD (while a shot runs), and whether the objective was met at the last settle. */
   liveCollapse = 0;
   objectiveDone = false;
@@ -140,6 +142,7 @@ export class Session {
     this.scoring = scoringOf(level.def);
     this.settleRule = settleOf(level.def);
     this.runWindow = level.def.runWindow === undefined ? undefined : runWindowSteps(level.def.runWindow, level.scene.dt);
+    this.endSteps = level.def.end === undefined ? undefined : Math.round(level.def.end.after / level.scene.dt);
     this.rackLeft = [...level.def.rack];
     this.crownDown = new Uint8Array(level.meta.crowns.length);
     this.crownLive = new Uint8Array(level.meta.crowns.length);
@@ -379,7 +382,9 @@ export class Session {
     const total = o.red.impacts.reduce((a, x) => a + x, 0);
     if (total) out.push({ t: 'impacts', step, hist: o.red.impacts, total });
 
-    const s = settleUpdate(L.settle, o.red, L.spawnStep, this.settleRule, m.n, this.liveCollapse, settleHeld(this.settleRule, L.inFlight, hold), this.runWindow);
+    // The level's end condition (LevelDef.end): every bell rung, and nothing still to go off.
+    const done = this.endSteps === undefined ? undefined : { met: !hold && nc > 0 && this.crownLive.every(Boolean), steps: this.endSteps };
+    const s = settleUpdate(L.settle, o.red, L.spawnStep, this.settleRule, m.n, this.liveCollapse, settleHeld(this.settleRule, L.inFlight, hold), this.runWindow, done);
     L.settle = s.state;
     if (!s.settled || (hold && o.step - L.spawnStep < settleCap(this.settleRule, this.runWindow))) return out;
 
