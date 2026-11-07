@@ -112,6 +112,7 @@ export function objectiveShort(o: Objective): string {
     case 'collapse': return pct(o.min);
     case 'hold': return 'crown up';
     case 'quake': return 'condemned down';
+    case 'bell': return 'ring the bell';
   }
 }
 

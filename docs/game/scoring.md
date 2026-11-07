@@ -86,3 +86,13 @@ tally (the harness had read "1 star, 4,370, 28% DOWN" off a duel).
 On a level with a freeze budget (`LevelDef.freeze`), par for a round is `par + freezesUsed` (one per
 cut shot): a frozen cut-in that clears keeps par, and the card says "freezes used 1/2"
 (`LevelScore.freezes`). Levels without a budget are unchanged: a rapid-fire cut is a stroke.
+
+## Rube Lab parts par (M10)
+
+A Rube Lab level (`LevelDef.rube`, docs/game/rube-lab.md) has one plunger and no strokes to count, so
+`levelScore` takes the build's cost (`placedCost`, passed by the session) and scores the parts instead:
+stars are `rubeStars(cleared, spent, partsPar)` (3 at or under the parts par, 2 within `ceil(1.5 par)`,
+1 for any clear) less one for any heritage broken (never under one, `heritageStarsLost` as on par
+levels); the stamp is PARTS PAR or +N PARTS; there is no gold; the card's sub line reads
+"parts N / par P" in place of strokes (`LevelScore.parts`). The parts par is in the level hash, so
+retuning it starts a new progress record instead of keeping stars earned under the old par.

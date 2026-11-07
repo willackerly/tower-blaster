@@ -126,6 +126,8 @@ export const touchActs = (strokes: number) => {
 
 /** The pre-aimed opener's button (key F), shown before the first shot of a level that has one. */
 export const OPENER_BUTTON = '<button data-act="opener" class="opener"><kbd>F</kbd> Fire the first shot</button>';
+/** Rube Lab's opener (docs/game/rube-lab.md): the plunger that opens the trapdoor, the only shot such a level has. */
+export const GO_BUTTON = '<button data-act="opener" class="opener go"><kbd>F</kbd> Go: release the ball</button>';
 
 /** Power changes by this (percent) per key press (Q, E) or tap of a power button. */
 export const POWER_STEP = 10;
@@ -148,6 +150,7 @@ export function objectiveText(o: Objective): string {
     case 'collapse': return `bring ${pct(o.min)} down`;
     case 'hold': return 'keep the crown up';
     case 'quake': return 'fell the condemned, spare the heritage';
+    case 'bell': return 'ring the bell';
   }
 }
 
@@ -173,7 +176,7 @@ export const CUSTOM_NOTE = 'custom: stars not recorded';
 export const BANK_BUTTON = '<button data-act="bank" class="bank"><kbd>B</kbd> Bank</button>';
 
 /** What the HUD's action slot offers now: one button, always in the same place (docs/game/phone-hud.md). */
-export type SlotAction = 'freeze' | 'resume' | 'skip' | 'skipping' | 'opener' | 'bank' | null;
+export type SlotAction = 'freeze' | 'resume' | 'skip' | 'skipping' | 'opener' | 'go' | 'bank' | null;
 
 /**
  * The action slot's button, by priority: Resume while frozen, Freeze while a running shot can be, Skip
@@ -188,7 +191,7 @@ export function slotAction(s: Pick<HudState, 'level' | 'opener' | 'canBank' | 'f
   if (s.freezes?.can) return 'freeze';
   if (s.canSkip) return 'skip';
   if (s.skipping) return 'skipping';
-  if (s.opener) return 'opener';
+  if (s.opener) return s.level.rube ? 'go' : 'opener';
   if (s.canBank && scoringOf(s.level) === 'outcome') return 'bank';
   return null;
 }
@@ -200,6 +203,7 @@ const SLOT_NOTE: Record<Exclude<SlotAction, null>, string> = {
   skip: 'to the settle',
   skipping: '',
   opener: '<span class="kg-desk">or aim and click</span><span class="kg-tch">or drag and lift</span>',
+  go: 'the contraption runs from here',
   bank: 'end here, keep the rack',
 };
 
@@ -224,6 +228,7 @@ export function slotHtml(act: SlotAction, s: Pick<HudState, 'canSkip'>): string 
     case 'skip': return SKIP_BUTTON;
     case 'skipping': return SKIPPING;
     case 'opener': return OPENER_BUTTON;
+    case 'go': return GO_BUTTON;
     case 'bank': return BANK_BUTTON;
     default: return '';
   }
@@ -361,7 +366,8 @@ export function tallyHtml(level: LevelDef, score: LevelScore | null, over: strin
  */
 export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: number, forward: boolean | CardForward, canSave = false, extra = '', canUndo = false): string {
   const outcome = scoringOf(level) === 'outcome';
-  const shotsText = `${strokes} ${outcome ? 'shot' : 'stroke'}${strokes === 1 ? '' : 's'}${outcome ? '' : ` · par ${level.par}`}`;
+  // A Rube Lab level's one plunger is no stroke to count: its line is the parts used against the parts par.
+  const shotsText = score?.parts ? `parts ${score.parts.used} / par ${score.parts.par}` : `${strokes} ${outcome ? 'shot' : 'stroke'}${strokes === 1 ? '' : 's'}${outcome ? '' : ` · par ${level.par}`}`;
   const actions = cardActions(score, strokes, forward, canSave, canUndo);
   if (!score) {
     return `<div class="c1">
