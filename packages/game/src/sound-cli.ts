@@ -60,8 +60,8 @@ export function render(id: string, frames: AudioFrame[], db?: number, set: Sound
 }
 
 function load(path: string): { frames: AudioFrame[]; slots: number[] } {
-  const j = JSON.parse(readFileSync(path, 'utf8')) as { slots: number[]; frames: { dt: number; materials: number; sectors: number; counts: number[]; a2: number[]; top: number[] }[] };
-  return { slots: j.slots, frames: j.frames.map((f) => ({ ...f, counts: Float32Array.from(f.counts), a2: Float32Array.from(f.a2), top: Float32Array.from(f.top) })) };
+  const j = JSON.parse(readFileSync(path, 'utf8')) as { slots: number[]; frames: { dt: number; materials: number; sectors: number; counts: number[]; a2: number[]; top: number[]; space?: number[] }[] };
+  return { slots: j.slots, frames: j.frames.map((f) => ({ ...f, counts: Float32Array.from(f.counts), a2: Float32Array.from(f.a2), top: Float32Array.from(f.top), space: f.space ? Float32Array.from(f.space) : undefined })) };
 }
 
 function wav(path: string, L: Float32Array, R: Float32Array) {
@@ -78,7 +78,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const rows = [];
   for (const id of ids) {
     const { frames, slots } = kv.from ? load(`${kv.from}/${id}.json`) : await capture(id, undefined, kv.shots === undefined ? undefined : readShots(kv.shots));
-    if (kv.frames) writeFileSync(`${kv.frames}/${id}.json`, JSON.stringify({ slots, frames: frames.map((f) => ({ ...f, counts: [...f.counts], a2: [...f.a2], top: [...f.top] })) }));
+    if (kv.frames) writeFileSync(`${kv.frames}/${id}.json`, JSON.stringify({ slots, frames: frames.map((f) => ({ ...f, counts: [...f.counts], a2: [...f.a2], top: [...f.top], space: f.space ? [...f.space] : undefined })) }));
     const v0 = render(id, frames, kv.db === undefined ? undefined : Number(kv.db), set);
     let peak = 0;
     for (let i = 0; i < v0.L.length; i++) peak = Math.max(peak, Math.abs(v0.L[i]!), Math.abs(v0.R[i]!));

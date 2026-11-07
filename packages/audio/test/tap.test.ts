@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildFrame, DV_EDGES, FrameTap, type TapParams, TOP_FIELDS } from '@tb/audio';
+import { buildFrame, DV_EDGES, FrameTap, SPACE_FIELDS, type TapParams, TOP_FIELDS } from '@tb/audio';
 import { rng } from '@tb/scenarios';
 
 const P = (over: Partial<TapParams> = {}): TapParams => ({ metres: 0.25, camera: { pos: [1, 2, 30], right: [0.6, 0, -0.8] }, dvMin: 0.25, dt: 1 / 60, top: 8, ...over });
@@ -24,6 +24,15 @@ describe('FrameTap (the incremental audio tap)', () => {
       for (let c = 0; c < want.a2.length; c++) expect(got.a2[c]).toBeCloseTo(want.a2[c]!, 4);
       expect(got.top.length).toBe(want.top.length);
       for (let j = 0; j < want.top.length; j++) expect(got.top[j]).toBeCloseTo(want.top[j]!, 5);
+      // A8a: per sector, sum w, sum w pan, sum w dist (w = A^2); the sector's sum w is its cells' a2.
+      expect(got.space!.length).toBe(SPACE_FIELDS * 4);
+      for (let c = 0; c < want.space!.length; c++) expect(got.space![c]).toBeCloseTo(want.space![c]!, 3);
+      for (let s = 0; s < 4; s++) {
+        let a = 0; for (let c = s; c < want.a2.length; c += 4) a += want.a2[c]!;
+        expect(want.space![SPACE_FIELDS * s]).toBeCloseTo(a, 3);
+        const w = want.space![SPACE_FIELDS * s]!;
+        if (w > 0) { const pan = want.space![SPACE_FIELDS * s + 1]! / w; expect(pan).toBeGreaterThanOrEqual(-1 + s / 2 - 1e-6); expect(pan).toBeLessThanOrEqual(-1 + (s + 1) / 2 + 1e-6); }
+      }
       expect(want.counts.reduce((a, b) => a + b, 0)).toBeGreaterThan(100);
     }
   });

@@ -2,27 +2,30 @@
 // sound-cli.ts frames=dir): wall time CollapseEngine takes to push and render it, as a share of
 // one core in real time (best of `reps`), with grit on and off. V8 runs the AudioWorklet the same
 // way, so on a physical machine this is the synth's real cost; on a VM or CI it is a sanity check.
-// usage: tsx packages/audio/src/cost-cli.ts frames.json [mat=stone edge=1 reps=5 set=real|classic]
+// usage: tsx packages/audio/src/cost-cli.ts frames.json [mat=stone edge=1 reps=5 set=real|classic room=off|outdoor|hall space=0|1]
 import { readFileSync } from 'node:fs';
 import { BLOCK, CollapseEngine } from './engine.ts';
 import type { AudioFrame } from './frame.ts';
 import { SOUND_SETS, type SoundMaterial, soundMaterials, type SoundSet } from './material.ts';
+import type { Room } from './room.ts';
 
 const [file, ...kv] = process.argv.slice(2);
-const o: Record<string, string> = { mat: 'stone', edge: '1', reps: '5', set: 'real' };
+const o: Record<string, string> = { mat: 'stone', edge: '1', reps: '5', set: 'real', room: 'off', space: '0' };
 for (const a of kv) { const [k, v] = a.split('='); if (!(k! in o)) throw new Error(`unknown option ${k}`); o[k!] = v!; }
-type Raw = { dt: number; materials?: number; sectors?: number; counts: number[]; a2: number[]; top: number[] };
+type Raw = { dt: number; materials?: number; sectors?: number; counts: number[]; a2: number[]; top: number[]; space?: number[] };
 const json = JSON.parse(readFileSync(file!, 'utf8')) as { frames: Raw[] };
 if (!(SOUND_SETS as readonly string[]).includes(o.set ?? '')) throw new Error(`set must be one of ${SOUND_SETS.join(', ')}: ${o.set}`);
 const SR = 48000, base = (soundMaterials(o.set as SoundSet) as Record<string, SoundMaterial>)[o.mat!];
 if (!base) throw new Error(`unknown material ${o.mat}`);
-const frames: AudioFrame[] = json.frames.map((f) => ({ dt: f.dt, materials: f.materials ?? 1, sectors: f.sectors ?? 4, counts: Float32Array.from(f.counts), a2: Float32Array.from(f.a2), top: Float32Array.from(f.top) }));
+const frames: AudioFrame[] = json.frames.map((f) => ({ dt: f.dt, materials: f.materials ?? 1, sectors: f.sectors ?? 4, counts: Float32Array.from(f.counts), a2: Float32Array.from(f.a2), top: Float32Array.from(f.top), space: f.space ? Float32Array.from(f.space) : undefined }));
 const seconds = frames.reduce((s, f) => s + f.dt, 0), slots = frames[0]?.materials ?? 1;
 let impacts = 0;
 for (const f of frames) for (const c of f.counts) impacts += c;
 
 function run(m: SoundMaterial): { ms: number; grains: number } {
   const e = new CollapseEngine({ sampleRate: SR, seed: 1 });
+  e.setRoom(o.room as Room);
+  e.setSpace(o.space === '1');
   for (let i = 0; i < slots; i++) e.setMaterial(i, m, +o.edge!); // a game capture: every slot the one material
   const l = new Float32Array(BLOCK), r = new Float32Array(BLOCK);
   let due = 0;
@@ -31,7 +34,7 @@ function run(m: SoundMaterial): { ms: number; grains: number } {
   return { ms: performance.now() - t0, grains: e.grains };
 }
 
-console.log(`${file}: ${seconds.toFixed(1)} s, ${impacts} impacts, ${slots} slot(s), ${o.mat} (${o.set}) at ${o.edge} m`);
+console.log(`${file}: ${seconds.toFixed(1)} s, ${impacts} impacts, ${slots} slot(s), ${o.mat} (${o.set}) at ${o.edge} m, room ${o.room}, space ${o.space}`);
 for (const [name, m] of [['grit on', base], ['grit off', { ...base, gritDb: -Infinity }]] as const) {
   let best = Infinity, grains = 0;
   for (let i = 0; i < +o.reps!; i++) { const x = run(m); best = Math.min(best, x.ms); grains = x.grains; }

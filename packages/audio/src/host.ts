@@ -14,7 +14,9 @@ export type SoundMessage =
   /** Master gain (linear, before the limiter), mute, and the low cut (Hz, 0 off; absent: unchanged). */
   | { type: 'gain'; gain: number; muted?: boolean; lowcut?: number }
   /** The room (room.ts): off, outdoor or hall; size scales the hall's (and the outdoor surroundings') distances. */
-  | { type: 'room'; room: Room; size?: number };
+  | { type: 'room'; room: Room; size?: number }
+  /** Space (A8a, engine.setSpace): sectors at their impacts' pan, the room's send by distance. */
+  | { type: 'space'; on: boolean };
 
 export interface HostStats {
   type: 'stats';
@@ -69,6 +71,9 @@ export class CollapseHost {
           if (!(m.lowcut >= 0 && Number.isFinite(m.lowcut))) throw new Error(`lowcut must be a finite number >= 0: ${m.lowcut}`);
           this.engine.lowcut = m.lowcut;
         }
+        break;
+      case 'space':
+        this.engine.setSpace(m.on);
         break;
       case 'room':
         this.engine.setRoom(m.room, m.size ?? 1);
