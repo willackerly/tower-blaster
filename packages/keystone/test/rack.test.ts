@@ -131,8 +131,9 @@ describe('a defaulted weapon is part of the level hash', () => {
     expect(compileLevel({ ...L1, rack: ['w-cluster', 'w-firework'] }).hash).toBe(compileLevel({ ...L1, rack: ['w-cluster', 'w-firework'], weapons: { cluster: CLUSTER, firework: FIREWORK } }).hash);
   });
   it('levels whose racks default no weapon hash as before (main 984ae51): the shipped ones, B1 and B2 with their cast stars', () => {
+    // B1-B3 moved once since, when they left settle v3 for the v4 default (PT6b; 18cf21360845bb8b, c75fbd9832e6814b, f11e947a868b602f before).
     expect([...LEVELS, ...BIG_LEVELS].map((d) => `${d.id}:${compileLevel(d).hash}`).join(' ')).toBe(
-      'L1:8bf18a8ee7c8b871 L2:e7376366e5ca1e8f L3:a0e04f152baeb2aa L4:3360c5054e55a940 L5:22b48f7125bd6c78 B1:18cf21360845bb8b B2:c75fbd9832e6814b B3:f11e947a868b602f',
+      'L1:8bf18a8ee7c8b871 L2:e7376366e5ca1e8f L3:a0e04f152baeb2aa L4:3360c5054e55a940 L5:22b48f7125bd6c78 B1:ce1bbacba32d8d0a B2:9c0452d7c2807f44 B3:94b0c601c03f6154',
     );
   });
 });
