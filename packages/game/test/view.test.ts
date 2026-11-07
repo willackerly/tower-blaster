@@ -2,11 +2,12 @@
 // and insets, and the search opens every level with crowns or heritage on a view that shows them (the CPU ID
 // raster's measure; sightlines-gpu.test.ts checks the same on the renderer's own ID pass under the real HUD).
 import { describe, expect, it } from 'vitest';
-import { B2, compileLevel, L5, LEVELS, SERIES } from '@tb/keystone';
+import { B2, compileLevel, L1, L5, LEVELS, levelById, SERIES } from '@tb/keystone';
+import { panelTimeline } from '../src/fuse-timeline.ts';
 import { DEFAULT_FRAMING, viewProj } from '@tb/render/camera';
 import { transform } from '@tb/render/math';
 import {
-  baseYaw, CROWNS_SEEN, defaultInsets, fitBox, HERITAGE_SEEN, type Insets, NO_INSETS, openingDirection, PORTRAIT_HUD_SHARE,
+  baseYaw, CROWNS_SEEN, defaultInsets, fitBox, FUSE_PANEL_SHARE, HERITAGE_SEEN, type Insets, joinInsets, NO_INSETS, openingDirection, openingInsets, PORTRAIT_HUD_SHARE,
   scoreView, searchViews, showsObjectives, structureBox, TOP_MARGIN, viewOf,
 } from '../src/view.ts';
 
@@ -53,7 +54,9 @@ describe('the opening view shows the objectives (PT1)', () => {
   it.each(levels.map((d) => [d.id, d] as const))('%s: at the wide and upright shapes', (_, def) => {
     const c = compileLevel(def);
     for (const a of [WIDE, PHONE]) {
-      const dir = openingDirection(c, a), s = scoreView(c, dir, a, defaultInsets(a));
+      // The insets the game frames with: the defaults, and upright the fuse panel's band on a level with charges.
+      const ins = joinInsets(defaultInsets(a), openingInsets(a, panelTimeline(c) !== null));
+      const dir = openingDirection(c, a, ins), s = scoreView(c, dir, a, ins);
       expect(showsObjectives(s), `${def.id} at ${a.toFixed(2)}: ${JSON.stringify(s)}`).toBe(true);
       expect(s.crownsSeen).toBeGreaterThanOrEqual(Math.ceil(CROWNS_SEEN * s.crowns - 1e-9));
       if (s.heritage) expect(s.heritageSeen).toBeGreaterThanOrEqual(Math.max(1, Math.ceil(HERITAGE_SEEN * s.heritage - 1e-9)));
@@ -91,6 +94,16 @@ describe('the opening view shows the objectives (PT1)', () => {
     const order = a.scored.map((s) => s.dir.pitch);
     expect([...order].sort((x, y) => x - y)).toEqual(order);
     expect(a.scored[0]!.dir).toEqual({ yaw: baseYaw(c), pitch: 12 });
+  });
+});
+
+describe('openingInsets', () => {
+  it('adds the fuse panel\'s band upright on a level with charges (F1), nothing wide or without charges (L1)', () => {
+    expect(openingInsets(PHONE, true)).toEqual({ bottom: FUSE_PANEL_SHARE });
+    expect(openingInsets(WIDE, true)).toBeUndefined();
+    expect(openingInsets(PHONE, false)).toBeUndefined();
+    expect(panelTimeline(compileLevel(levelById('F1')))).not.toBeNull();
+    expect(panelTimeline(compileLevel(L1))).toBeNull();
   });
 });
 

@@ -16,7 +16,7 @@ import { type Aimed, arcContact, azFromYaw, type Contact, launchHeight, launchSt
 import { Synth, type Voice, voicesFor } from './audio.ts';
 import { CollapseSound, type CollapseStatus } from './collapse-sound.ts';
 import { type GameSoundMode, soundSetOf } from './sound-map.ts';
-import { viewOf } from './view.ts';
+import { openingInsets, viewOf } from './view.ts';
 import { outlineAreas, pixelCounts, type ScreenRect } from './sightlines.ts';
 import { ViewSun } from './light.ts';
 export { viewOf } from './view.ts';
@@ -34,7 +34,7 @@ import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
 import { canvasSize, type QualityState } from './quality.ts';
 import { UndoMarks } from './undo-marks.ts';
 import { FusePanel } from './fuse-panel.ts';
-import { lotBeads, timelineOverlay } from './fuse-timeline.ts';
+import { lotBeads, panelTimeline, timelineOverlay } from './fuse-timeline.ts';
 import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, firedKind, PULL_HOVER, ramFx, regrowDuration, regrowScales, roleTint, rolePaint, SPENT_FADE, spentFx, structureCoats, duelCoats, duelTint, duelTints, structureMarks, structureTints, tintOf, tintWordOf, xrayOn } from './scene.ts';
 import { easeGrade, FROZEN_LABEL, freezeFxOf } from './frozen-look.ts';
 import { ghostOutline, PULL_SLIDE_STEPS, type PullAnim, pullAnimFor, withPulled } from './pull-anim.ts';
@@ -1055,7 +1055,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     spare = s;
     handle.spare = { level: def.id, settled: false };
     // The next level's opening view is searched now too (view.ts remembers it), not at the swap (B2's takes ~0.2 s).
-    void s.built.then((x) => { if (spare === s && x) { handle.spare = { level: def.id, settled: true }; if (!duel) viewOf(x.c, viewAspect(), undefined, undefined, undefined, { mode: feel.view }); } });
+    void s.built.then((x) => { if (spare === s && x) { handle.spare = { level: def.id, settled: true }; if (!duel) viewOf(x.c, viewAspect(), undefined, undefined, undefined, { mode: feel.view, insets: openingInsets(viewAspect(), panelTimeline(x.c) !== null) }); } });
     handle.counts.prefetch = (handle.counts.prefetch ?? 0) + 1;
   }
   /**
@@ -1212,7 +1212,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     opener = env.opener?.(c) ?? (c.def.rube ? RUBE_GO : null);
     if (!retry) {
       // A duel's sides are what its view is about (duel-view.ts): it opens on the classic view, the turn view (when on) then swings to the side to fire.
-      orbit = viewOf(c, viewAspect(), undefined, undefined, undefined, { mode: duel ? 'classic' : feel.view });
+      orbit = viewOf(c, viewAspect(), undefined, undefined, undefined, { mode: duel ? 'classic' : feel.view, insets: openingInsets(viewAspect(), panelTimeline(c) !== null) });
       setPower(100);
       // The play area: the lot (where debris counts), grown a little, up to the structure's top.
       const half: Vec3 = [(c.lot.max[0] - c.lot.min[0]) / 2 + 2, c.height / 2 + 2, (c.lot.max[1] - c.lot.min[1]) / 2 + 2];

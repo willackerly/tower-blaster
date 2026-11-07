@@ -61,6 +61,10 @@ The B2 search takes about 0.2 s on this cloud box. The chamber levels take a few
   direction (par line's side, 12 degrees) and uses the new fit.
 - A duel's turn view (`duel-view.ts`, owned by the Siege Table thread) frames exactly as before (`faceView`, with its
   `focus` and `only`).
+- A level with charges (Fuse & Fold) shows its fuse panel at the bottom of an upright phone, up to
+  `FUSE_PANEL_SHARE` (45%) of the height. `openingInsets` adds that band to the defaults, so the lot opens above
+  the panel; the panel's CSS reads the same constant. Without it, F1's 14 heritage blocks sat under the panel
+  (0/14 in the GPU gate). A wide screen frames as before, since the panel sits to the right of the square's view.
 - The gate opens each level with `keystone.build=0`, so a workshop (T-W1) is checked on the view its shots are aimed
   from, and masks a docked phone HUD by its strip, tray and hints rather than the full-screen container.
   `DUEL_PITCH` was chosen at that distance: the tighter fit stands closer, and perspective then lifts your own keep

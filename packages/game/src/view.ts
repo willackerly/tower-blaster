@@ -10,6 +10,17 @@ import { idRaster, pixelCounts, type ScreenRect, seen } from './sightlines.ts';
 
 /** The share of an upright phone's screen height the HUD takes at the top (the compact touch HUD with its opener and lot sheet line: about 300 of 844 px, plus a margin). */
 export const PORTRAIT_HUD_SHARE = 0.4;
+/**
+ * The share of an upright phone's height the fuse panel may take at the bottom (fuse-panel.ts: max-height, a level with
+ * charges, Fuse & Fold): such a level's opening view keeps clear of it (openingInsets), or the panel hides the lot.
+ */
+export const FUSE_PANEL_SHARE = 0.45;
+
+/** The insets a level's own panels add to defaultInsets: upright, the fuse panel's band when the level shows it. */
+export function openingInsets(aspect: number, fusePanel: boolean): Partial<Insets> | undefined {
+  return aspect < 1 && fusePanel ? { bottom: FUSE_PANEL_SHARE } : undefined;
+}
+
 /** Free sky kept over the structure on a wide screen, a share of the height (PT14: T-S1's top ran to the screen's edge). */
 export const TOP_MARGIN = 0.1;
 
