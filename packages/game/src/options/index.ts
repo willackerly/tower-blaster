@@ -21,6 +21,7 @@ import { launch } from './launch.ts';
 import { layout } from './layout.ts';
 import { look } from './look.ts';
 import { marks } from './marks.ts';
+import { modeUi } from './modeui.ts';
 import { view } from './openview.ts';
 import { pullAnim } from './pullanim.ts';
 import { quality } from './quality.ts';
@@ -70,6 +71,7 @@ export const OPTIONS = [
   sleepTint,
   pullAnim,
   frozenLook,
+  modeUi,
   chorusViewOption,
   frozenAim,
 ] as const;

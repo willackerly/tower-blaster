@@ -194,7 +194,8 @@ describe('siege table on the page', () => {
   it("a duel's hint line and key list offer no undo or restart", () => {
     for (const t of [DUEL_HELP, DUEL_KEYS, helpHtml(false, true), helpHtml(true, true)]) expect(t).not.toMatch(/undo|restart|<kbd>U<\/kbd>/i);
     expect(DUEL_KEYS).toMatch(/<kbd>R<\/kbd> rematch/);
-    expect(helpHtml(false)).toContain(GAME_HELP.slice(0, 20));
+    // As text: the fire words sit in a span of their own that modes with no shot hide (PT23).
+    expect(helpHtml(false).replace(/<\/?span[^>]*>/g, '')).toContain(GAME_HELP.slice(0, 20));
     expect(helpHtml(false)).toMatch(/undo/);
   });
 });

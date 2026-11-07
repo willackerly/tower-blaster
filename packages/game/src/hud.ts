@@ -3,6 +3,7 @@
 // but everything still goes through esc().
 import { castStars, chorusOf, type CompiledLevel, DEFAULT_GOLD, isTrial, itemRef, type LevelDef, type LevelScore, levelTier, type Objective, type RackItem, scoringOf, TIER_NAMES, TRIAL_LEVELS } from '@tb/keystone';
 import { PROJECTILE_PRESETS } from '@tb/weapons';
+import { type CardFacts, cardModel, type HudProfile } from './mode-ui.ts';
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
@@ -117,6 +118,11 @@ export interface HudState {
   quake?: string;
   /** Bullet Time levels (LevelDef.freeze): freezes left of the level's, whether the shot is frozen now, and whether it can be. */
   freezes?: { left: number; total: number; frozen: boolean; can: boolean };
+  /**
+   * The level's mode's HUD (mode-ui.ts hudProfile, PT23): which rows it shows and its one start verb. Absent: the
+   * projectile HUD for every level (keystone.modeui=0), where the selected rack item decides the aim rows.
+   */
+  profile?: HudProfile;
 }
 
 /** Bullet Time: the Freeze button (key T), shown while a running shot can be frozen, and Resume while it is. */
@@ -151,6 +157,8 @@ export function meterHtml(value: number, ticks: readonly MeterTick[], label: str
 
 /** The help line on a touch screen (body.kg-touch): the gestures of touch.ts; the HUD's Undo and Restart buttons do what U and R do. */
 export const TOUCH_HELP = 'drag: aim · lift: fire · two fingers: turn · pinch: zoom · add a finger mid-aim: cancel';
+/** The touch help in a mode that fires nothing from the scene (HudProfile.fire false): its panel starts the round. */
+export const TOUCH_LOOK = 'two fingers: turn · pinch: zoom · the panel starts the round';
 
 /**
  * Undo and Restart as icons for a touch screen, which has no U or R key (kg-tch: shown only there). Always in
@@ -165,6 +173,8 @@ export const touchActs = (strokes: number) => {
 export const OPENER_BUTTON = '<button data-act="opener" class="opener"><kbd>F</kbd> Fire the first shot</button>';
 /** Rube Lab's opener (docs/game/rube-lab.md): the plunger that opens the trapdoor, the only shot such a level has. */
 export const GO_BUTTON = '<button data-act="opener" class="opener go"><kbd>F</kbd> Go: release the ball</button>';
+/** The same, under the mode's HUD (PT23): Run, the one start verb the Build panel's button also has. */
+export const RUN_BUTTON = '<button data-act="opener" class="opener go"><kbd>F</kbd> Run: release the ball</button>';
 /** Mason's Trial's opener (docs/game/masons-trial.md): the level's test, run on the build as it stands. */
 export const TEST_BUTTON = '<button data-act="opener" class="opener go"><kbd>F</kbd> Test the build</button>';
 
@@ -189,9 +199,15 @@ const POWER_STEP_BUTTON = (d: number) => `<button class="pw kg-tch" data-act="po
 const LAUNCH_STEP_BUTTON = (d: number) => `<button class="pw kg-tch" data-act="launch" data-arg="${d}" aria-label="${d < 0 ? 'Lower' : 'Raise'} the launcher">${d < 0 ? '−' : '+'}</button>`;
 
 /** The Height row: the launcher's height in metres, with lower and raise buttons on a touch screen (keys S and W). */
-export const launchRow = (m: number) => `<div class="row"><span>Height <kbd>W</kbd><kbd>S</kbd></span><span class="power">${LAUNCH_STEP_BUTTON(-1)}<b class="launch">${m.toFixed(1)} m</b>${LAUNCH_STEP_BUTTON(1)}</span></div>`;
+export const launchRow = (m: number, cls = '') => `<div class="row${cls}"><span>Height <kbd>W</kbd><kbd>S</kbd></span><span class="power">${LAUNCH_STEP_BUTTON(-1)}<b class="launch">${m.toFixed(1)} m</b>${LAUNCH_STEP_BUTTON(1)}</span></div>`;
 
 export const pct = (x: number) => `${Math.floor(100 * x)}%`;
+
+/**
+ * A HUD value that holds the width of its widest form from the first frame (a hidden copy in the same grid cell), so
+ * the docked strip, whose rows flow and wrap, keeps its lines when the value grows ("intact" to "32 cracked"; PT30).
+ */
+export const fit = (html: string, widest: string) => `<span class="fit">${html}<i class="sz" aria-hidden="true">${esc(widest)}</i></span>`;
 
 /** What the objective asks, in a few words. */
 /**
@@ -227,7 +243,7 @@ export const PULL_HINT = 'Crowns, heritage and fixed beams stay: pull a plain bl
  */
 function parCollapseRow(min: number, s: HudState): string {
   const d = s.collapse ?? 0;
-  return `<div class="row obj"><span>Down <b class="down${d > 0 ? '' : ' none'}">${pct(d)}</b></span><span class="${s.met ? 'ok' : ''}">bring ${pct(min)} down${s.met ? ' ✓' : ''}</span></div>`;
+  return `<div class="row obj">${fit(`<span>Down <b class="down${d > 0 ? '' : ' none'}">${pct(d)}</b></span>`, 'Down 100%')}${fit(`<span class="${s.met ? 'ok' : ''}">bring ${pct(min)} down${s.met ? ' ✓' : ''}</span>`, `bring ${pct(min)} down ✓`)}</div>`;
 }
 
 /** What to do first on a level with starter slabs (LevelDef.push: Wavefront, PT39), until the first shot. */
@@ -269,13 +285,13 @@ export type SlotAction = 'freeze' | 'resume' | 'skip' | 'skipping' | 'opener' | 
  * shot running, before the first, between shots), apart from Freeze and Skip, which a running shot on a
  * Bullet Time level offers together: the slot then holds both (`slotHtml`), Freeze first.
  */
-export function slotAction(s: Pick<HudState, 'level' | 'opener' | 'canBank' | 'freezes' | 'duel' | 'canSkip' | 'skipping'>): SlotAction {
+export function slotAction(s: Pick<HudState, 'level' | 'opener' | 'canBank' | 'freezes' | 'duel' | 'canSkip' | 'skipping' | 'profile'>): SlotAction {
   if (s.duel !== undefined) return null;
   if (s.freezes?.frozen) return 'resume';
   if (s.freezes?.can) return 'freeze';
   if (s.canSkip) return 'skip';
   if (s.skipping) return 'skipping';
-  if (s.opener) return s.level.mason ? 'test' : s.level.rube ? 'go' : 'opener';
+  if (s.opener && (s.profile?.opener ?? true)) return s.level.mason ? 'test' : s.level.rube ? 'go' : 'opener';
   if (s.canBank && scoringOf(s.level) === 'outcome') return 'bank';
   return null;
 }
@@ -306,14 +322,14 @@ export const SKIP_BUTTON = '<button data-act="skip" class="skip" title="Run the 
 const SKIPPING = '<span class="small skipping">skipping to the settle…</span>';
 
 /** The action slot's contents for `act`: its button, Freeze with Skip beside it when both apply, or the skipping note. */
-export function slotHtml(act: SlotAction, s: Pick<HudState, 'canSkip' | 'met'>): string {
+export function slotHtml(act: SlotAction, s: Pick<HudState, 'canSkip' | 'met' | 'profile'>): string {
   switch (act) {
     case 'resume': return freezeButton(true);
     case 'freeze': return freezeButton(false) + (s.canSkip ? SKIP_BUTTON : '');
     case 'skip': return SKIP_BUTTON;
     case 'skipping': return SKIPPING;
     case 'opener': return OPENER_BUTTON;
-    case 'go': return GO_BUTTON;
+    case 'go': return s.profile ? RUN_BUTTON : GO_BUTTON;
     case 'test': return TEST_BUTTON;
     case 'bank': return s.met ? BANK_BUTTON : BANK_QUIET;
     default: return '';
@@ -321,18 +337,25 @@ export function slotHtml(act: SlotAction, s: Pick<HudState, 'canSkip' | 'met'>):
 }
 
 export function hudHtml(s: HudState, sheet = ''): string {
-  const d = s.level;
+  const d = s.level, pf = s.profile;
   // Chips are buttons (a tap selects, as the key does); kbd hints hide on a touch screen (GAME_CSS, body.kg-touch).
-  const chips = s.chips.map((c) => `<button class="chip${c.selected ? ' on' : ''}${c.left ? '' : ' spent'}" data-act="ammo" data-arg="${c.key}"><kbd>${c.key}</kbd> ${esc(itemLabel(c.ammo))} <b>${c.left}</b>/${c.total}</button>`).join('');
-  const heritage = s.heritageTotal ? `<div class="row"><span>Heritage</span><span class="${s.heritageBroken ? 'bad' : 'ok'}">${s.heritageBroken ? `${s.heritageBroken} cracked` : 'intact'}</span></div>` : '';
+  const chips = pf && !pf.chips ? '' : s.chips.map((c) => `<button class="chip${c.selected ? ' on' : ''}${c.left ? '' : ' spent'}" data-act="ammo" data-arg="${c.key}"><kbd>${c.key}</kbd> ${esc(itemLabel(c.ammo))} <b>${c.left}</b>/${c.total}</button>`).join('');
+  // The value holds the width of its widest ("32 cracked") from the first frame, so the docked strip never grows a line (PT30).
+  const heritage = s.heritageTotal ? `<div class="row"><span>Heritage</span>${fit(`<span class="${s.heritageBroken ? 'bad' : 'ok'}">${s.heritageBroken ? `${s.heritageBroken} cracked` : 'intact'}</span>`, `${s.heritageTotal} cracked`)}</div>` : '';
   const sel = s.chips.find((c) => c.selected)?.ammo;
   // A rack of one quake: the docked phone HUD drops its chip while the quake panel stands for it (ui.ts).
   const onlyQuake = s.chips.length === 1 && sel === 'quake' && s.quake ? ' only-quake' : '';
   // The power bar, with minus and plus buttons on a touch screen (keys Q and E).
   // A plunger aims at nothing (the timeline sets it): no power, no launcher height. A quake has its own designer instead.
   // A Mason level fires nothing (its test is the shot): no power or height.
-  const power = d.mason ? '' : sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake' ? (sel === 'quake' ? s.quake ?? '' : '') : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
-  const height = d.mason || sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake' || s.launch === undefined ? '' : launchRow(s.launch);
+  // The mode's HUD shows the aim rows only where it has a projectile, whatever is selected (a spent rack selects nothing).
+  const noAim = d.mason || (pf ? !pf.aim : false);
+  // A rack that holds an aimed item keeps the aim rows' place while a drop or pull is selected (held: hidden), so the
+  // tray does not grow when the selection moves to the projectile (L4, T-X2 sideways; PT30).
+  const aims = (a: RackItem) => a !== 'drop' && a !== 'pull' && a !== 'plunger' && a !== 'quake';
+  const hold = !noAim && sel !== 'quake' && (sel === undefined || !aims(sel)) && s.chips.some((c) => aims(c.ammo)) ? ' held' : '';
+  const power = noAim ? (sel === 'quake' ? s.quake ?? '' : '') : !hold && (sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake') ? (sel === 'quake' ? s.quake ?? '' : '') : `<div class="row${hold}"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
+  const height = noAim || (!hold && (sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake')) || s.launch === undefined ? '' : launchRow(s.launch, hold);
   const reach = s.pullRefused ? `<div class="${s.pullRefused === 'tapped' ? 'bad' : 'hint'} small pull-hint">${d.cut && s.phase !== 'running' ? CUT_HINT : PULL_HINT}</div>` : s.reachable === false ? '<div class="bad small reach">Out of reach at this power</div>' : '';
   const ctl = `<div class="ctl">${power}${height}</div>`;
   const pace = s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : '';
@@ -346,20 +369,26 @@ export function hudHtml(s: HudState, sheet = ''): string {
     </div>`;
   }
   const outcome = scoringOf(d) === 'outcome';
+  // Rube Lab under its own HUD: the parts par the card reads, not the plunger's par of one (PT27: the HUD and card agree).
+  const partsPar = pf?.mode === 'rube' ? d.build?.par : undefined;
   const head = d.mason
     ? `<div class="row obj trial"><span>Test</span><span>${esc(s.trial ?? '')}</span></div>`
+    : partsPar !== undefined
+    ? `<div class="row"><span>Parts par ${partsPar}</span><span>${s.strokes ? 'Run' : 'Build'}</span></div>`
     : outcome
-    ? `<div class="row"><span>Shot ${s.strokes}</span>${d.objective.kind === 'hold' ? `<span>Pulled <b class="down${(s.pulled ?? 0) > 0 ? '' : ' none'}">${pct(s.pulled ?? 0)}</b></span>` : `<span>Down <b class="down${(s.collapse ?? 0) > 0 ? '' : ' none'}">${pct(s.collapse ?? 0)}</b></span>`}</div>
+    ? `<div class="row"><span>Shot ${s.strokes}</span>${d.objective.kind === 'hold' ? fit(`<span>Pulled <b class="down${(s.pulled ?? 0) > 0 ? '' : ' none'}">${pct(s.pulled ?? 0)}</b></span>`, 'Pulled 100%') : fit(`<span>Down <b class="down${(s.collapse ?? 0) > 0 ? '' : ' none'}">${pct(s.collapse ?? 0)}</b></span>`, 'Down 100%')}</div>
     ${s.ticks?.length ? meterHtml(d.objective.kind === 'hold' ? s.pulled ?? 0 : s.collapse ?? 0, s.ticks, d.objective.kind === 'hold' ? 'pulled' : 'down') : ''}
-    <div class="row obj"><span>Objective</span>${chorusObjectiveText(d) !== null ? `<span>${esc(chorusObjectiveText(d)!)}</span>` : `<span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span>`}</div>`
+    <div class="row obj"><span>Objective</span>${chorusObjectiveText(d) !== null ? `<span>${esc(chorusObjectiveText(d)!)}</span>` : fit(`<span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span>`, `${objectiveText(d.objective)} ✓`)}</div>`
     : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>${d.objective.kind === 'collapse' ? parCollapseRow(d.objective.min, s) : ''}${d.push?.length && s.strokes === 0 ? `<div class="hint small push-hint">${PUSH_HINT}</div>` : ''}`;
   // A bell level (Rube Lab) says what it wants on its par row's level too (PT26: nothing said "ring the bell").
   const rung = s.crownsTotal > 0 && s.crownsDown >= s.crownsTotal;
-  const bellRow = !outcome && d.objective.kind === 'bell' ? `<div class="row obj"><span>Objective</span><span class="${rung ? 'ok' : ''}">${esc(objectiveText(d.objective))}${rung ? ' ✓' : ''}</span></div>` : '';
+  // One objective row for both HUDs (the mode profile's and keystone.modeui=0's); its tick is sized in so ringing never widens it (PT30).
+  const bellRow = !outcome && d.objective.kind === 'bell' ? `<div class="row obj"><span>Objective</span>${fit(`<span class="${rung ? 'ok' : ''}">${esc(objectiveText(d.objective))}${rung ? ' ✓' : ''}</span>`, `${objectiveText(d.objective)} ✓`)}</div>` : '';
   const fz = s.freezes;
   const freezes = fz ? `<div class="row"><span>Freezes</span><span class="${fz.left ? '' : 'spent'}">${fz.left} / ${fz.total}</span></div>` : '';
   const crowns = d.mason ? '' : d.objective.kind === 'hold' ? keepRow(s.crownsDown, s.crownsTotal)
-    : s.crownsTotal ? `<div class="row"><span>${d.objective.kind === 'quake' ? 'Condemned down' : d.objective.kind === 'bell' ? 'Bells rung' : 'Crowns'}</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
+    : partsPar !== undefined ? `<div class="row"><span>Bell</span>${fit(`<span class="crowns${s.crownsDown >= s.crownsTotal && s.crownsTotal ? ' ok' : ''}">${s.crownsDown >= s.crownsTotal && s.crownsTotal ? 'rung ✓' : 'not rung'}</span>`, 'not rung')}</div>`
+    : s.crownsTotal ? `<div class="row"><span>${d.objective.kind === 'quake' ? 'Condemned down' : d.objective.kind === 'bell' ? 'Bells rung' : 'Crowns'}</span>${fit(`<span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span>`, `${s.crownsTotal} / ${s.crownsTotal}`)}</div>` : '';
   const act = slotAction(s);
   const button = slotHtml(act, s);
   const slot = `<div class="row slot-row${act ? '' : ' idle'}"><span class="slot${act ? '' : ' empty'}">${button}</span><span class="small note">${act ? SLOT_NOTE[act] : ''}</span>${touchActs(s.strokes)}</div>`;
@@ -371,11 +400,11 @@ export function hudHtml(s: HudState, sheet = ''): string {
     ${crowns}
     ${d.mason ? '' : heritage}
     ${freezes}
-    ${d.mason ? '' : leverageRow(s.strokes, s.leverage)}
+    ${d.mason || (pf && !pf.leverage) ? '' : leverageRow(s.strokes, s.leverage)}
     ${sheet}
     </div><div class="tray">
     <div class="chips${onlyQuake}">${chips}</div>
-    ${ctl}<div class="above">${reach}${s.strokes > 0 || d.mason ? '' : `<div class="tch-hint">${TOUCH_HELP}</div>`}</div>
+    ${ctl}<div class="above">${reach}${s.strokes > 0 || d.mason ? '' : `<div class="tch-hint">${pf && !pf.fire ? TOUCH_LOOK : TOUCH_HELP}</div>`}</div>
     ${slot}
     </div>`;
 }
@@ -458,9 +487,11 @@ export function cardActions(score: LevelScore | null, strokes: number, forward: 
  * and, once the settle has scored it, its stamp and stars, a preview of the card about to come. `over`
  * replaces the text (a duel's round).
  */
-export function tallyHtml(level: LevelDef, score: LevelScore | null, over: string | null = null): string {
+export function tallyHtml(level: LevelDef, score: LevelScore | null, over: string | null = null, mode: { facts?: CardFacts; modeUi?: boolean } = {}): string {
   if (over) return `<b>${esc(over)}</b> <span class="small">tallying…</span>`;
-  const what = score ? `<b>${esc(score.stamp)}</b> <span class="stars">${starsText(score.stars)}</span>` : `<b>${scoringOf(level) === 'outcome' ? 'Round over' : 'All crowns down'}</b>`;
+  // The stamp the card will show (the mode's, mode-ui.ts).
+  const stamp = score ? cardModel(level, score, mode.facts, { sub: '', stamp: score.stamp }, mode.modeUi ?? true).stamp : '';
+  const what = score ? `<b>${esc(stamp)}</b> <span class="stars">${starsText(score.stars)}</span>` : `<b>${scoringOf(level) === 'outcome' ? 'Round over' : 'All crowns down'}</b>`;
   return `<span class="name">${esc(playerName(level))}</span> ${what} <span class="small">tallying…</span>`;
 }
 
@@ -474,7 +505,13 @@ export function tallyHtml(level: LevelDef, score: LevelScore | null, over: strin
  * except on a hold level (U3), whose metric is the share pulled: the stamp and the Pulled line carry it, and a
  * "% down" beside them was a second metric (PT35).
  */
-export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: number, forward: boolean | CardForward, canSave = false, extra = '', canUndo = false): string {
+/**
+ * The phone strip's toggle (layout.ts card strip, PT30): the strip shows the name, stamp, stars, reason and buttons in
+ * the band the docked HUD held; Details opens the whole card, Less folds it again. Hidden but on a phone's strip (ui.ts).
+ */
+const CARD_MORE = '<button data-act="card" class="more" title="Show or fold the rest of the card"><span class="m-more">Details</span><span class="m-less">Less</span></button>';
+
+export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: number, forward: boolean | CardForward, canSave = false, extra = '', canUndo = false, mode: { facts?: CardFacts; modeUi?: boolean } = {}): string {
   const outcome = scoringOf(level) === 'outcome';
   // A Rube Lab level's one plunger is no stroke to count: its line is the parts used against the parts par.
   // A Mason level has no shots at all: its line is the worlds the build passed in and the budget it spent (masonSub).
@@ -495,17 +532,26 @@ export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: n
   const worlds = score.worlds && !score.mason ? ` · ${score.worlds.cleared} of ${score.worlds.of} worlds cleared` : '';
   const fz = score.freezes ? ` · freezes used ${score.freezes.used}/${score.freezes.total}` : '';
   const lost = score.heritageStarsLost ? `<div class="lost bad" style="animation-delay:${after + 0.7}s">Heritage cracked: ${score.heritageStarsLost} star${score.heritageStarsLost === 1 ? '' : 's'} lost</div>` : '';
+  const sub = `${shotsText}${'outcome' in score && level.objective.kind !== 'hold' ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''}${worlds}${score.mason ? '' : ` · leverage ${fmtLeverage(score.leverage)}${tierText ? ` (${tierText})` : ''}`}${fz}`;
+  // The mode's card (mode-ui.ts, PT27): its rows, stamp and words; a reason on a failed round; HERITAGE LOST in red.
+  const card = cardModel(level, score, mode.facts, { sub, stamp: score.stamp }, mode.modeUi ?? true);
+  const rows = card.rows.map((r) => `<div class="line fact"><span>${esc(r.label)}</span><span class="${r.tone ?? ''}">${esc(r.value)}</span></div>`).join('');
+  const reason = card.reason ? `<div class="reason bad">${esc(card.reason)}</div>` : '';
+  const points = card.points ? `${lines}
+    <div class="line total" style="animation-delay:${after}s" title="The lines' sum, never below 0"><span>Total</span><span>${fmtPoints(score.total)}</span></div>` : '';
   return `<div class="c1">
+    ${CARD_MORE}
     <div class="name">${esc(playerName(level))}</div>
     ${level.custom ? `<div class="sub custom">${CUSTOM_NOTE}</div>` : ''}
-    <div class="sub">${shotsText}${'outcome' in score && level.objective.kind !== 'hold' ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''}${worlds}${score.mason ? '' : ` · leverage ${fmtLeverage(score.leverage)}${tierText ? ` (${tierText})` : ''}`}${fz}</div>
-    ${lines}
-    <div class="line total" style="animation-delay:${after}s" title="The lines' sum, never below 0"><span>Total</span><span>${fmtPoints(score.total)}</span></div>
+    <div class="sub">${esc(card.sub)}</div>
+    ${rows}
+    ${points}
+    ${reason}
     </div><div class="c2">
-    <div class="stamp s-${score.stamp.replace(/[^A-Z]/g, '').toLowerCase()}" style="animation-delay:${after + 0.3}s">${esc(score.stamp)}</div>
+    <div class="stamp s-${card.stamp.replace(/[^A-Z]/g, '').toLowerCase()}" style="animation-delay:${after + 0.3}s">${esc(card.stamp)}</div>
     <div class="stars" style="animation-delay:${after + 0.55}s">${starsText(score.stars)}</div>
     ${lost}
-    ${score.mason ? masonStarsHtml(score, after + 0.8) : goldHtml(level, score, after + 0.8)}
+    ${score.mason ? masonStarsHtml(score, after + 0.8) : card.gold ? goldHtml(level, score, after + 0.8) : ''}
     ${extra}
     ${actions}
     </div>`;

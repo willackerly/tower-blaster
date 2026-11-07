@@ -11,10 +11,10 @@ import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
 import { TAG_BALL } from '@tb/engine-api';
 import { compileLevel, Driver, L1, B2, playShots, type LevelDef, type Shot } from '@tb/keystone';
-import { CLASSIC_SPARKS, DEFAULT_SPARKS, MATERIAL, sparkBucketReference, type Impact, type SparkParams } from '@tb/render';
+import { CLASSIC_SPARKS, COAT_GLAZE, COAT_LINEAR, COAT_PAINT, DEFAULT_SPARKS, linearToOklab, MATERIAL, sparkBucketReference, type Impact, type SparkParams } from '@tb/render';
 import { driverOptions } from '../src/engines.ts';
 import { DEFAULT_FEEL, paceFeel, writePaceFeel } from '../src/pacing.ts';
-import { BOMB_FX, firedKind, ramFx, rolePaint, SPENT_GREY, SPENT_MIX, spentFx, TINT } from '../src/scene.ts';
+import { BOMB_FX, firedKind, HERITAGE_FLASH_GLOW, HERITAGE_FLASH_S, HERITAGE_LOST_TINT, ramFx, rolePaint, SPENT_GREY, SPENT_MIX, spentFx, TINT } from '../src/scene.ts';
 
 const miss: Shot = { ammo: 'marble', az: 0, y: 4, yaw: 900, pitch: 0, power: 30 };
 const par = L1.solutions!.par![0]! as Extract<Shot, { az: number }>;
@@ -91,13 +91,25 @@ describe("fired bodies' looks (PT19)", () => {
     spentFx(null, 1).tint!.forEach((x, i) => expect(x).toBeCloseTo(1 + (SPENT_GREY[i]! - 1) * SPENT_MIX, 9));
   });
 
-  it('damage style: cracked heritage flashes teal and stays teal; classic flashes it white and an undo kept it glowing', () => {
+  it('damage style: cracked heritage flashes red and stays painted the lost red (PT28); classic flashes it white and an undo kept it glowing', () => {
     const d = rolePaint('damage'), c = rolePaint('classic');
-    expect(d.heritageFlash.emissive).toBeLessThanOrEqual(0.25);
-    expect(d.heritageKept).toEqual({ tint: TINT.heritage });
-    expect(d.crownKept).toEqual({ tint: TINT.crown });
+    // Painted (COAT_PAINT: the tint is its colour in every look), so it overrides the caller's own tint.
+    expect(d.heritageKept).toEqual({ coat: COAT_PAINT, tint: HERITAGE_LOST_TINT });
+    expect(d.heritageFlash).toEqual({ coat: COAT_PAINT, tint: HERITAGE_LOST_TINT, emissive: HERITAGE_FLASH_GLOW, flash: HERITAGE_FLASH_S });
+    expect({ tint: TINT.heritage, ...d.heritageKept }.tint).toBe(HERITAGE_LOST_TINT);
+    // The lost red: red (OKLCh hue near 29), darker than the glaze, and far in hue from it and from the aim beads' lightness.
+    const lab = linearToOklab(HERITAGE_LOST_TINT), glaze = linearToOklab(COAT_LINEAR[COAT_GLAZE]!);
+    const hue = (x: readonly number[]) => ((((Math.atan2(x[2]!, x[1]!) * 180) / Math.PI) % 360) + 360) % 360;
+    expect(hue(lab)).toBeGreaterThan(15);
+    expect(hue(lab)).toBeLessThan(45);
+    expect(Math.abs(hue(glaze) - hue(lab))).toBeGreaterThan(120);
+    expect(glaze[0] - lab[0]).toBeGreaterThan(0.1);
+    // A felled crown keeps the caller's tint (its gold or a duel's ink) and only flashes.
+    expect(d.crownKept).toEqual({});
+    expect(d.crownFlash.tint).toBeUndefined();
     expect(c.heritageFlash.emissive).toBe(1);
-    expect(c.heritageKept).toEqual({ tint: TINT.heritage, emissive: 1 });
+    expect(c.heritageKept).toEqual({ emissive: 1 });
+    expect(c.crownKept).toEqual({ emissive: 0.9 });
   });
 
   it('keystone.fx and keystone.spent read and write back; defaults damage and on', () => {

@@ -10,8 +10,11 @@ export type EditAction =
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
-/** The panel's body for a controller (null: not editing). `keys` adds the keyboard hints (not on touch). */
-export function editHtml(e: EditController | null, keys = true): string {
+/**
+ * The panel's body for a controller (null: not editing). `keys` adds the keyboard hints (not on touch). `run`: Play
+ * is Run, which also releases the ball (Rube Lab under its mode's HUD, mode-ui.ts: one start verb, PT23).
+ */
+export function editHtml(e: EditController | null, keys = true, run = false): string {
   const k = (s: string) => (keys ? ` <span class="key">${s}</span>` : '');
   if (!e) return `<div class="buttons"><button type="button" data-a="enter" title="Stop time and place pieces, lay dominoes, then Play">Build${k('B')}</button></div>`;
   const on = (b: boolean) => (b ? ' class="on"' : '');
@@ -21,7 +24,9 @@ export function editHtml(e: EditController | null, keys = true): string {
     return `<button type="button" data-a="tool" data-tool="${t}"${on(e.tool === t)}${off ? ' disabled' : ''}>${label}</button>`;
   }).join('');
   const items = e.session.items.map((it, i) => `<button type="button" data-a="item" data-item="${it.name}"${on(e.tool === 'place' && e.hold.item === it.name)} title="costs ${it.cost}">${esc(it.label)}${k(String(i + 1))}</button>`).join('');
-  return `<div class="buttons"><button type="button" data-a="play" class="go" title="Compile the level as built and run it">Play${k('Enter')}</button><button type="button" data-a="cancel" title="Leave edit mode without the edits">Cancel${k('Esc')}</button></div>`
+  const play = run ? `<button type="button" data-a="play" class="go" title="Play the build and release the ball">Run${k('Enter')}</button>`
+    : `<button type="button" data-a="play" class="go" title="Compile the level as built and run it">Play${k('Enter')}</button>`;
+  return `<div class="buttons">${play}<button type="button" data-a="cancel" title="Leave edit mode without the edits">Cancel${k('Esc')}</button></div>`
     + `<div class="buttons">${tools}</div>`
     + `<div class="buttons items">${items}</div>`
     + `<div class="buttons"><button type="button" data-a="turn" data-deg="-90">Turn left${k('Q')}</button><button type="button" data-a="turn" data-deg="90">Turn right${k('E')}</button><button type="button" data-a="tip">Tip${k('T')}</button>`
@@ -32,7 +37,7 @@ export function editHtml(e: EditController | null, keys = true): string {
 }
 
 /** Fills el (a details panel) and calls act for its controls; show redraws it. */
-export function mountEditPanel(el: HTMLDetailsElement, act: (a: EditAction) => void, keys = true): { show(e: EditController | null): void } {
+export function mountEditPanel(el: HTMLDetailsElement, act: (a: EditAction) => void, keys = true): { show(e: EditController | null, run?: boolean): void } {
   el.innerHTML = '<summary>Build</summary><div class="edit"></div>';
   const body = el.querySelector<HTMLElement>('.edit')!;
   body.addEventListener('click', (ev) => {
@@ -51,8 +56,8 @@ export function mountEditPanel(el: HTMLDetailsElement, act: (a: EditAction) => v
   });
   let last = '';
   return {
-    show(e) {
-      const html = editHtml(e, keys);
+    show(e, run = false) {
+      const html = editHtml(e, keys, run);
       if (html !== last) { body.innerHTML = html; last = html; }
     },
   };
