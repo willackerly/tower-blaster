@@ -36,10 +36,23 @@ const TIMBRE: Record<string, { kind: Voice['kind']; wave?: Wave; octave: number;
 };
 
 /**
+ * A struck bell (Rube Lab, PT26): a church bell's partials over its strike note (hum 1/2, prime 1, minor-third
+ * tierce 1.2, quint 1.5, nominal 2; Rossing, The Science of Sound, ch. 13), the low ones ringing longest, so it
+ * reads as a bell and not as one more crown's arpeggio note. Five voices, under MAX_VOICES.
+ */
+export const BELL_PARTIALS: readonly { ratio: number; gain: number; decay: number }[] = [
+  { ratio: 0.5, gain: 0.12, decay: 2.6 }, { ratio: 1, gain: 0.22, decay: 1.8 }, { ratio: 1.2, gain: 0.12, decay: 1.4 },
+  { ratio: 1.5, gain: 0.08, decay: 1.1 }, { ratio: 2, gain: 0.1, decay: 0.9 },
+];
+/** The bell's strike note: an octave over the crowns' first (degree 10 of the pentatonic), A5. */
+export const BELL_NOTE = degree(10);
+
+/**
  * opts.impacts false: the collision sound (@tb/audio, collapse-sound.ts) plays the impacts, so
  * `impacts` and `contact` make no voices here; the cues (launch, crowns, heritage, tier, level end) stay.
+ * opts.bell: the level's crowns are bells (objective 'bell'), and a crown down rings as one (BELL_PARTIALS).
  */
-export function voicesFor(fb: Feedback, opts: { impacts?: boolean } = {}): Voice[] {
+export function voicesFor(fb: Feedback, opts: { impacts?: boolean; bell?: boolean } = {}): Voice[] {
   if (opts.impacts === false && (fb.t === 'impacts' || fb.t === 'contact')) return [];
   switch (fb.t) {
     case 'fired':
@@ -67,6 +80,7 @@ export function voicesFor(fb: Feedback, opts: { impacts?: boolean } = {}): Voice
       return out;
     }
     case 'crownDown':
+      if (opts.bell) return BELL_PARTIALS.map((p) => ({ kind: 'tone', wave: 'sine', freq: BELL_NOTE * p.ratio, gain: p.gain, decay: p.decay, delay: 0 }));
       // Each crown climbs the scale: a run of them plays an arpeggio.
       return [
         { kind: 'tone', wave: 'triangle', freq: degree(fb.ordinal + 10), gain: 0.3, decay: 0.7, delay: 0 },

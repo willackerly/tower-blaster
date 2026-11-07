@@ -512,7 +512,8 @@ export interface LevelScore {
   freezes?: { used: number; total: number };
   /**
    * Levels judged in many jittered worlds (Mason's Trial; Chorus): `cleared` of `of` worlds passed, and the worlds
-   * one, two and three stars need (`thresholds`, counts), so the card shows "c of K" once. Absent elsewhere.
+   * one, two and three stars need (`thresholds`, counts), so the card shows "c of K" once, and neither a gold badge
+   * nor a leverage tier (a Chorus round's leverage is world 0's, shown as information). Absent elsewhere.
    */
   worlds?: { cleared: number; of: number; thresholds: readonly [number, number, number] };
   /** Mason's Trial (LevelDef.mason): the build budget left and the budget, for the card's budget line. Absent elsewhere. */

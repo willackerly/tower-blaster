@@ -25,8 +25,9 @@ import { helpHtml, installGameStyles } from './ui.ts';
 import { goalsMode, sheetMode, sheetOpenAtLoad } from './lot-hud.ts';
 import { layoutOf } from './layout.ts';
 import { touchMode } from './touch.ts';
+import { ChorusPanel } from './chorus-view.ts';
 
-declare global { interface Window { __game: GameHandle; __progress: ProgressStore; __door: DoorPage } }
+declare global { interface Window { __game: GameHandle; __progress: ProgressStore; __door: DoorPage; __chorus: ChorusPanel } }
 
 const $ = (id: string) => document.getElementById(id)!;
 const canvas = $('c') as HTMLCanvasElement, errorEl = $('error');
@@ -159,6 +160,9 @@ async function main() {
   let shown = duel ? duelLevelId(duel, 0) : level.id;
   // How this attempt's round ended, for Save session. Its shots are the session's (after an undo, the kept ones and those since).
   let ended: SessionFacts | null = null, banked = false;
+  // A Chorus level's other worlds (chorus-view.ts), beside the hero world: hidden on every other level.
+  const chorus = new ChorusPanel(document.body, () => feel.chorusView);
+  window.__chorus = chorus;
   await playKeystone({
     canvas, offscreen, offscreenSize, device, renderer, source, hud: $('hud'), banner: $('banner'), result: $('result'),
     levels: played, start: duel ? 0 : start, ...(duel ? {} : { series: seriesIdx, seriesForward: (i: number) => seriesForward(seriesIdx, i, levels) }),
@@ -176,9 +180,10 @@ async function main() {
     opener: (c) => duel ? null : openerFor(c.def, inSeries(c.def.id), preaim, progress.best(c.def.id, c.baseHash) !== null),
     hooks: {
       // The URL follows the level, keeping the other keys; a line and a rack are the level's they were made for.
-      loaded: (c) => {
+      loaded: (c, d) => {
         ended = null;
         banked = false;
+        chorus.attach(d.engine, c);
         if (c.def.id === shown || duel) return;
         shown = c.def.id;
         const u = new URLSearchParams(location.search);
@@ -191,7 +196,9 @@ async function main() {
         history.replaceState(null, '', `?${u}`);
       },
       banked: () => { banked = true; },
+      stepped: () => chorus.tick(),
       ended: (c, score, d) => {
+        chorus.end();
         if (!c.def.custom) progress.record(c.def.id, c.baseHash, score, undefined, handle.goals.filter((g) => g.met).map((g) => g.id));
         const shots: Shot[] = d.session.inputs.map((x) => ({ ...x.shot }));
         ended = { level: c.def.id, hash: c.hash, custom: Boolean(c.def.custom), engine, adapter: adapterName, shots, banked, score };
