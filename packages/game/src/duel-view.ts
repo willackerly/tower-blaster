@@ -14,11 +14,11 @@
 //     it by the shorter way (turnCue), in the HUD and on a refused shot's banner.
 import type { Vec3 } from '@tb/engine-api';
 import { type CompiledLevel, type DuelDef, type DuelSide, inArc, launcherPos, type Player, selectGroup } from '@tb/keystone';
-import { type Orbit, viewProj } from '@tb/render/camera';
+import { EYE_ABOVE_GROUND, type Orbit, viewProj } from '@tb/render/camera';
 import { MARK_HIT, MARK_SAVE } from '@tb/render';
 import { azFromYaw } from './aim.ts';
 import { rgbe, structureMarks } from './scene.ts';
-import { viewOf } from './view.ts';
+import { defaultInsets, fitBox, type Insets, viewOf } from './view.ts';
 
 /** The middle of an arc [from, to] of launcher azimuths (0.5 deg, wrapping through 0 when from > to), from 0 to below 720. */
 export function arcMiddle([from, to]: [number, number]): number {
@@ -85,19 +85,44 @@ export function duelFocus(c: CompiledLevel, def: Pick<DuelDef, 'sides'>, player:
  * the edge on a narrow screen. Of the two ways round, the one that puts the player's own blocks left of the middle
  * (both alike on a shared tower: the first).
  */
-export function duelView(c: CompiledLevel, def: Pick<DuelDef, 'sides'>, player: Player, aspect = 1): Orbit {
+export function duelView(c: CompiledLevel, def: Pick<DuelDef, 'sides'>, player: Player, aspect = 1, hud?: Insets): Orbit {
   const side = def.sides[player]!, mid = (yawOfAz(arcMiddle(side.arc)) * 180) / Math.PI, focus = duelFocus(c, def, player);
   const mine = selectGroup(c, side.owns), [lo, hi] = boxOf(c, mine), own: Vec3 = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
   const isMine = new Set(mine), rest = Int32Array.from({ length: c.meta.n }, (_, i) => i).filter((i) => !isMine.has(i));
   const views = [1, -1].map((sign) => viewOf(c, aspect, { yaw: mid + sign * DUEL_YAW_OFFSET, pitch: DUEL_PITCH }, focus, rest));
   const x = (o: Orbit) => { const m = viewProj(o, aspect); return (m[0]! * own[0] + m[4]! * own[1] + m[8]! * own[2] + m[12]!) / (m[3]! * own[0] + m[7]! * own[1] + m[11]! * own[2] + m[15]!); };
-  const o = x(views[1]!) < x(views[0]!) - 1e-6 ? views[1]! : views[0]!;
+  const pick = x(views[1]!) < x(views[0]!) - 1e-6 ? 1 : 0, o = views[pick]!;
+  // On a docked phone (`hud`, the band play.ts dockedHud measures; PT30): the same direction, framed in the band.
+  if (hud) return bandView(c, def, { yaw: mid + (pick ? -1 : 1) * DUEL_YAW_OFFSET, pitch: DUEL_PITCH }, rest, aspect, hud);
   // Then, on a desktop's screen, back off, 5% a try, until your own blocks are in view above the hint line
   // (OWN_IN_VIEW; PT34): the rival stays in the middle, a little smaller (about a quarter less for D1). Phones keep
   // their framing (upright below the HUD, faceView; sideways, wider than DESKTOP_ASPECT, the rival would shrink to a
   // third of the screen's height), whose layout is PT30's.
   if (aspect >= 1 && aspect <= DESKTOP_ASPECT) for (let k = 0; k < 30 && !ownInView(o, aspect, c, mine); k++) o.distance *= 1.05;
   return o;
+}
+
+/**
+ * A turn view on a docked phone (PT30: upright, the over-the-shoulder view put both keeps in the bottom fifth, framed
+ * under the 40% guess, and the tray hid your own; sideways your own keep stood under the rail): the box of what
+ * duelView frames (all but your own blocks, footprints grown by 1, up to the level's height) joined with both kings'
+ * blocks, fitted from the turn's direction into the screen less the measured band (view.ts fitBox, defaultInsets with
+ * `hud`, as the single-player openings frame; docs/game/phone-hud.md). Exact for that direction, so it stands as close
+ * as the band allows; the rival is no longer at the band's middle, but both kings are in it. Without kings (heraldry)
+ * it is the shared tower.
+ */
+function bandView(c: CompiledLevel, def: Pick<DuelDef, 'sides'>, dir: { yaw: number; pitch: number }, rest: ArrayLike<number>, aspect: number, hud: Insets): Orbit {
+  const min: Vec3 = [Infinity, 0, Infinity], max: Vec3 = [-Infinity, c.height, -Infinity];
+  for (let j = 0; j < rest.length; j++) for (const k of [0, 2] as const) {
+    const i = rest[j]!;
+    min[k] = Math.min(min[k], c.meta.home[3 * i + k]! - c.meta.half[3 * i + k]! - 1);
+    max[k] = Math.max(max[k], c.meta.home[3 * i + k]! + c.meta.half[3 * i + k]! + 1);
+  }
+  for (const s of def.sides) if (s.king) {
+    const [lo, hi] = boxOf(c, selectGroup(c, s.king));
+    for (const k of [0, 1, 2] as const) { min[k] = Math.min(min[k], lo[k]); max[k] = Math.max(max[k], hi[k]); }
+  }
+  return { ...fitBox(min, max, dir, aspect, defaultInsets(aspect, hud)), floor: EYE_ABOVE_GROUND };
 }
 
 /** Whether every corner of the home boxes of bodies `idx` projects inside OWN_IN_VIEW (and in front of the eye). */
@@ -118,10 +143,10 @@ export function ownInView(o: Orbit, aspect: number, c: CompiledLevel, idx: Array
 
 /**
  * The view a decided duel ends on (PT34: the ending framed the winner's keep only): the whole table, both sides, as
- * the level's classic framing has it. The turn view swings there at the end, as it does between turns.
+ * the level's classic framing has it (on a docked phone, clear of the measured band `hud`: PT30). The turn view swings there at the end, as it does between turns.
  */
-export function duelEndView(c: CompiledLevel, aspect = 1): Orbit {
-  return viewOf(c, aspect, undefined, undefined, undefined, { mode: 'classic' });
+export function duelEndView(c: CompiledLevel, aspect = 1, hud?: Insets): Orbit {
+  return viewOf(c, aspect, undefined, undefined, undefined, { mode: 'classic', ...(hud ? { hud } : {}) });
 }
 
 /**

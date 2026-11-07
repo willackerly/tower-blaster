@@ -151,6 +151,8 @@ export const DUEL_CSS = `
   .kg-hud .duel-side { opacity: 0.7; }
   .kg-hud .duel-side .bar { display: inline-block; width: 80px; vertical-align: 0; }
   .kg-hud .duel-side.on { opacity: 1; font-weight: 650; }
+  /* Sideways on a phone the rail is narrow (220 px): a shorter bar, so a side's row stays one line (PT30's 844 x 390 capture). */
+  @media (orientation: landscape) and (max-height: 500px) { body.kg-touch .kg-hud.kg-dock .duel-side { white-space: nowrap; } body.kg-touch .kg-hud.kg-dock .duel-side .bar { width: 36px; } }
   .duel-handoff { position: fixed; inset: 0; z-index: 30; display: none; align-items: flex-end; padding-bottom: 8vh; box-sizing: border-box; justify-content: center; cursor: pointer; background: rgba(12, 15, 22, 0.25); }
   .duel-handoff.show { display: flex; animation: duel-fade 0.25s ease-out; }
   @keyframes duel-fade { from { opacity: 0; } to { opacity: 1; } }

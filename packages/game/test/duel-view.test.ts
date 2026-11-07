@@ -288,3 +288,49 @@ describe('duel arc beads', () => {
     });
   });
 });
+
+// PT30 (agent playtest 2): on a docked phone the turn view framed under the old 40% guess, both keeps in the bottom
+// fifth and your own under the tray (upright) or the rail (sideways). With the measured band (play.ts dockedHud),
+// both kings and the rival stand inside it, and the end view frames the whole table in it.
+describe('PT30: duel views on a docked phone', () => {
+  // The bands phone-hud.md measured: upright 390 x 844 the strip (top 11.5%) and the tray with its hint (bottom 24%);
+  // sideways 844 x 390 the rail (left 27%) and the hints' box at the top.
+  const PHONES = [['upright', 390 / 844, { top: 0.115, bottom: 0.24, left: 0, right: 0 }], ['sideways', 844 / 390, { top: 0.14, bottom: 0, left: 0.27, right: 0 }]] as const;
+  /** Whether every corner of the home boxes of bodies `idx` projects inside the screen less the band (and in front of the eye). */
+  const inBand = (o: Orbit, aspect: number, c: ReturnType<typeof compileLevel>, idx: ArrayLike<number>, b: { top: number; bottom: number; left: number; right: number }) => {
+    const m = viewProj(o, aspect);
+    for (let j = 0; j < idx.length; j++) for (let s = 0; s < 8; s++) {
+      const i = idx[j]!, p = [0, 1, 2].map((k) => c.meta.home[3 * i + k]! + ((s >> k) & 1 ? 1 : -1) * c.meta.half[3 * i + k]!);
+      const w = m[3]! * p[0]! + m[7]! * p[1]! + m[11]! * p[2]! + m[15]!;
+      if (!(w > 0)) return false;
+      const x = (m[0]! * p[0]! + m[4]! * p[1]! + m[8]! * p[2]! + m[12]!) / w, y = (m[1]! * p[0]! + m[5]! * p[1]! + m[9]! * p[2]! + m[13]!) / w;
+      if (x < -1 + 2 * b.left || x > 1 - 2 * b.right || y > 1 - 2 * b.top || y < -1 + 2 * b.bottom) return false;
+    }
+    return true;
+  };
+
+  it.each(tables)("%s: each side's turn view keeps both kings and the rival's blocks inside the band", (_, def) => {
+    const c = compileLevel(duelLevel(def)), d = new Duel(def, c);
+    for (const p of [0, 1] as const) for (const [name, aspect, band] of PHONES) {
+      const o = duelView(c, def, p, aspect, band), why = `${def.sides[p].name} ${name}`;
+      expect(inBand(o, aspect, c, d.owned[(1 - p) as 0 | 1], band), `${why}: the rival`).toBe(true);
+      for (const k of d.kings) if (k) expect(inBand(o, aspect, c, k, band), `${why}: a king`).toBe(true);
+      // The same direction as without the band: the band changes the framing, not where the turn looks from.
+      expect(o.yaw).toBeCloseTo(duelView(c, def, p, aspect).yaw, 9);
+      expect(o.pitch).toBeCloseTo(DUEL_PITCH * DEG, 9);
+    }
+  });
+
+  it("D1 upright: without the band your own king is outside it (the playtest's crop); with it, inside", () => {
+    const c = compileLevel(duelLevel(D1)), d = new Duel(D1, c), [, aspect, band] = PHONES[0];
+    for (const p of [0, 1] as const) {
+      expect(inBand(duelView(c, D1, p, aspect), aspect, c, d.kings[p]!, band)).toBe(false);
+      expect(inBand(duelView(c, D1, p, aspect, band), aspect, c, d.kings[p]!, band)).toBe(true);
+    }
+  });
+
+  it.each(tables)('%s: the end view frames every body inside the band', (_, def) => {
+    const c = compileLevel(duelLevel(def)), all = Int32Array.from({ length: c.meta.n }, (_, i) => i);
+    for (const [name, aspect, band] of PHONES) expect(inBand(duelEndView(c, aspect, band), aspect, c, all, band), name).toBe(true);
+  });
+});

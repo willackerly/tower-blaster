@@ -1262,13 +1262,16 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       // The opening view, once the level's HUD is drawn (its lot sheet and rows set above): docked on a phone, the view
       // keeps clear of the HUD's measured band (PT3b), not the upright guess. A duel's sides are what its view is about
       // (duel-view.ts): it opens on the classic view, framed as before; the turn view (when on) then swings to the side to fire.
-      // (A duel's HUD reads the view's yaw and is not measured: it keeps its framing.)
+      // A duel's HUD reads the view's yaw (the first load has none yet): it is measured once its classic view is set,
+      // and that view made again in the band (PT30).
       const hud = duel ? undefined : (drawHud(), dockedHud());
-      handle.openingHud = hud ?? null;
       orbit = viewOf(c, viewAspect(), undefined, undefined, undefined, { mode: duel ? 'classic' : feel.view, insets: openingInsets(viewAspect(), panelTimeline(c) !== null), hud });
+      const band = duel ? (drawHud(), dockedHud()) : hud;
+      if (duel && band) orbit = viewOf(c, viewAspect(), undefined, undefined, undefined, { mode: 'classic', hud: band });
+      handle.openingHud = band ?? null;
     }
     // A duel opens (and Same start reopens) on the first player's side, as each turn after does (duel-view.ts).
-    if (duel && feel.turnView) orbit = duelView(c, duel.def, duel.turn, viewAspect());
+    if (duel && feel.turnView) orbit = duelView(c, duel.def, duel.turn, viewAspect(), dockedHud());
     // The real look's sun counts from the opening view (light.ts), set as a level loads and kept by a retry.
     if (!retry) viewSun.yaw = orbit.yaw;
     syncDuel();
@@ -1477,7 +1480,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
             if (r.over) {
               queueMicrotask(() => { if (driver.session.phase === 'aiming') bank(); });
               // The turn view's last move: back to the whole table, both keeps (duel-view.ts duelEndView; PT34).
-              if (feel.turnView) { follow.grab(); swing.start(orbit, duelEndView(c, viewAspect())); }
+              if (feel.turnView) { follow.grab(); swing.start(orbit, duelEndView(c, viewAspect(), dockedHud())); }
             }
             else {
               selected = nextSelection(side.rack, duel.left[duel.turn], null);
@@ -1485,7 +1488,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
               if (feel.handoff) showHandoff();
               else banner(`${side.name}'s turn`);
               // The turn view: swing to the next player's over-the-shoulder view (the follow camera, if on, lets go).
-              if (feel.turnView) { follow.grab(); swing.start(orbit, duelView(c, duel.def, duel.turn, viewAspect())); }
+              if (feel.turnView) { follow.grab(); swing.start(orbit, duelView(c, duel.def, duel.turn, viewAspect(), dockedHud())); }
               // The kings' marks: the shield goes to the king of the player to fire.
               applyMarks();
             }
