@@ -3,7 +3,7 @@
 // hides until the first shot, and the Down bar fills as the structure falls, with a tick per star
 // threshold in collapse, lit once reached. Rapier plays B1 here as a custom run (its stars were cast
 // on the GPU solver), so its bar has the objective's tick only; the GPU case loads B1 with its cast
-// stars and checks all three ticks before a shot.
+// stars and checks all three ticks before a shot (hud-e2e-gpu.test.ts).
 import { describe, expect, it } from 'vitest';
 import type { Page } from 'playwright';
 import { B1 } from '@tb/keystone';
@@ -81,23 +81,6 @@ describe('HUD polish on the game page', () => {
     expect(end.fill).toBeCloseTo(Math.min(100, 100 * d), 0);
     expect(end.ticks[0]!.got).toBe(d >= min);
     expect(await page.locator('.kg-hud').innerText()).toMatch(/Leverage\s+×/);
-    expect(errors).toEqual([]);
-    await page.close();
-  }, 15 * MINUTES);
-
-  it('on the engine its stars were cast on, B1 shows all three ticks: objective, T2, T3', async (ctx) => {
-    if (!game.browser()) return ctx.skip();
-    const o = await open('/?level=B1&engine=gpu&offscreen=1&progress=off', 10 * MINUTES);
-    if (!o) return ctx.skip();
-    const { page, errors } = o;
-    await page.waitForFunction(() => document.querySelector('.kg-hud .meter') !== null, undefined, { timeout: 10 * MINUTES, polling: 250 });
-    const min = B1.objective.kind === 'collapse' ? B1.objective.min : NaN;
-    expect((await meter(page))!.ticks).toEqual([
-      { at: 100 * min, stars: 1, got: false, obj: true },
-      { at: 100 * B1.stars!.t2, stars: 2, got: false, obj: false },
-      { at: 100 * B1.stars!.t3, stars: 3, got: false, obj: false },
-    ]);
-    expect(await page.locator('.kg-hud').innerText()).not.toMatch(/custom/);
     expect(errors).toEqual([]);
     await page.close();
   }, 15 * MINUTES);

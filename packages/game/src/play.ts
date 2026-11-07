@@ -1077,8 +1077,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     applyMarks();
     paintIce();
     const s = driver.session, roles = rolePaint(feel.fx);
-    s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { ...roles.crownKept, tint: ownTint(c.meta.crowns[k]!) }); });
-    s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { ...roles.heritageKept, tint: ownTint(c.meta.heritage[k]!) }); });
+    s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { tint: ownTint(c.meta.crowns[k]!), ...roles.crownKept }); });
+    s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { tint: ownTint(c.meta.heritage[k]!), ...roles.heritageKept }); });
     // No spark, heat, flash, blast or lit fuse of the undone shot carries over (PT2); the kept shots' fuses are lit again below.
     renderer.resetEffects();
     fading = [];
@@ -1307,8 +1307,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     foldPlan = planBeads(c);
     if (line) {
       const s = driver.session, roles = rolePaint(feel.fx);
-      s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { ...roles.crownKept, tint: ownTint(c.meta.crowns[k]!) }); });
-      s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { ...roles.heritageKept, tint: ownTint(c.meta.heritage[k]!) }); });
+      s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { tint: ownTint(c.meta.crowns[k]!), ...roles.crownKept }); });
+      s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { tint: ownTint(c.meta.heritage[k]!), ...roles.heritageKept }); });
     }
     fxSlots = descs.length;
     pacer.reset();
@@ -1615,8 +1615,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         case 'heritageCrack':
           juice.shake(0.3);
           banner('Heritage cracked', 'crack');
-          // Damage style: a teal flash that stays teal (classic: to white).
-          renderer.setFx(f.body, { ...rolePaint(feel.fx).heritageFlash, tint: ownTint(f.body) });
+          // Damage style: a red flash, and the block stays painted the lost red (PT28; classic: to white).
+          renderer.setFx(f.body, { tint: ownTint(f.body), ...rolePaint(feel.fx).heritageFlash });
           break;
         case 'tier': banner(`${TIER_NAMES[f.tier]}!`); break;
         case 'settled':
