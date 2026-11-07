@@ -125,7 +125,8 @@ export const FUSE_SITES: Readonly<Record<string, { name: string; fuse: FuseSite 
         { lead: [-1.53, 29.6], burns: 'N', straight: 12, row: [[0, 0], [0, 1]] },
         { lead: [1.53, 29.6], burns: 'N', straight: 12, row: [[1, 0], [1, 1]] },
       ],
-      budget: 26,
+      // 24 straight plus 8: the east fuse needs 4 more to fold the tower (+4, 28 dominoes); 26 (M5b as merged) left only 2.
+      budget: 32,
     },
   },
   // F2's tower, the yard north, its board to the east: three lanes, 7 h apart (a fuse's bumps reach 5.5 h off its line), for

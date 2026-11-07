@@ -176,6 +176,7 @@
   "packages/keystone-lab/test/footprint-play.test.ts": 15.4,
   "packages/keystone-lab/test/fork.test.ts": 94.9,
   "packages/keystone-lab/test/freeze.test.ts": 1.3,
+  "packages/keystone-lab/test/fuse-budget.test.ts": 1.5,
   "packages/keystone-lab/test/fuse-delay.test.ts": 155.7,
   "packages/keystone-lab/test/fuse-gpu-F6.test.ts": 181.1,
   "packages/keystone-lab/test/fuse-gpu-F7.test.ts": 0,
