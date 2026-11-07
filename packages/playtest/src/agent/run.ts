@@ -84,8 +84,9 @@ async function mirror(page: Page): Promise<boolean> {
 
 /** The docked HUD's boxes and its share of the screen, as game/test/phone-hud-e2e.test.ts measures it (PT3). */
 const hudBoxes = (page: Page) => page.evaluate(() => {
-  const box = (sel: string) => { const e = document.querySelector(sel) as HTMLElement | null; if (!e || e.offsetParent === null) return null; const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; };
-  const st = box('.kg-hud .st'), tray = box('.kg-hud .tray'), vw = innerWidth, vh = innerHeight;
+  // No named helper inside: tsx's esbuild wraps named functions in __name, which the page does not define.
+  const [st, tray] = ['.kg-hud .st', '.kg-hud .tray'].map((sel) => { const e = document.querySelector(sel) as HTMLElement | null; if (!e || e.offsetParent === null) return null; const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
+  const vw = innerWidth, vh = innerHeight;
   const share = !st || !tray ? NaN : vw > vh ? Math.max(st.x + st.w, tray.x + tray.w) / vw : (st.h + tray.h) / vh;
   return { st, tray, share, dock: !!document.querySelector('.kg-hud.kg-dock') };
 });
