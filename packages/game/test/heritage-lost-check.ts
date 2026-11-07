@@ -1,6 +1,6 @@
 // Lost heritage reads as lost (PT28, agent playtest 2: the HUD said "28 cracked" over a cathedral that still
 // looked whole, because a cracked block kept its teal). Under keystone.fx=damage a cracked heritage block
-// flashes red and stays painted the lost red (scene.ts HERITAGE_LOST, COAT_PAINT), in every look, and Retry
+// flashes red and stays painted the lost red (scene.ts HERITAGE_LOST_TINT, COAT_PAINT), in every look, and Retry
 // and Undo give it back its glaze. On L3 a marble from az 180 at pitch 311 cracks heritage block 37 (of 35,
 // 37, 39) at step 34 on Rapier (the same steps on the page as in node: Rapier is deterministic per device);
 // the physics is held at the break so the block is measured in place. The flash itself is read from the
@@ -15,7 +15,7 @@ import { expect } from 'vitest';
 import type { Page } from 'playwright';
 import { compileLevel, L3, type Shot } from '@tb/keystone';
 import { COAT_GLAZE, COAT_PAINT, linearToOklab, srgbToLinear } from '@tb/render';
-import { HERITAGE_FLASH_GLOW, HERITAGE_FLASH_S, HERITAGE_LOST } from '../src/scene.ts';
+import { HERITAGE_FLASH_GLOW, HERITAGE_FLASH_S, HERITAGE_LOST_TINT } from '../src/scene.ts';
 import { ready } from './page.ts';
 
 const MINUTES = 60_000;
@@ -78,7 +78,7 @@ export async function runLook(game: { open: (url: string, timeout?: number) => P
   const flash = await colours(page, groups, true);
   const fx = (await page.evaluate((b) => window.__game.fxOf(b), LOST))!;
   expect(fx.coat).toBe(COAT_PAINT);
-  fx.tint.forEach((x, k) => expect(x).toBeCloseTo(HERITAGE_LOST[k]!, 2));
+  fx.tint.forEach((x, k) => expect(x).toBeCloseTo(HERITAGE_LOST_TINT[k]!, 2));
   expect(fx.emissive).toBeCloseTo(HERITAGE_FLASH_GLOW, 2);
   expect(fx.flash).toBeCloseTo(HERITAGE_FLASH_S, 5);
   for (const k of KEPT) expect((await page.evaluate((b) => window.__game.fxOf(b), k))!.coat).toBe(COAT_GLAZE);

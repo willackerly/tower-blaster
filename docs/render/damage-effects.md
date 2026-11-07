@@ -103,7 +103,7 @@ one still goes off). Undo checkpoints keep the spent state.
 Judges read "28 cracked" on the HUD over a cathedral that still looked whole: a cracked block kept its teal
 and differed from an intact one only for its flash (`B2-novice-desktop-07-result`,
 `T-B2A-novice-desktop-02-shot-1-64-steps`). Under `keystone.fx=damage` a cracked heritage block is now
-painted the lost red, `HERITAGE_LOST` (sRGB #A1342A, OKLCh L 0.48 C 0.15 hue 29), with the duel inks' coat
+painted the lost red, `HERITAGE_LOST_TINT` (sRGB #A1342A, OKLCh L 0.48 C 0.15 hue 29), with the duel inks' coat
 (`COAT_PAINT`: the tint is the colour, the same in every look), and it flashes that red at the break (glow
 0.6, fading over 0.9 s). The shield stays carved: the block you had to keep, lost. Undo, Retry and loads
 restore the glaze (their `clearFx` and `setCoats`). Classic keeps the look before PT2.

@@ -115,8 +115,8 @@ export function spentFx(fx: FxOptions | null, t: number): FxOptions {
  * banner (#F0806A) and the aim beads (#FF7A5A, L 0.73) share its hue but sit far above it in lightness, and it
  * is 147 degrees from the glaze, so lost and intact heritage differ in hue and in luma.
  */
-export const HERITAGE_LOST_SRGB = 0xa1342a;
-export const HERITAGE_LOST: [number, number, number] = [(HERITAGE_LOST_SRGB >> 16) & 255, (HERITAGE_LOST_SRGB >> 8) & 255, HERITAGE_LOST_SRGB & 255].map((x) => srgbToLinear(x / 255)) as [number, number, number];
+export const HERITAGE_LOST_TINT_SRGB = 0xa1342a;
+export const HERITAGE_LOST_TINT: [number, number, number] = [(HERITAGE_LOST_TINT_SRGB >> 16) & 255, (HERITAGE_LOST_TINT_SRGB >> 8) & 255, HERITAGE_LOST_TINT_SRGB & 255].map((x) => srgbToLinear(x / 255)) as [number, number, number];
 /** The flash of heritage breaking, damage style: the lost red at this glow, fading over HERITAGE_FLASH_S seconds. */
 export const HERITAGE_FLASH_GLOW = 0.6;
 export const HERITAGE_FLASH_S = 0.9;
@@ -131,7 +131,7 @@ export const HERITAGE_FLASH_S = 0.9;
  * glowing (crown 0.9, heritage 1), unlike play.
  */
 export function rolePaint(style: EffectStyle): { crownFlash: FxOptions; heritageFlash: FxOptions; crownKept: FxOptions; heritageKept: FxOptions } {
-  const lost: FxOptions = { coat: COAT_PAINT, tint: HERITAGE_LOST };
+  const lost: FxOptions = { coat: COAT_PAINT, tint: HERITAGE_LOST_TINT };
   return style === 'damage'
     ? { crownFlash: { emissive: 0.9, flash: 0.5 }, heritageFlash: { ...lost, emissive: HERITAGE_FLASH_GLOW, flash: HERITAGE_FLASH_S }, crownKept: {}, heritageKept: lost }
     : { crownFlash: { emissive: 0.9, flash: 0.5 }, heritageFlash: { emissive: 1, flash: 0.8 }, crownKept: { emissive: 0.9 }, heritageKept: { emissive: 1 } };
