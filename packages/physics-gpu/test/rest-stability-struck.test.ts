@@ -1,3 +1,4 @@
+// Nightly only (vitest.nightly.json, PHYSICS_GPU_SLOW=1): one case over the 300 s a CI file may take.
 // Rest stability at the game's settings, CI's struck case (rest-stability.ts):
 // a 200-cube wall hit by a 10 kg ball at 20 m/s, at 40 iterations with
 // gapSlop, must be at rest over frames 600-1200. Long enough for the debris to

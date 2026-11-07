@@ -1,0 +1,67 @@
+name: nightly
+# The slow tier (O5): every case PR and main CI leave out, on main once a night
+# and by hand (Actions tab, Run workflow). PHYSICS_GPU_SLOW=1 turns on each
+# file's slow cases and the nightly-only files (vitest.nightly.json); TB_TIER=slow
+# runs only those files, not the whole suite again. A failure opens an issue
+# labelled `nightly` (or comments on the open one), since no PR shows it.
+on:
+  schedule:
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  slow:
+    name: slow ${{ matrix.shard }}/4
+    runs-on: ubuntu-latest
+    # Some slow cases run for most of an hour on SwiftShader (e2e-keystone-10k).
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    env:
+      REQUIRE_WEBGPU: '1'
+      PHYSICS_GPU_SLOW: '1'
+      TB_TIER: slow
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install chromium
+      - run: pnpm test --shard=${{ matrix.shard }}/4 --reporter=default --reporter=json --outputFile.json=.vitest-report.json
+      # Times for vitest.durations.nightly.json: pnpm durations --file vitest.durations.nightly.json --from-log <log>.
+      - name: Shard file times
+        if: ${{ !cancelled() }}
+        run: pnpm durations --print .vitest-report.json
+
+  report:
+    needs: slow
+    if: ${{ failure() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Open or update the nightly issue
+        run: |
+          body="The nightly slow tier failed on ${GITHUB_SHA::7}: $RUN"
+          open=$(gh issue list --label nightly --state open --json number --jq '.[0].number')
+          if [ -n "$open" ]; then gh issue comment "$open" --body "$body"
+          else
+            gh label create nightly --color B60205 --description "The nightly slow-tier run failed" 2>/dev/null || true
+            gh issue create --label nightly --title "Nightly slow tests failing" --body "$body"
+          fi
