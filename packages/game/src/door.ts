@@ -13,7 +13,7 @@
 // objective's star alone, one target row and one star slot, never a placeholder
 // (the agent playtest's PT7: "targets coming soon" read as unfinished), and picks
 // the rest up from the file with no change here.
-import { castStars, type CompiledLevel, compileLevel, DUEL_NAMES, type DuelDef, isTrial, type LevelDef, type Objective, scoringOf, SERIES, SERIES_TITLES, type Shot, type StarMetric, type StarsDef } from '@tb/keystone';
+import { castStars, type CompiledLevel, compileLevel, DUEL_NAMES, type DuelDef, isTrial, type LevelDef, MASON_CLEAR, masonWorlds, type Objective, scoringOf, SERIES, SERIES_TITLES, type Shot, type StarMetric, type StarsDef } from '@tb/keystone';
 import { CUSTOM_NOTE, esc, fmtPoints, itemLabel, LEVERAGE_MEANS, levelTag, objectiveText, pct, playerName } from './hud.ts';
 import type { LevelRecord } from './progress.ts';
 import type { QualityTier } from './quality.ts';
@@ -90,6 +90,7 @@ export function thresholdText(metric: StarMetric, t: number): string {
     case 'pulled': return `${pct(t)} pulled`;
     case 'energy': return `a quake of ${Math.round(t)} J or less`;
     case 'fold': return `${pct(t)} folded`;
+    case 'built': return `braced with ${Math.round(t)} blocks or fewer`;
   }
 }
 
@@ -106,7 +107,7 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** A star threshold as a bare number: "70%", "3,200". */
 export function thresholdShort(metric: StarMetric, t: number): string {
-  return metric === 'collapse' || metric === 'skyline' || metric === 'pulled' || metric === 'fold' ? pct(t) : metric === 'energy' ? `${Math.round(t)} J` : fmtPoints(Math.round(t));
+  return metric === 'collapse' || metric === 'skyline' || metric === 'pulled' || metric === 'fold' ? pct(t) : metric === 'energy' ? `${Math.round(t)} J` : metric === 'built' ? `${Math.round(t)} blocks` : fmtPoints(Math.round(t));
 }
 
 /** What the objective asks, in a word or number. */
@@ -134,6 +135,18 @@ export function starTargets(c: CompiledLevel, stars: StarsDef | undefined): { ta
   const d = c.def;
   const heritage = c.meta.heritage.length ? ', heritage intact' : '';
   const one = cap(objectiveText(d.objective)), oneShort = objectiveShort(d.objective);
+  // Mason's Trial (rules.ts masonScore): one star for standing in half the worlds, two and three at the level's
+  // points (worlds stood and budget left); no shots at all.
+  if (d.mason) {
+    const K = masonWorlds(d.mason), half = Math.ceil(K * MASON_CLEAR), [t2, t3] = d.mason.stars!;
+    return { targets: [`Stand in ${half} of ${K} worlds`, `${fmtPoints(t2)} points (worlds stood, budget left)`, `${fmtPoints(t3)} points`], short: [`${half} of ${K} worlds`, fmtPoints(t2), fmtPoints(t3)], cast: true };
+  }
+  // Parts-par levels (Rube Lab, rules.ts partsStars): three at the parts par or under, two within half again; no strokes counted.
+  const partsPar = d.build?.par;
+  if (partsPar !== undefined) {
+    const two = Math.ceil(1.5 * partsPar), parts = (n: number) => `${n} part${n === 1 ? '' : 's'}`;
+    return { targets: [one, `…with ${parts(two)} or fewer`, `…with ${parts(partsPar)} or fewer (parts par)${heritage}`], short: [oneShort, parts(two), `par ${parts(partsPar)}`], cast: true };
+  }
   // Par levels (keystone parStars): three stars less one per stroke over par and one for broken heritage.
   if (scoringOf(d) === 'par') return { targets: [one, `…in ${shotCount(d.par + 1, d.rack)}`, `…in par (${shotCount(d.par, d.rack)})${heritage}`], short: [oneShort, shotCount(d.par + 1, d.rack), `par ${d.par}`], cast: true };
   if (!stars) return { targets: [one, '', ''], short: [oneShort, '', ''], cast: false };
@@ -153,7 +166,7 @@ export function doorLevels(levels: readonly LevelDef[], best: (id: string, hash:
     if (skip(d)) return [];
     const c = compiled(d), stars = castStars(c);
     return [{
-      id: d.id, tag: levelTag(d), name: playerName(d), blocks: c.meta.n, rack: rackText(d.rack), ...starTargets(c, stars), custom: Boolean(d.custom), best: d.custom ? null : best(d.id, c.hash),
+      id: d.id, tag: levelTag(d), name: playerName(d), blocks: c.meta.n, rack: d.mason && d.build?.budget !== undefined ? `budget ${d.build.budget}` : rackText(d.rack), ...starTargets(c, stars), custom: Boolean(d.custom), best: d.custom ? null : best(d.id, c.hash),
       index, series: seriesTitle(d.id), trial: isTrial(d.id),
     }];
   });
@@ -185,6 +198,10 @@ export const BULLET_TIME_HOW = 'Bullet Time levels give you a few freezes: while
 
 /** How to play's Siege Table line (PT18: the two-player mode was on the door but not in How to play). */
 export const SIEGE_TABLE_HOW = `${DUEL_NAMES.mode}: two players on one device take turns, each from their own side, passing the device between shots. ${DUEL_NAMES.rulesets.keeps}: topple the other king to win, and keep your own standing. ${DUEL_NAMES.rulesets.heraldry}: each shot scores the rival's blocks it brings down, less your own.`;
+
+/** How to play's Mason's Trial page (M8: a mode with no shots needs its own words; PT37: two short lines). */
+export const MASON_HOW = "Build, don't shoot: place pieces (<span class=\"kg-desk\"><kbd>[</kbd> <kbd>]</kbd></span><span class=\"kg-tch\">Slide</span> slides a plank out past an edge), then Play tests the build in 64 slightly different worlds.";
+const MASON_STARS = 'Standing in half of them is a star; more worlds and less of the budget spent earn two and three.';
 
 /** One mode's page of How to play: a tab (its title) and one or two lines (HTML). */
 export interface HowMode { readonly id: string; readonly title: string; readonly lines: readonly string[] }
@@ -228,11 +245,12 @@ export const HOW_TO_PLAY: readonly HowMode[] = [
   { id: 'wavefront', title: 'Wavefront', lines: [
     'One push starts a wave of falling towers and dominoes. Choose where to push, or pull pieces out while the wave runs to save what is left.',
   ] },
+  { id: 'mason', title: "Mason's Trial", lines: [MASON_HOW, MASON_STARS] },
   { id: 'siege', title: DUEL_NAMES.mode, lines: [SIEGE_TABLE_HOW] },
 ];
 
 /** Each series' How to play page, by its title (SERIES_TITLES); a series not listed opens Basics. */
-const HOW_BY_SERIES: Readonly<Record<string, string>> = { Chamber: 'chamber', Spectacle: 'spectacle', Undercut: 'undercut', 'Rube Lab': 'rube', 'Fuse & Fold': 'fuse', Aftershock: 'aftershock', Wavefront: 'wavefront' };
+const HOW_BY_SERIES: Readonly<Record<string, string>> = { Chamber: 'chamber', Spectacle: 'spectacle', Undercut: 'undercut', 'Rube Lab': 'rube', 'Fuse & Fold': 'fuse', Aftershock: 'aftershock', Wavefront: 'wavefront', "Mason's Trial": 'mason' };
 
 /** The How to play page that opens first: Bullet Time on a level with freezes, else its series' page, else Basics. */
 export function howModeOf(def: Pick<LevelDef, 'id' | 'freeze'> | null | undefined): string {

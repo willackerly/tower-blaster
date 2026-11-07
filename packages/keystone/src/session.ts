@@ -475,6 +475,7 @@ export class Session {
       energy: energyFired(this.outcomes),
       ...(c.def.objective.kind === 'fold' ? { spill: last ? spillOf(last.red) : 0 } : {}),
       ...(c.def.levPoints === 'share' ? { levShare: { shots: this.outcomes, line: shareLine(c.def), span_mJ: this.startPe_mJ - this.floorPe_mJ } } : {}),
+      ...(c.def.build ? { built: { spent: placedCost(c.def), ...(c.def.build.budget !== undefined ? { budget: c.def.build.budget } : {}) } } : {}),
     };
   }
 

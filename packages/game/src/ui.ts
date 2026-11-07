@@ -248,6 +248,8 @@ export const GAME_CSS = `
   body.kg-touch .kg-build .key { display: none; }
   body.kg-touch .kg-build button { min-height: 40px; padding: 6px 10px; }
   @media (max-width: 640px) { .kg-build { top: auto; bottom: 12px; left: 12px; right: 12px; max-width: none; } body.kg-building #help { display: none; } }
+  .kg-help .h-build, .kg-help .h-mason, body.kg-building .kg-help .h-play, body.kg-building .kg-help .h-mason, body.kg-mason .kg-help .h-play { display: none; }
+  body.kg-building:not(.kg-touch) .kg-help .h-build, body.kg-mason:not(.kg-building):not(.kg-touch) .kg-help .h-mason { display: inline; }
   .kg-help button { font: inherit; padding: 0 2px; border: 0; background: none; color: #9fc3ff; cursor: pointer; }
   .kg-help button:hover { text-decoration: underline; }
   @keyframes kg-slam { from { opacity: 0; transform: scale(1.6); } to { opacity: 1; transform: scale(1); } }
@@ -292,10 +294,14 @@ ${DOCK_CSS}${LOT_CSS}${DUEL_CSS}${FUSE_CSS}`;
  * already shows the rack's keys, power (Q, E) and Bank (B), so they are left out. HELP_BUDGET caps it.
  */
 export const GAME_HELP = 'click: fire · drag: orbit · wheel: zoom · <kbd>U</kbd> undo · <kbd>R</kbd> restart · <kbd>?</kbd> keys';
+/** The hint line while building (C9's build phase, body.kg-building): what the pointer and keys do to pieces. */
+export const BUILD_HELP = 'click: place · drag: orbit · <kbd>Q</kbd>/<kbd>E</kbd> turn · <kbd>[</kbd>/<kbd>]</kbd> slide · <kbd>Z</kbd> undo · <kbd>Enter</kbd> play';
+/** The hint line on a Mason's Trial level out of the build phase (body.kg-mason): nothing fires; F tests, B builds. */
+export const MASON_HELP = 'drag: orbit · wheel: zoom · <kbd>F</kbd> test · <kbd>B</kbd> build · <kbd>R</kbd> restart · <kbd>?</kbd> keys';
 /** The most characters the hint line may show (its text, keys included): one line at the game page's width. */
 export const HELP_BUDGET = 80;
 /** Every control, for the game page's ? (and the viewer's help under Keystone rules, which has room). */
-export const GAME_KEYS = 'hover: aim · click: fire · drag: orbit (the launcher follows you) · right-drag: pan · wheel: zoom · <kbd>1</kbd>–<kbd>4</kbd> ammo · <kbd>Q</kbd>/<kbd>E</kbd> power · <kbd>W</kbd>/<kbd>S</kbd> launcher up and down · hold <kbd>Space</kbd>: fast · <kbd>K</kbd> skip to the settle · <kbd>F</kbd> fire the first shot (when offered) · <kbd>B</kbd> bank (outcome levels) · <kbd>T</kbd> freeze and resume (Bullet Time levels) · <kbd>U</kbd> or <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo the last shot · <kbd>R</kbd> restart · <kbd>N</kbd>/<kbd>P</kbd> level · <kbd>M</kbd> mute';
+export const GAME_KEYS = 'hover: aim · click: fire · drag: orbit (the launcher follows you) · right-drag: pan · wheel: zoom · <kbd>1</kbd>–<kbd>4</kbd> ammo · <kbd>Q</kbd>/<kbd>E</kbd> power · <kbd>W</kbd>/<kbd>S</kbd> launcher up and down · hold <kbd>Space</kbd>: fast · <kbd>K</kbd> skip to the settle · <kbd>F</kbd> fire the first shot (when offered) · <kbd>B</kbd> bank (outcome levels) · <kbd>T</kbd> freeze and resume (Bullet Time levels) · <kbd>U</kbd> or <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo the last shot · building: <kbd>Q</kbd>/<kbd>E</kbd> turn, <kbd>T</kbd> tip, <kbd>[</kbd>/<kbd>]</kbd> slide, <kbd>Z</kbd> undo, <kbd>Enter</kbd> play · <kbd>R</kbd> restart · <kbd>N</kbd>/<kbd>P</kbd> level · <kbd>M</kbd> mute';
 
 /** The help line on a touch screen (hud.ts, where the docked HUD shows it above its tray until the first shot). */
 export { TOUCH_HELP };
@@ -304,7 +310,11 @@ export { TOUCH_HELP };
  * The game page's help panel: the desktop hint line, or every key once `?` (or its button) opens them,
  * and the touch line on a touch screen (GAME_CSS picks by body.kg-touch).
  */
-export const helpHtml = (all: boolean) => `<span class="kg-desk">${all ? `${GAME_KEYS} <button data-act="keys">fewer</button>` : GAME_HELP.replace('<kbd>?</kbd> keys', '<button data-act="keys"><kbd>?</kbd> keys</button>')}</span><span class="kg-tch">${TOUCH_HELP}</span>`;
+const keysButton = (h: string) => h.replace('<kbd>?</kbd> keys', '<button data-act="keys"><kbd>?</kbd> keys</button>');
+export const helpHtml = (all: boolean) => (all
+  ? `<span class="kg-desk">${GAME_KEYS} <button data-act="keys">fewer</button></span>`
+  // The hint line by what the page is doing (GAME_CSS shows one): playing, building, or a Mason level between builds.
+  : `<span class="kg-desk h-play">${keysButton(GAME_HELP)}</span><span class="kg-desk h-build">${BUILD_HELP}</span><span class="kg-desk h-mason">${keysButton(MASON_HELP)}</span>`) + `<span class="kg-tch">${TOUCH_HELP}</span>`;
 
 /** The help panel as the page opens: the hint line (helpHtml(false)). */
 export const HELP_HTML = helpHtml(false);

@@ -616,7 +616,7 @@ export function masonThresholds(K: number, left: number, budget: number, stars: 
 
 /**
  * A Mason level's score from its judge (passes of K worlds) and the build's cost (build.ts placedCost): the two
- * lines, stars on their total (masonStars), the stamp ROBUST or WOBBLY, the shared worlds field and the budget.
+ * lines, stars on their total (masonStars), the stamp ROBUST (every world), STANDS (cleared) or WOBBLY, the shared worlds field and the budget.
  * No leverage, no gold and no heritage star loss: the heritage is the pass rule's.
  */
 export function masonScore(def: LevelDef, passes: number, K: number, spent: number): LevelScore {
