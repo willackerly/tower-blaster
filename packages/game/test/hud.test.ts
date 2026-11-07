@@ -288,6 +288,16 @@ describe('scores and leverage add up (PT9, PT16)', () => {
     expect(html).toContain('leverage ×0.13</div>');
     expect(html).not.toMatch(/Brute|Clean/);
   });
+  it('a hold level\'s card shows one metric, the share pulled: no "% down" beside the PULLED stamp (PT35)', () => {
+    // Agent playtest 2, U3: "4 shots · 4% down" sat beside "13% PULLED".
+    const facts = { met: true, collapse: 0.04, leverage: 0.2, comboMax: 0, hasCrowns: true, rackLeft: 20, heritageBroken: 0, outOfLot: 0, crownsDown: 0, skylineRatio: 1, pulled: 0.13, hold: true };
+    const held = resultHtml(U3, outcomeScore(facts, undefined), 4, false);
+    expect(held).toContain('13% PULLED');
+    expect(held).not.toMatch(/% down/i);
+    expect(held).toMatch(/<div class="sub">4 shots · leverage /);
+    // A collapse level keeps its share down on the sub line.
+    expect(resultHtml(B1, outcomeScore({ ...facts, hold: false, collapse: 0.5 }, undefined), 2, false)).toContain('2 shots · 50% down');
+  });
   it('a Chorus card shows the worlds cleared, with no tier and no gold badge (M9, chorus.ts chorusScore)', () => {
     const def = { ...L1, rack: ['cannonball' as const], chorus: { worlds: 64 } }; // a par level: the badge would show but for the worlds
     const j: ChorusJudgement = { step: 600, worlds: 64, cleared: Array.from({ length: 64 }, (_, k) => k < 49), heritage: Array(64).fill(0), crownsDown: Array(64).fill(3), moved: Array(64).fill(0.5), crowns: 3, need: 3, clears: 49, leaks: 0 };
