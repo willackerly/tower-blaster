@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { emptySnapshot } from '@tb/engine-api';
 import { compileLevel, D1, D2, Duel, duelLevel, DUELS, outcomeScore, type Shot } from '@tb/keystone';
 import { doorDuels, doorHtml, doorOnLoad, duelsOnDoor } from '../src/door.ts';
-import { duelHudHtml, duelResultHtml, handoffHtml, handoffText, keepTallyHtml, ptsText, scoreFloatHtml, sideOf } from '../src/duel-hud.ts';
+import { duelHudHtml, duelResultHtml, goalHtml, handoffHtml, handoffText, keepTallyHtml, ptsText, scoreFloatHtml, shotSummaryHtml, sideOf } from '../src/duel-hud.ts';
+import { DUEL_HELP, DUEL_KEYS, GAME_HELP, helpHtml } from '../src/ui.ts';
 import { hudHtml, rackChips } from '../src/hud.ts';
 import { goalsHudHtml, goalsMode, goalsResultHtml, sheetMode, sheetOpenAtLoad } from '../src/lot-hud.ts';
 import { duelOf, parseGameParams } from '../src/params.ts';
@@ -94,7 +95,9 @@ describe('siege table on the page', () => {
     // The table is named Two Keeps, as its ruleset: the mode line does not say it twice (PT5 copy).
     expect(block).toMatch(/Siege Table · two players/);
     expect(block).not.toMatch(/Two Keeps/);
-    expect(block).toMatch(/Gold to fire, from the west/);
+    expect(block).toMatch(/Gold to fire, from behind the gold keep/);
+    // The goal, in the marks the kings carry (PT34).
+    expect(block.replace(/<[^>]+>/g, '')).toMatch(/Topple Blue(&#39;|')s ⌖ king · protect your ⛨ king/);
     expect(block).toMatch(/duel-side on[^]*Gold ◂/);
     expect(block).toMatch(/4 shots left/);
     expect(block).toMatch(/Gold fires from its own side: turn the view/);
@@ -116,7 +119,8 @@ describe('siege table on the page', () => {
     const { c, s, d } = fresh();
     expect(duelResultHtml(d)).toBe('');
     d.fired(shotAt(360));
-    for (let i = 0; i < c.meta.n; i++) if (c.meta.part[i] === 3) s.pos[3 * i + 1] = 0.5 * c.frame.unit;
+    const blueKing = (D1.sides[1].king as { parts: number[] }).parts;
+    for (let i = 0; i < c.meta.n; i++) if (blueKing.includes(c.meta.part[i]!)) s.pos[3 * i + 1] = 0.5 * c.frame.unit;
     d.settled(s);
     // Blue's king is down, but Blue answers before the round (and the duel) ends: still no card.
     expect(duelResultHtml(d)).toBe('');
@@ -124,14 +128,16 @@ describe('siege table on the page', () => {
     expect(keepTallyHtml(d).replace(/<[^>]+>/g, '')).toMatch(/^\d+ blue blocks? down · Blue's king is down$/);
     expect(handoffHtml(d, false)).toMatch(/class="tally">Gold's shot: /);
     expect(handoffText(d, false)).toEqual({ head: "Blue's answer", foot: "Gold brought Blue's king down: bring Gold's down too for a draw. Pass the device to Blue · click to start" });
-    expect(duelHudHtml(d)).toMatch(/Blue answers, from the east/);
+    expect(duelHudHtml(d)).toMatch(/Blue answers, from behind the blue keep/);
     d.fired(shotAt(0));
     d.settled(s);
     const html = duelResultHtml(d);
     expect(html).toMatch(/Gold wins/);
-    expect(html).toMatch(/Blue&#39;s keep fell · 2 shots/);
+    expect(html).toMatch(/Blue&#39;s king fell · 2 shots/);
     expect(html).toMatch(/data-act="rematch"/);
     expect(html).toMatch(/data-act="again"/);
+    // PT34: the last shot is summarised on the result card, as every other is on the hand-over card.
+    expect(html.replace(/<[^>]+>/g, '')).toMatch(/Blue's last shot: 0 gold blocks down · Gold's king stands/);
   });
 
   it('warns when the aim is on your own keep; the hand-over card names whose turn; Heraldry floats each shot\'s points', () => {
@@ -145,12 +151,24 @@ describe('siege table on the page', () => {
     for (let i = 0; i < c2.meta.n; i++) s2.rot[4 * i + 3] = 1;
     expect(scoreFloatHtml(d2)).toBe('');
     d2.fired(shotAt(360));
-    for (let i = 0; i < c2.meta.n; i++) if (c2.meta.part[i] === 22 || (c2.meta.part[i] === 23 && i % 3 === 0)) s2.pos[3 * i + 1] = 0.5 * c2.frame.unit;
+    // The top course's six blue blocks, and every third of its gold ones.
+    const top = Math.max(...Array.from(c2.meta.home).filter((_, k) => k % 3 === 1)), gold = Array.from(d2.owned[0]).filter((i) => c2.meta.home[3 * i + 1] === top);
+    for (let i = 0; i < c2.meta.n; i++) if (c2.meta.home[3 * i + 1] === top && (d2.owned[1].includes(i) || gold.indexOf(i) % 3 === 0)) s2.pos[3 * i + 1] = 0.5 * c2.frame.unit;
     d2.settled(s2);
     const t = d2.lastShot!;
     expect(t).toMatchObject({ player: 0, rival: 6 });
     expect(scoreFloatHtml(d2).replace(/<[^>]+>/g, '')).toBe(`+6 blue −${t.own} gold = +${6 - t.own}`);
     expect(duelHudHtml(d2)).toMatch(new RegExp(`<b>${6 - t.own}</b> pts`));
+    // PT34: Heraldry's goal in the match, a side named by the face it fires at, and a line for a shot that dropped nothing.
+    const text = (h: string) => h.replace(/<[^>]+>/g, '');
+    expect(text(goalHtml(d2))).toBe('Knock down gold +1 · your blue −1');
+    expect(duelHudHtml(d2)).toMatch(/Blue to fire, at the gold face/);
+    d2.fired(shotAt(0));
+    d2.settled(s2);
+    expect(d2.lastShot).toMatchObject({ rival: 0, own: 0 });
+    expect(scoreFloatHtml(d2)).toBe('');
+    expect(text(shotSummaryHtml(d2))).toBe('nothing down = 0');
+    expect(text(handoffHtml(d2, false))).toMatch(/^Blue's shot: nothing down = 0/);
     expect(ptsText(1)).toBe('1 pt');
     expect(ptsText(-1)).toBe('-1 pt');
     expect(ptsText(0)).toBe('0 pts');
@@ -171,4 +189,12 @@ describe('siege table on the page', () => {
     expect(doorOnLoad('auto', q(''))).toBe(true);
   });
 
+
+  // PT34: no undo or restart offered in a hot-seat match; R is Rematch there.
+  it("a duel's hint line and key list offer no undo or restart", () => {
+    for (const t of [DUEL_HELP, DUEL_KEYS, helpHtml(false, true), helpHtml(true, true)]) expect(t).not.toMatch(/undo|restart|<kbd>U<\/kbd>/i);
+    expect(DUEL_KEYS).toMatch(/<kbd>R<\/kbd> rematch/);
+    expect(helpHtml(false)).toContain(GAME_HELP.slice(0, 20));
+    expect(helpHtml(false)).toMatch(/undo/);
+  });
 });

@@ -82,6 +82,7 @@ describe('the option registry', () => {
       ['rapid', 'on', { rapid: true }], ['rapid', 'off', { rapid: false }],
       ['duelview', 'on', { duelView: true }], ['duelview', 'off', { duelView: false }],
       ['handoff', 'on', { handoff: true }], ['handoff', 'off', { handoff: false }],
+      ['duellead', 'on', { duelLead: true }], ['duellead', 'off', { duelLead: false }],
       ['launch', 'high', { launch: 'high' }], ['launch', 'level', { launch: 'level' }],
       ['marks', 'on', { marks: true }], ['marks', 'off', { marks: false }],
       ['view', 'goals', { view: 'goals' }], ['view', 'classic', { view: 'classic' }],
