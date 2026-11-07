@@ -84,6 +84,9 @@ describe('the option registry', () => {
       ['handoff', 'on', { handoff: true }], ['handoff', 'off', { handoff: false }],
       ['launch', 'high', { launch: 'high' }], ['launch', 'level', { launch: 'level' }],
       ['marks', 'on', { marks: true }], ['marks', 'off', { marks: false }],
+      ['view', 'goals', { view: 'goals' }], ['view', 'classic', { view: 'classic' }],
+      ['impact', 'on', { impact: true }], ['impact', 'off', { impact: false }],
+      ['xray', 'off', { xray: 'off' }], ['xray', 'auto', { xray: 'auto' }], ['xray', 'on', { xray: 'on' }],
       ['layout', 'docked', { layout: 'docked' }], ['layout', 'classic', { layout: 'classic' }],
     ];
     for (const [act, arg, want] of cases) expect(doorChange(act, arg, now), `${act} ${arg}`).toEqual(want);

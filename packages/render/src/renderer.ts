@@ -12,13 +12,13 @@ import { CLASSIC_SPARKS, CTL, DEFAULT_DEBRIS, DEFAULT_SPARKS, Sparks } from './s
 import { BLAST_LIGHTS, CLASSIC_LIGHTS, DEFAULT_LIGHTS, Lights, MAX_BALLS, TRAIL } from './lights.ts';
 import { Blasts } from './blasts.ts';
 import { Fuses } from './fuses.ts';
-import { BlastReach } from './reach.ts';
+import { BlastReach, IMPACT_STYLE } from './reach.ts';
 import { aoFrame, aoGrid, AoVolume } from './ao.ts';
 import { FLOOR_VERTS, floorFan, floorPolygon } from './floor.ts';
 import { fitShadow, frustumCorners, pcssParams, type Arena, type ShadowFit, type ShadowFitState } from './shadowfit.ts';
 import { MARK_MASK, MARK_SHIFT } from './marks.ts';
 import { COAT_MASK, COAT_SHIFT } from './coats.ts';
-import { FX_WORDS, packFx, tintWord, toHalf, type Fx, type FxOptions, FX_ANCHOR, unpackFx } from './fx.ts';
+import { FX_KEEP, FX_WORDS, packFx, tintWord, toHalf, type Fx, type FxOptions, FX_ANCHOR, unpackFx, XRAY_MASK, XRAY_SHIFT } from './fx.ts';
 import { BLOCK_JITTER, CANDY_NIGHT, linearToOklab, REAL_DEFAULTS, srgbToLinear, type LookParams } from './look.ts';
 import { invert, lookAt, multiply, normalize, type Mat4, type V3 } from './math.ts';
 import { HDR_FORMAT, noStamp, Post, type Stamp } from './post.ts';
@@ -262,6 +262,18 @@ export class Renderer {
   readonly fuses: Fuses;
   /** The aim preview's blast-reach zone (reach.ts); Renderer.reach shows it. */
   readonly reachZone: BlastReach;
+  /** The aim preview's impact marker (reach.ts IMPACT_STYLE); Renderer.impact shows it. */
+  readonly impactMark: BlastReach;
+  /**
+   * Draw the objectives through what hides them (keystone.xray, docs/game/opening-view.md): boxes given an x-ray kind
+   * (setXray: 1 crown, 2 heritage, 3 a crown to hold, drawn as heritage: both are to keep) show, where something stands in front of them, as a faint fill with an outline
+   * in their colour (shaders.ts fsXray). Off by default; nothing is compiled until it is first drawn.
+   */
+  xray = false;
+  /** Whether any slot was given an x-ray kind (so a level without objectives draws nothing). */
+  private xrayAny = false;
+  private xrayPipes: { box: GPURenderPipeline; far: GPURenderPipeline } | null = null;
+  private readonly makeXray: () => { box: GPURenderPipeline; far: GPURenderPipeline };
   /** The last frame's camera-relative inverse view-projection and the look's sun luminance (blasts). */
   private lastInv: Mat4 = new Float32Array(16);
   private sunLuma = 1;
@@ -327,6 +339,7 @@ export class Renderer {
     this.blasts = new Blasts(device);
     this.fuses = new Fuses(device);
     this.reachZone = new BlastReach(device);
+    this.impactMark = new BlastReach(device, IMPACT_STYLE);
     this.ice = new IcePass(device);
     this.ao = new AoVolume(device, aoGrid(this.arena));
     this.aoSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
@@ -391,6 +404,19 @@ export class Renderer {
     });
     this.source = new SnapshotSource(device);
     this.facePipe = () => (this.faceCache ??= color('vsBox', 'fsFace', 'back', SEG.box, { format: 'r32uint', samples: 1 }));
+    // The x-ray (fsXray): over the opaque scene, only where the box lies behind it, blended, writing no depth.
+    const xray = (seg: number): GPURenderPipeline => device.createRenderPipeline({
+      layout: main, label: 'xray',
+      vertex: { module, entryPoint: 'vsBox', constants: { SEG: seg, FAN: sceneFan ? 1 : 0 } },
+      fragment: {
+        module, entryPoint: 'fsXray',
+        targets: [{ format: HDR_FORMAT, blend: { color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' }, alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' } } }],
+      },
+      primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'greater' },
+      multisample: { count: SAMPLES },
+    });
+    this.makeXray = () => (this.xrayPipes ??= { box: xray(SEG.box), far: xray(SEG.boxFar) });
     this.pipes = {
       box: color('vsBox', opts.flatBoxes ? 'fsBoxFlat' : 'fsBox', 'back', SEG.box),
       sphere: color('vsSphere', 'fsSphere', 'back', SEG.sphere),
@@ -562,13 +588,14 @@ export class Renderer {
       for (let k = 0; k < n; k++) {
         const o = (slot + k) * FX_WORDS;
         if (a && k < a.length) this.fx[o] = tintWord(a[k]!);
-        if (scales && k < scales.length) this.fx[o + 1] = (toHalf(1 - Math.min(1, Math.max(0, scales[k]!))) | (anchor ? FX_ANCHOR : 0) | (this.fx[o + 1]! & (MARK_MASK | COAT_MASK))) >>> 0;
+        if (scales && k < scales.length) this.fx[o + 1] = (toHalf(1 - Math.min(1, Math.max(0, scales[k]!))) | (anchor ? FX_ANCHOR : 0) | (this.fx[o + 1]! & FX_KEEP)) >>> 0;
       }
     } else {
-      const o = slot * FX_WORDS, mark = this.fx[o + 1]! & MARK_MASK, coat = this.fx[o + 1]! & COAT_MASK;
+      const o = slot * FX_WORDS, w1 = this.fx[o + 1]!;
       packFx(a, this.fx, o, this.lastTime);
-      if (a.mark === undefined) this.fx[o + 1] = (this.fx[o + 1]! | mark) >>> 0;
-      if (a.coat === undefined) this.fx[o + 1] = (this.fx[o + 1]! | coat) >>> 0;
+      // A mark and a coat stay unless named; the x-ray kind always (setXray's alone).
+      const keep = (a.mark === undefined ? MARK_MASK : 0) | (a.coat === undefined ? COAT_MASK : 0) | XRAY_MASK;
+      this.fx[o + 1] = (this.fx[o + 1]! | (w1 & keep)) >>> 0;
     }
     this.uploadFx(slot, n);
   }
@@ -584,6 +611,19 @@ export class Renderer {
     for (let k = 0; k < n; k++) {
       const o = (slot0 + k) * FX_WORDS + 1;
       this.fx[o] = ((this.fx[o]! & ~MARK_MASK) | ((marks[k]! & 3) << MARK_SHIFT)) >>> 0;
+    }
+    this.uploadFx(slot0, n);
+  }
+
+  /** Give slots slot0.. an x-ray kind each (0 none, 1 crown, 2 heritage, 3 a crown to hold: fx.ts XRAY bits), kept through setFx until clearFx. Drawn while `xray` is on. */
+  setXray(slot0: number, kinds: ArrayLike<number>): void {
+    const n = kinds.length;
+    if (!n) return;
+    this.growFx(slot0 + n);
+    for (let k = 0; k < n; k++) {
+      const o = (slot0 + k) * FX_WORDS + 1;
+      this.fx[o] = ((this.fx[o]! & ~XRAY_MASK) | ((kinds[k]! & 3) << XRAY_SHIFT)) >>> 0;
+      if (kinds[k]! & 3) this.xrayAny = true;
     }
     this.uploadFx(slot0, n);
   }
@@ -820,6 +860,7 @@ export class Renderer {
     );
     const drawFuses = !ids && this.toggles.blasts && this.fuses.prepare({ viewProj: cf.viewProj, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma, records: culler.records, bodies: this.source.bodies, capacity: Math.min(this.source.count, this.source.capacity) });
     const drawReach = !ids && this.reachZone.prepare({ eye: f.eye, viewProj: cf.viewProj, invViewProj: this.lastInv, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma });
+    const drawImpact = !ids && this.impactMark.prepare({ eye: f.eye, viewProj: cf.viewProj, invViewProj: this.lastInv, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma });
     const drawBlasts = blasts.length > 0 && this.blasts.prepare(blasts, { eye: f.eye, viewProj: cf.viewProj, invViewProj: this.lastInv, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma });
     if (!ids && effects) {
       if (this.toggles.sparks) this.sparks.encode(cp, this.source, { dt: dt * froude, groundY: f.groundY, dvScale: Math.sqrt(metres) });
@@ -897,6 +938,16 @@ export class Renderer {
       }
       p.setPipeline(pipes.sky);
       p.draw(3);
+      // The objectives through what hides them, over everything opaque (the bodies, the hall, the floor).
+      if (this.xray && this.xrayAny) {
+        const xp = this.makeXray();
+        p.setPipeline(xp.box);
+        p.drawIndirect(culler.args, 16 * SEG.box);
+        if (real) {
+          p.setPipeline(xp.far);
+          p.drawIndirect(culler.args, 16 * SEG.boxFar);
+        }
+      }
       if (split) {
         // The ice pass: the opaque scene is in `under` and in the samples; ice is depth-tested against it and writes depth.
         p.end();
@@ -933,6 +984,7 @@ export class Renderer {
       }
       // Last: the reach zone, fuses and blasts bind their own group 0.
       if (drawReach) this.reachZone.draw(p);
+      if (drawImpact) this.impactMark.draw(p);
       if (drawFuses) this.fuses.draw(p);
       if (drawBlasts) this.blasts.draw(p);
     }
@@ -1040,6 +1092,7 @@ export class Renderer {
     this.blasts.destroy();
     this.fuses.destroy();
     this.reachZone.destroy();
+    this.impactMark.destroy();
     this.ao.destroy();
     this.real?.atmosphere.destroy();
     this.real?.materials.destroy();
@@ -1114,6 +1167,14 @@ export class Renderer {
       particles: ctl[CTL.alive]!, hot: ctl[CTL.hot]!, spawned: ctl[CTL.total]!,
       flashes: await this.lights.litFlashes(this.lastTime), blasts: this.blasts.states(this.lastTime).length, fuses: this.fuses.slots.length,
     };
+  }
+
+  /**
+   * Mark where an aimed shot will hit (the aim preview, PT14): a reticle of radius on the face through point,
+   * square to its normal (reach.ts IMPACT_STYLE; seen through what stands in front, faintly); null hides it.
+   */
+  impact(point: readonly number[] | null, normal: readonly number[] = [0, 1, 0], radius = 0): void {
+    this.impactMark.set(point, radius, normal);
   }
 
   /** Sparks from a game event at pos, flying out around dir; strength is a speed change in m/s. */

@@ -17,9 +17,10 @@ describe('the sun from the opening view', () => {
       const e = eyeOf({ target: [0, 0, 0], yaw, pitch: 0.3, distance: 10, fovY: 0.9 } as never);
       expect(eyeAzimuth(yaw)).toBeCloseTo(azOf(e), 9);
     }
-    // L3 opens with the eye at azimuth 0, B2 at 144 (the sun 4 degrees off straight behind it before PT15).
+    // L3 opens with the eye at azimuth 0, B2's classic view at 144 (the sun 4 degrees off straight behind it before
+    // PT15; the goals view, PT1, opens B2 from another side).
     expect(eyeAzimuth(viewOf(compileLevel(L3), 1.6).yaw)).toBeCloseTo(0, 9);
-    expect(eyeAzimuth(viewOf(compileLevel(levelById('B2')), 1.6).yaw)).toBeCloseTo(144, 9);
+    expect(eyeAzimuth(viewOf(compileLevel(levelById('B2')), 1.6, undefined, undefined, undefined, { mode: 'classic' }).yaw)).toBeCloseTo(144, 9);
   });
 
   it('turns the real look\'s sun so its azimuth counts from the eye, keeping the elevation; L3 bit for bit', () => {

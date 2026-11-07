@@ -252,3 +252,30 @@ describe('marked cubes on the GPU', () => {
     }
   });
 });
+
+describe('x-ray of the objectives on the GPU (Renderer.xray, fsXray)', () => {
+  const frames = (look: 'hazy' | 'real' | 'candy') => gpu!.page.evaluate((l) => (window as unknown as { __marks: typeof Drivers }).__marks.xrayFrames({ look: l }), look);
+  for (const look of ['hazy', 'real', 'candy'] as const) {
+    it(`${look}: a hidden crown shows gold and a hidden heritage block teal, brighter at the edge; nothing else changes; the kinds survive setFx`, async (ctx) => {
+      if (!gpu) return ctx.skip();
+      const r = await frames(look);
+      expect(r.error).toBeNull();
+      expect(r.kinds).toEqual([1, 0, 2, 1, 0]);
+      const [crown, plain, heritage, inSight] = r.cubes as { centre: number[]; edge: number[]; restyled: number[] }[];
+      // Gold: red up more than blue; teal: green and blue up more than red.
+      expect(crown!.centre[0]! - crown!.centre[2]!, JSON.stringify(crown)).toBeGreaterThan(8);
+      expect(heritage!.centre[1]! - heritage!.centre[0]!, JSON.stringify(heritage)).toBeGreaterThan(8);
+      // The outline: the face's edge changes more than its middle.
+      const mag = (d: number[]) => Math.hypot(...d);
+      expect(mag(crown!.edge)).toBeGreaterThan(mag(crown!.centre));
+      expect(mag(heritage!.edge)).toBeGreaterThan(mag(heritage!.centre));
+      // A hidden plain cube, and a crown in plain sight (its own front faces are nearest: depth greater fails), stay as they were.
+      expect(Math.max(...plain!.centre.map(Math.abs))).toBeLessThanOrEqual(1);
+      expect(Math.max(...inSight!.centre.map(Math.abs), ...inSight!.edge.map(Math.abs))).toBeLessThanOrEqual(1);
+      expect(r.outsideChanged).toBe(0);
+      // A flash and a scale write keep the kinds: the crown still shows.
+      expect(crown!.restyled[0]! - crown!.restyled[2]!).toBeGreaterThan(8);
+    });
+  }
+});
+

@@ -3,7 +3,7 @@
 // camera-relative; the shading reads its colours and lights from the Frame
 // uniform (LookParams), so presets are data.
 import { defineStruct, FxState, RenderRecord, Spark, wgslStruct } from '@tb/schema';
-import { BAND_HALF, FX_BAND, FX_EMISSIVE_MAX, FX_MATTE, FX_PAINT, FX_WGSL } from './fx.ts';
+import { BAND_HALF, FX_BAND, FX_EMISSIVE_MAX, FX_MATTE, FX_PAINT, FX_WGSL, XRAY_EDGE, XRAY_FILL, XRAY_HIT, XRAY_SAVE, XRAY_SHIFT } from './fx.ts';
 import { BEVEL_WGSL, OKLAB_WGSL, WARM_AXIS } from './look.ts';
 import { MARKS_WGSL } from './marks.ts';
 import { ASLEEP_BLUE, LOOK_ASLEEP } from './looks.ts';
@@ -1351,6 +1351,24 @@ fn heatGlow(slot: u32, base: vec3f, edge: f32) -> vec3f {
   var c = shade(base, v.rel, n, aaAlpha(0.04, n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), 0.5, aoAt(aoView(), v.rel, n, v.rel, vec3f(0.0)));
   c += base * f32(col >> 24u) / 255.0 * ${FX_EMISSIVE_MAX}.0;
   return vec4f(fog(c, v.rel), 1.0);
+}
+
+// The objectives through what hides them (Renderer.xray, keystone.xray): a crown's or heritage box's faces where
+// something stands in front (drawn with depth compare greater, no depth write), as a faint fill with an outline along
+// the face's edges, in the objective's fixed colour (fx.ts XRAY bits: 1 crown, gold; 2 heritage, teal). The
+// outline: the larger of the face's two in-plane coordinates (|local| is 1 on the face's own axis) near 1, a pixel
+// and a half wide whatever the distance.
+@fragment fn fsXray(v: VOut) -> @location(0) vec4f {
+  let k = (fx[v.slot].y >> ${XRAY_SHIFT}u) & 3u;
+  let a = abs(v.local);
+  let mid = a.x + a.y + a.z - max(a.x, max(a.y, a.z)) - min(a.x, min(a.y, a.z));
+  let w = max(fwidth(mid), 1e-4);
+  let edge = smoothstep(1.0 - 2.5 * w, 1.0 - w, mid);
+  if (k == 0u) { discard; }
+  let col = select(vec3f(${XRAY_SAVE.map((x) => x.toFixed(3)).join(', ')}), vec3f(${XRAY_HIT.map((x) => x.toFixed(3)).join(', ')}), k == 1u);
+  let gain = dot(fr.sunColor, vec3f(0.2126, 0.7152, 0.0722));
+  let alpha = ${XRAY_FILL.toFixed(3)} + ${XRAY_EDGE.toFixed(3)} * edge;
+  return vec4f(col * gain * (1.0 + edge), alpha);
 }
 
 // Test target: body slot + 1 per pixel, 0 for background.
