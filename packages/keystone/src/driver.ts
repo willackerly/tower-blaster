@@ -3,6 +3,7 @@
 // share this loop, so a recorded session replays through the same code.
 import { type BodyDesc, type EngineCheckpoint, type InputEvent, type PhysicsEngine, type RemoveEvent, type Snapshot, type SpawnEvent, spawnedBodies } from '@tb/engine-api';
 import { Arsenal } from './arsenal.ts';
+import { chorusRound, chorusScore } from './chorus.ts';
 import { forkDeep } from './fork.ts';
 import { type IceCrack, IceBreaker } from './ice.ts';
 import { type CompiledLevel, physicsOf } from './level.ts';
@@ -424,7 +425,27 @@ export class Driver {
 
   /** End an outcome level now (Session.bank): the world is frozen while aiming, so the step is the observed one. */
   bank(): Feedback[] {
-    return this.session.bank(this.snapshotStep);
+    return this.rescore(this.session.bank(this.snapshotStep));
+  }
+
+  /** A Chorus round (chorus.ts): its settle waits while another world still moves (bounded by the settle cap, as a weapon's hold is). */
+  private chorusHold(): boolean {
+    return chorusRound(this.engine)?.settleHold() ?? false;
+  }
+
+  /**
+   * A Chorus round is scored on every world, not on world 0 (chorusScore): its levelEnd carries that score, cleared
+   * when it earns a star, and the session holds it too. Other rounds pass through unchanged.
+   */
+  private rescore(feedback: Feedback[]): Feedback[] {
+    const round = chorusRound(this.engine);
+    if (!round) return feedback;
+    return feedback.map((f) => {
+      if (f.t !== 'levelEnd') return f;
+      const score = chorusScore(this.level, round.judge(), f.score);
+      this.session.score = score;
+      return { ...f, cleared: score.stars > 0, score };
+    });
   }
 
   /**
@@ -437,10 +458,10 @@ export class Driver {
       await this.engine.step();
       this.snapshot = await this.engine.snapshot();
       this.snapshotStep = this.engine.stepIndex;
-      const out: Feedback[] = [], hold = this.arm(out) || this.quakeUntil > this.snapshotStep;
+      const out: Feedback[] = [], hold = this.arm(out) || this.quakeUntil > this.snapshotStep || this.chorusHold();
       this.breakIce(out);
       this.observed = this.observer.observe(this.ice.view(this.snapshot), this.engine.stepIndex, this.session.watchIdx);
-      return [...out, ...this.session.observe(this.observed, hold)];
+      return this.rescore([...out, ...this.session.observe(this.observed, hold)]);
     }
     if (!this.ahead) {
       await this.engine.step();
@@ -452,10 +473,10 @@ export class Driver {
     this.snapshot = await this.ahead;
     this.snapshotStep = n;
     this.ahead = this.read();
-    const out: Feedback[] = [], hold = this.arm(out) || this.quakeUntil > this.snapshotStep;
+    const out: Feedback[] = [], hold = this.arm(out) || this.quakeUntil > this.snapshotStep || this.chorusHold();
     this.breakIce(out);
     this.observed = this.observer.observe(this.ice.view(this.snapshot), n, this.session.watchIdx);
-    const feedback = [...out, ...this.session.observe(this.observed, hold)];
+    const feedback = this.rescore([...out, ...this.session.observe(this.observed, hold)]);
     if (this.session.phase !== 'running') await this.drain();
     return feedback;
   }
