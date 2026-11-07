@@ -121,4 +121,14 @@ describe('Wavefront levels on Rapier', () => {
       expect(r.session.score?.stars).toBe(0);
     } finally { e.dispose(); }
   });
+  // PT39 (agent playtest 2): no first visit started a wave. The teaching opener, fired untouched, pushes a starter
+  // from two thirds up: W3's middle street falls to its gap (3 towers), W4's to the avenue (3), W5's whole street (8).
+  it.for([['W3', 3], ['W4', 3], ['W5', 8]] as const)('%s: the teaching opener fired untouched starts the wave (%i towers)', { timeout: 120_000 }, async ([id, n]) => {
+    const def = { W3, W4, W5 }[id];
+    expect(def.solutions?.teach).toBe(true);
+    const r = await play(def, () => def.solutions!.opener!);
+    console.log(`${id} opener: ${r.order.length} towers in order ${r.order.join(' ')}, D ${r.collapse.toFixed(3)}`);
+    expect(r.order.length).toBe(n);
+    expect(r.order).toEqual([...r.order].sort((a, b) => a - b).slice(0, n));
+  });
 });

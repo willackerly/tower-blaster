@@ -97,6 +97,25 @@ A Lay level is a contraption (Rube Lab's `rubeLevel`, `keystone/src/lay-levels.t
 - **The player's own push (a marble at a starter domino, as T-W1).** Rejected for Lay: the aim adds a second, noisy skill to a level about the run. The plunger makes the push the same every time, so the stars read the run alone.
 - **Par as the authored solution's cost.** Rejected: the bot found W1's run at 11 dominoes against a hand-drawn 11 to 12, and W2's fork at 19 against 19 to 22. The bot's cheapest is the "best line found" rule that B2 and B3 use.
 
+## The first push (PT39)
+
+In agent playtest 2, no first visit to W3, W4 or W5 started a wave. A novice's shot at the middle of the screen hit a tower mid-face and split it, or missed W5's starter. Three changes, none of which moves the camera or the aim:
+
+- **The starters carry the crosshair.** `LevelDef.push` lists the starter slabs, and the game marks their bodies with the crosshair that marks crowns on other levels (`scene.ts` `markOf`). It is presentation only and not part of the hash.
+- **The HUD says what to do** until the first shot: "Hit a ⌖ marked slab high up to push it over and start the wave".
+- **A teaching opener.** `solutions.opener` with `teach: true` is offered on a first visit of any level of the series, not only the series' first (`door.ts` `openerFor`). The opener is a cannonball at a starter, two thirds up. It shows the push without solving the level:
+  - W3 pushes the middle street, which falls to its first gap (3 towers, D 0.10, short of 0.16).
+  - W4's push dies at the avenue (3 towers, D 0.27).
+  - W5's push fells the whole street, village and all (2 stars; the cut is the third).
+
+  `wave-levels.test.ts` fires each opener untouched on Rapier.
+
+**Alternatives considered:**
+
+- **Aim snapping to the starter (rejected, as before).** It hides the physics.
+- **Openers that clear (rejected).** On W3 the street is the puzzle, and on W4 the relay.
+- **Opening the view on the starter (rejected).** The opening view frames the objectives (PT1). The crosshair, the hint and the opener do the pointing.
+
 ## The levels
 
 | id | name | verb | the design | what the tests pin |

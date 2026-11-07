@@ -202,6 +202,9 @@ function parCollapseRow(min: number, s: HudState): string {
   return `<div class="row obj"><span>Down <b class="down${d > 0 ? '' : ' none'}">${pct(d)}</b></span><span class="${s.met ? 'ok' : ''}">bring ${pct(min)} down${s.met ? ' ✓' : ''}</span></div>`;
 }
 
+/** What to do first on a level with starter slabs (LevelDef.push: Wavefront, PT39), until the first shot. */
+export const PUSH_HINT = 'Hit a ⌖ marked slab high up to push it over and start the wave';
+
 /** Why a pull is refused on a Cut level while no shot runs (LevelDef.cut: pulls go in only while the wave runs). */
 export const CUT_HINT = 'Cut level: push first, then pull while the wave runs';
 
@@ -316,7 +319,7 @@ export function hudHtml(s: HudState, sheet = ''): string {
     ? `<div class="row"><span>Shot ${s.strokes}</span>${d.objective.kind === 'hold' ? `<span>Pulled <b class="down${(s.pulled ?? 0) > 0 ? '' : ' none'}">${pct(s.pulled ?? 0)}</b></span>` : `<span>Down <b class="down${(s.collapse ?? 0) > 0 ? '' : ' none'}">${pct(s.collapse ?? 0)}</b></span>`}</div>
     ${s.ticks?.length ? meterHtml(d.objective.kind === 'hold' ? s.pulled ?? 0 : s.collapse ?? 0, s.ticks, d.objective.kind === 'hold' ? 'pulled' : 'down') : ''}
     <div class="row obj"><span>Objective</span><span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span></div>`
-    : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>${d.objective.kind === 'collapse' ? parCollapseRow(d.objective.min, s) : ''}`;
+    : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>${d.objective.kind === 'collapse' ? parCollapseRow(d.objective.min, s) : ''}${d.push?.length && s.strokes === 0 ? `<div class="hint small push-hint">${PUSH_HINT}</div>` : ''}`;
   const fz = s.freezes;
   const freezes = fz ? `<div class="row"><span>Freezes</span><span class="${fz.left ? '' : 'spent'}">${fz.left} / ${fz.total}</span></div>` : '';
   const crowns = d.objective.kind === 'hold' ? keepRow(s.crownsDown, s.crownsTotal)

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { B1, B2, compileLevel, levelGoldLine, L1, L2, L3, L4, L5, levelScore, outcomeScore, RL1, type ShotOutcome, U3, W3, W5 } from '@tb/keystone';
 import { HOW_TO_PLAY } from '../src/door.ts';
 import { GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, TOUCH_HELP } from '../src/ui.ts';
-import { CUT_HINT, PULL_HINT, BANK_BUTTON, BANK_QUIET, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs } from '../src/hud.ts';
+import { CUT_HINT, PULL_HINT, PUSH_HINT, BANK_BUTTON, BANK_QUIET, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs } from '../src/hud.ts';
 
 describe('rack', () => {
   it('groups by kind in first-seen order with counts and keys', () => {
@@ -313,5 +313,9 @@ describe('Wavefront HUD', () => {
     expect(at(W5, { pullRefused: true })).toContain(CUT_HINT);
     expect(at(W5, { pullRefused: true, phase: 'running' })).toContain(PULL_HINT);
     expect(at(W3, { pullRefused: true })).toContain(PULL_HINT);
+  });
+  it('says what to push until the first shot (PT39)', () => {
+    expect(at(W3)).toContain(PUSH_HINT);
+    expect(at(W3, { strokes: 1 })).not.toContain(PUSH_HINT);
   });
 });

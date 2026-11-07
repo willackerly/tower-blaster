@@ -52,6 +52,11 @@ export function starter(x: number, z: number, side: 1 | -1): Part {
   return { kind: 'piece', at: [cx, STARTER.tall / 2, face + side * (STARTER.gap + STARTER.thick)], half: [PITCH / 2 + 0.5, STARTER.tall / 2, STARTER.thick], material: 'plaster' };
 }
 
+/** The part indices of the starter slabs among `parts` (LevelDef.push: what the game marks to push, PT39). */
+export function starterParts(parts: readonly Part[]): number[] {
+  return parts.flatMap((p, k) => (p.kind === 'piece' && p.half[1] === STARTER.tall / 2 && p.half[2] === STARTER.thick ? [k] : []));
+}
+
 /** A north-south street of towers at column x, corners at the cells `zs` (south to north), a starter at each end (or only the south one). */
 export function street(x: number, zs: readonly number[], ends: 'both' | 'south' = 'both'): Part[] {
   return [...zs.map((z) => tower(x, z)), starter(x, zs[0]!, -1), ...(ends === 'both' ? [starter(x, zs.at(-1)!, 1)] : [])];
@@ -85,9 +90,13 @@ export const W3_STREETS: readonly (readonly [number, readonly number[]])[] = [
  * 8 towers of the west street, 3 of the middle one, 4 of the east one from its north end. One stroke clears only on
  * the west street; two broken streets clear it in two.
  */
+const W3_PARTS = W3_STREETS.flatMap(([x, zs]) => street(x, zs));
 export const W3: LevelDef = {
   id: 'W3', name: 'Fall Line', version: 2, world: 7, scoring: 'par', par: 1, rack: ['cannonball', 'cannonball'],
-  parts: W3_STREETS.flatMap(([x, zs]) => street(x, zs)),
+  parts: W3_PARTS, push: starterParts(W3_PARTS),
+  // The teaching opener (PT39): the middle street's south starter, two thirds up (keystone-lab wave.ts starterShot).
+  // It starts a wave that dies at the first gap (3 towers): the push shown, the street left to choose.
+  solutions: { opener: { ammo: 'cannonball', az: 542, y: 24, yaw: -9, pitch: 340, power: 45 }, teach: true },
   lot: { min: [-4, -4], max: [29, 35] }, crownLine: 2, objective: { kind: 'collapse', min: 0.16 },
   launcher: { radius: 30, y: 6, dropY: 12 },
   ...WAVE_RULES,
@@ -103,7 +112,9 @@ export const W4_TOWERS: readonly number[] = [0, 4, 8, 20, 24, 28, 32];
  */
 export const W4: LevelDef = {
   id: 'W4', name: 'Avenue', version: 1, world: 7, scoring: 'par', par: 1, rack: ['cannonball', 'cannonball'],
-  parts: street(0, W4_TOWERS),
+  parts: street(0, W4_TOWERS), push: starterParts(street(0, W4_TOWERS)),
+  // The teaching opener (PT39): the south starter. The wave dies at the avenue (3 towers): the relay is the puzzle.
+  solutions: { opener: { ammo: 'cannonball', az: 540, y: 24, yaw: 0, pitch: 212, power: 30 }, teach: true },
   lot: { min: [-6, -4], max: [8, 37] }, crownLine: 2, objective: { kind: 'collapse', min: 0.4 },
   launcher: { radius: 26, y: 6, dropY: 12 },
   build: { budget: 16, pieces: ['relay'], brush: false },
@@ -123,12 +134,15 @@ export const W5_VILLAGE: readonly number[] = [6, 7];
  * in par. Pull nothing (or too late) and the village falls with them, a heritage star gone; pull the first relay
  * and the second slums stand, short of the collapse the level asks for.
  */
+const W5_PARTS: Part[] = [
+  ...W5_TOWERS.map((z, k) => (W5_VILLAGE.includes(k) ? { ...tower(0, z), courses: [{ k: 7, role: 'heritage' as const }] } : tower(0, z))),
+  starter(0, 0, -1), relaySlab(0, 8, 4.75), relaySlab(0, 28, 4.75),
+];
 export const W5: LevelDef = {
   id: 'W5', name: 'Firebreak', version: 1, world: 7, scoring: 'par', par: 2, rack: ['cannonball', 'pull'],
-  parts: [
-    ...W5_TOWERS.map((z, k) => (W5_VILLAGE.includes(k) ? { ...tower(0, z), courses: [{ k: 7, role: 'heritage' as const }] } : tower(0, z))),
-    starter(0, 0, -1), relaySlab(0, 8, 4.75), relaySlab(0, 28, 4.75),
-  ],
+  parts: W5_PARTS, push: starterParts(W5_PARTS),
+  // The teaching opener (PT39): the starter. Alone it fells the whole street, village and all: the cut is the puzzle.
+  solutions: { opener: { ammo: 'cannonball', az: 540, y: 24, yaw: 0, pitch: 212, power: 30 }, teach: true },
   lot: { min: [-6, -4], max: [8, 49] }, crownLine: 2, objective: { kind: 'collapse', min: 0.33 }, heritage: 'standing', cut: true,
   launcher: { radius: 32, y: 6, dropY: 12 },
   ...WAVE_RULES,

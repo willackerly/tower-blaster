@@ -198,9 +198,10 @@ export interface LevelDef {
   /**
    * Recorded solutions, replayed by tests. `opener` is the pre-aimed first shot a first visit is offered
    * (the door's Fire button), chosen to win the level alone (PT13: keystone-lab opener.ts); absent, the
-   * opener is the ace's or the par line's first shot.
+   * opener is the ace's or the par line's first shot. `teach`: the opener shows the level's mechanic without winning it
+   * (Wavefront's starter push, PT39), so a first visit is offered it on any level of its series, not only the first.
    */
-  solutions?: { par?: Shot[]; ace?: Shot[]; opener?: Shot };
+  solutions?: { par?: Shot[]; ace?: Shot[]; opener?: Shot; teach?: true };
   /** Default 'par': every level before the spectacle mode, scored as before. */
   scoring?: Scoring;
   /** Outcome levels: the cast star thresholds; absent, stars are uncast (only the objective's star). */
@@ -235,6 +236,11 @@ export interface LevelDef {
    * never before it starts (with rapid fire, or in Bullet Time when the player has rapid fire off). Part of the hash.
    */
   cut?: true;
+  /**
+   * Parts the player is meant to push first (Wavefront's starter slabs, PT39): the game marks their bodies with the
+   * crosshair and the HUD names them until the first shot. Presentation only, so not part of the hash.
+   */
+  push?: number[];
   /** The physics the level plays at (default Keystone's: PHYSICS_DEFAULTS). Part of the level hash, so stars cast at one setting never show at another. */
   physics?: PhysicsBlock;
   /** Aftershock (quake.ts): what the quake dial allows, for a level whose rack holds a quake. Part of the hash. */
@@ -555,7 +561,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   // Solutions don't change the scene, and the stars are cast against the hash (StarsDef.hash).
   // scoring 'par', autobank false, the scoring's settle rule and physics at its defaults are the defaults, so writing them out names the same level;
   // custom marks overrides the hash already holds.
-  const { solutions: _omit, stars: _stars, custom: _custom, ...geometry } = def;
+  const { solutions: _omit, stars: _stars, custom: _custom, push: _push, ...geometry } = def;
   if (geometry.scoring === 'par') delete geometry.scoring;
   if (geometry.autobank === false) delete geometry.autobank;
   // The settle rule a level plays by hashes as absent when it is the one its scoring used before v3 (par v1, outcome v2), so those
