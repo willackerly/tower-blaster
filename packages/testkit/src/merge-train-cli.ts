@@ -52,7 +52,7 @@ async function pick(): Promise<void> {
     const events = await all(`/issues/${n}/events`);
     const at = events.filter((e) => e.event === 'labeled' && e.label?.name === LABEL).at(-1)?.created_at ?? null;
     const files = (await all(`/pulls/${n}/files`)).map((f) => f.filename as string);
-    prs.push({ number: n, labelledAt: at, draft: pr.draft, sameRepo: pr.head.repo?.full_name === repo, files });
+    prs.push({ number: n, open: pr.state === 'open', labelledAt: at, draft: pr.draft, sameRepo: pr.head.repo?.full_name === repo, files });
   }
   const { order, refuse } = queue(prs);
   for (const r of refuse) await unlabel(r.number, `Merge train: not landing this, because ${r.reason}.`);

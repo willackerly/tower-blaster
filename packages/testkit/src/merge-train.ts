@@ -9,6 +9,8 @@ export const LABEL = 'merge-ready';
 
 export interface Candidate {
   number: number;
+  /** Still open. The issues listing can lag a merge by a moment, so a PR the last run just landed may still be listed. */
+  open: boolean;
   /** When the label was last added (ISO time); null when the events don't say, which sorts last. */
   labelledAt: string | null;
   draft: boolean;
@@ -20,11 +22,13 @@ export interface Candidate {
 
 export type Refusal = { number: number; reason: string };
 
-/** The PRs to try in order (labelled longest ago first, then lowest number), and the ones to refuse with why. */
+/** The PRs to try in order (labelled longest ago first, then lowest number), and the ones to refuse with why. A PR
+ * that is no longer open is skipped without a word. */
 export function queue(prs: readonly Candidate[]): { order: number[]; refuse: Refusal[] } {
   const refuse: Refusal[] = [], ok: Candidate[] = [];
   for (const p of prs) {
-    if (!p.sameRepo) refuse.push({ number: p.number, reason: 'its head is on a fork; the train only lands branches of this repository' });
+    if (!p.open) continue;
+    else if (!p.sameRepo) refuse.push({ number: p.number, reason: 'its head is on a fork; the train only lands branches of this repository' });
     else if (p.draft) refuse.push({ number: p.number, reason: 'it is a draft; mark it ready for review, then add the label again' });
     else if (p.files.some((f) => f.startsWith('.github/workflows/'))) refuse.push({ number: p.number, reason: 'it changes .github/workflows, which the train\'s GITHUB_TOKEN may not merge (no workflows permission); merge it by hand when its CI is green' });
     else ok.push(p);
