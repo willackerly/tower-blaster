@@ -1,4 +1,4 @@
-# Bullet Time and Undercut polish (agent playtest PT8, PT17)
+# Bullet Time and Undercut polish (agent playtest PT8, PT17, PT33)
 
 Agent playtest round 1 (`docs/game/agent-playtest-1.md`) found two readability problems in the
 Stage 1 modes (`undercut-bullet-time.md`):
@@ -131,6 +131,77 @@ player hovers a crown or heritage block. It turns red (`.bad`) only after the pl
 block and the pull is refused. It goes neutral again once the aim leaves that block.
 `pull-e2e.test.ts` reads the computed colour at each stage.
 
+## PT33: keep what you aim at
+
+Agent playtest round 2 (`agent-playtest-2.md`, row 15) found that the frozen grade worked against
+the player. It drained the gold crowns, so the thing to shoot at went as grey as everything else,
+and the aim preview vanished. The judges' frozen frames (L5 mid-shot, and B1 on desktop and phone)
+show no arc, impact marker or blast dome. Both fixes sit behind one option,
+`keystone.frozenaim` (`frozenaim.ts`, default on, panel "Bullet Time: what you aim at keeps its
+colour, and the aim stays up").
+
+**The keep mask.** The scene target is `rgba16float`. Its alpha used to be 1 everywhere, because
+the opaque passes write 1 and the clear is 1. Now it carries one more bit of meaning:
+
+- An objective box (any x-ray kind in fx word 1: crown, heritage, crown to hold) writes
+  `KEEP_ALPHA = 2`. So does a fired ball (painted or banded) and the aim's beads (`fsOverlay`).
+  All of this is in `fx.ts fxKeep` and `shaders.ts`.
+- The reach dome and the impact marker blend alpha additively (`reach.ts`), so they keep in
+  proportion to their own coverage.
+- Every other blended pass leaves the alpha alone.
+- The composite reads `keep = clamp(alpha - 1, 0, 1)` and scales the drain and the cool tint by
+  `1 - keep`. The ice rim stays on the whole frame, so the frame still says FROZEN.
+- MSAA resolve averages the alpha, which gives kept edges a soft blend for free.
+- `freezeFx.keep` (and `PostParams.keep`) switch it off. The Post uniform used a spare word, so it
+  stays 48 B.
+- Bombs are matte and unpainted, so they grade like any other block. Ice objectives (`fsIce`) are
+  not kept yet.
+
+**The held aim.** `updateAim` used to preview only under a pointer on the canvas. A freeze from
+the HUD button or the T key, or a finger lifted on a phone, left no pointer, and the opener's
+preview applies only before the first shot. While frozen, with the option on, the aim now holds on
+the first of these that exists:
+
+1. the last spot aimed at;
+2. the standing crown nearest the middle of the frame, projected with the view;
+3. the middle of the frame (B1's wall has no crowns).
+
+A shot fired from the held aim cuts in like any other. The held aim goes when the world resumes or
+the level loads. The camera never moves for it.
+
+**Alternatives weighed.**
+
+| Option | Verdict |
+|---|---|
+| A per-body mask pass, or reading the ID buffer every frame | Correct, but it costs a full pass or a readback in every look. The alpha channel was free and unused. |
+| Exempting gold and teal hues in the post pass | Rejected. Candy's sky and the coats use the same hues, so the exemption would leak, and a crown in shadow would miss it. |
+| An outline around objectives instead of their colour | Rejected. The brief's test is "crown pixels keep their gold hue". An outline also adds a draw, and stacks with the x-ray's edges. |
+| Encoding the keep as alpha below 1 | Rejected. The hall pass's alpha-to-coverage writes alpha under 1 for its own reasons. Above 1 is free, because nothing else writes there. |
+| Holding the aim on the camera target instead of a crown | Used only as the last fallback. A crown is what the player came to hit, and the target can sit between towers. |
+
+**Review.** An independent review of the frozen frames compared L5 and B1, each with the keep on
+and off. It found that the crown is "clearly the only warm block in a grey-blue scene" and that the
+dome and arc on B1 now read. It saw no halo and no hard edge at the keep's boundary. Two points are
+left as follow-ups:
+
+- On a crown, the peach impact marker sits over the carved crosshair with little contrast. This
+  is the PT14 marker's colour, and it shows the same way in normal aiming. A ring-only marker on
+  objectives belongs to that design.
+- B1's dome shows only part of its upper arc. The frame without the keep has the same gap, so the
+  cause is older than this change.
+
+**Tests.**
+
+- `frozen-aim-e2e.test.ts` (L1, candy) freezes a shot that no pointer has aimed. It checks that
+  the aim holds on a crown and that the marker and arc draw. It then measures the crowns' pixels
+  using the ID pass:
+  - Saturation is 0.653 graded against 0.656 plain.
+  - Hue is 38.9° against 38.8°, which is gold.
+  - The rest of the frame drops from 0.34 to 0.23.
+  - With `frozenaim` off, the crowns drain to 0.04.
+- `render.test.ts` "the keep (PT33)" checks the same thing at the renderer level. A crown box and
+  a fired ball keep their colour, plain boxes drain, and `keep: false` drains them all.
+
 ## Review
 
 An independent review of captured frames, judging the images only, led to three changes before
@@ -143,8 +214,7 @@ merging:
 
 Two suggestions are left as follow-ups:
 
-- **Keep targets and the ball in colour while the world is graded.** The post pass has no
-  per-body mask. Doing this would need the id buffer every frame, or a mask written by the scene
-  pass, so it costs a pass in every look.
+- **Keep targets and the ball in colour while the world is graded.** Done in PT33 (above), with a
+  mask in the scene target's alpha and no extra pass.
 - **Give hold-level crowns their own tint as well as the glyph.** That belongs to the look
   palettes, not to this change.

@@ -45,7 +45,7 @@ describe('big levels at rest on the GPU solver', () => {
     expect(r.maxMove).toBeLessThan(BOUND);
     expect(Math.abs(r.topDrop)).toBeLessThan(BOUND);
   }, 30 * MINUTES);
-  for (const { def } of sized.filter((l) => l.def.solutions?.ace && castStars(compileLevel(l.def)))) it.runIf(SHOWCASE)(`${def.id}'s showcase line meets the objective with no limit hit`, async (ctx) => {
+  for (const { def } of sized.filter((l) => l.def.solutions?.ace && castStars(compileLevel(l.def)))) it.runIf(SHOWCASE)(`${def.id}'s showcase line meets the objective, spares heritage, with no limit hit`, async (ctx) => {
     if (!player) return ctx.skip();
     const line = def.solutions!.ace!, [p] = await player.play(def, [line]);
     const end = p!.samples.at(-1)!, stars = def.stars!;
@@ -54,6 +54,9 @@ describe('big levels at rest on the GPU solver', () => {
     expect(p!.complete).toBe(true);
     expect(p!.samples.length).toBe(line.length);
     expect(end.met).toBe(true);
+    // PT28: the showcase spares the heritage (B2's cathedral). Round 2's "line cracks 3" was the line replayed on
+    // Rapier (agent-playtest-2.md: the big levels ran there); on the GPU solver the line was cast on, it must not.
+    expect(end.heritage).toBe(0);
   }, 30 * MINUTES);
   it('every big level is either checked here or named as too big for this adapter', () => {
     const skipped = sized.filter((l) => l.n > BIG_REST_MAX).map((l) => `${l.def.id} (${l.n})`);

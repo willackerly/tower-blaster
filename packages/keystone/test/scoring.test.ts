@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { emptySnapshot, type Snapshot } from '@tb/engine-api';
 import {
-  compileLevel, CpuObserver, D1, DEFAULT_GOLD, duelLevel, type Feedback, floorTotal, freezesUsed, levelGoldLine, L1, L2, L3, L4, L5, type LevelDef, levelScore, levelTier,
+  B2, castStars, compileLevel, CpuObserver, HERITAGE_LOST, D1, DEFAULT_GOLD, duelLevel, type Feedback, floorTotal, freezesUsed, levelGoldLine, L1, L2, L3, L4, L5, type LevelDef, levelScore, levelTier,
   leverage, outcomeScore, type OutcomeFacts, parWithFreezes, refereedScore, roundLeverage, SETTLE_MIN, SETTLE_QUIET, Session, type Shot, type ShotOutcome, tier, tierAt, TIER_LINE,
 } from '@tb/keystone';
 
@@ -187,7 +187,7 @@ describe('PT16: scores that add up', () => {
     expect(levelScore(L4, [shot({ ke: 1000 })], true, 40).lines.find((l) => l.label === 'Strokes')!.value).toBe(3000);
   });
 
-  it('heritage shows the stars it cost: par one star; outcome the third, only where the round reached it', () => {
+  it('heritage shows the stars it cost: par one star; outcome one at every tier (PT28)', () => {
     const inPar = levelScore(def, [shot({ dPE_mJ: 1e6, heritageNew: 2 })], true, 2);
     expect([inPar.stars, inPar.heritageStarsLost]).toEqual([2, 1]);
     // Three over par is one star with or without heritage: nothing lost to it, no note.
@@ -196,7 +196,9 @@ describe('PT16: scores that add up', () => {
     expect(levelScore(def, [shot({ dPE_mJ: 1e6 })], true, 2).heritageStarsLost).toBeUndefined();
     const cast = { metric: 'collapse' as const, t2: 0.5, t3: 0.8 };
     expect(outcomeScore(facts({ collapse: 0.9, heritageBroken: 1 }), cast)).toMatchObject({ stars: 2, heritageStarsLost: 1 });
-    expect(outcomeScore(facts({ collapse: 0.6, heritageBroken: 1 }), cast).heritageStarsLost).toBeUndefined();
+    expect(outcomeScore(facts({ collapse: 0.6, heritageBroken: 1 }), cast)).toMatchObject({ stars: 1, heritageStarsLost: 1 });
+    expect(outcomeScore(facts({ collapse: 0.3, heritageBroken: 1 }), cast)).toMatchObject({ stars: 0, heritageStarsLost: 1 });
+    expect(outcomeScore(facts({ met: false, heritageBroken: 1 }), cast).heritageStarsLost).toBeUndefined();
     expect(outcomeScore(facts({ collapse: 0.9 }), cast).heritageStarsLost).toBeUndefined();
   });
 
@@ -227,5 +229,37 @@ describe('Bullet Time par (PT8): par plus the freezes used', () => {
     expect([plain.stamp, plain.stars, plain.freezes]).toEqual(['BOGEY', 2, undefined]);
     expect(freezesUsed(def, shots)).toBe(0);
     expect(bt.lines.find((l) => l.label === 'Strokes')!.value).toBe(3000);
+  });
+});
+
+describe('PT28: heritage matters on the big levels', () => {
+  // Agent playtest round 2 (docs/game/agent-playtest-2.md, B2-novice-desktop-07-result): crowns down, 18% of
+  // the town down, 25 of the cathedral's 32 cubes broken (-12,500, total floored to 0), and yet a gold
+  // "18% DOWN" stamp with one star. B2's own cast thresholds (stars.json, score metric: T2 770, T3 3,000).
+  const cast = castStars(compileLevel(B2))!;
+  const b2 = (o: Partial<OutcomeFacts>): OutcomeFacts => facts({ collapse: 0.18, leverage: 2, hasCrowns: true, comboMax: 4, crownsDown: 4, ...o });
+  it('B2 has its cast stars, on the score metric', () => {
+    expect(cast).toMatchObject({ metric: 'score', t2: 770, t3: 3000 });
+  });
+  it('the novice round (crowns down, 25 heritage broken) gets no star and no gold stamp', () => {
+    const s = outcomeScore(b2({ heritageBroken: 25 }), cast, cast.metric);
+    expect(s.total).toBe(0);
+    expect(s).toMatchObject({ stars: 0, stamp: HERITAGE_LOST, heritageStarsLost: 1 });
+    // The same round with the cathedral whole keeps its star and its gold stamp.
+    const whole = outcomeScore(b2({ heritageBroken: 0 }), cast, cast.metric);
+    expect([whole.stars, whole.stamp]).toEqual([2, '18% DOWN']);
+  });
+  it('one cracked cube costs a star at every tier and takes the gold stamp', () => {
+    for (const collapse of [0.18, 0.5, 0.9]) {
+      const whole = outcomeScore(b2({ collapse, rackLeft: 1 }), cast, cast.metric);
+      const cracked = outcomeScore(b2({ collapse, rackLeft: 1, heritageBroken: 1 }), cast, cast.metric);
+      expect(whole.stars).toBeGreaterThan(0);
+      expect(cracked.stars).toBe(whole.stars - 1);
+      expect(cracked.stamp).toBe(HERITAGE_LOST);
+      expect(whole.stamp).not.toBe(HERITAGE_LOST);
+    }
+  });
+  it('heritage never decides a round that missed its objective: INCOMPLETE stays', () => {
+    expect(outcomeScore(b2({ met: false, heritageBroken: 3 }), cast, cast.metric)).toMatchObject({ stars: 0, stamp: 'INCOMPLETE' });
   });
 });

@@ -151,7 +151,7 @@ const lines = (f: OutcomeFacts) => Object.fromEntries(outcomeTally(f).map((l) =>
 
 describe('tally', () => {
   it('scores each line by its weight', () => {
-    expect(OUTCOME_WEIGHTS).toEqual({ objective: 1000, collapse: 3000, leverage: 300, combo: 50, comboCap: 12, rackLeft: 400, pulled: 3000, condemned: 500, heritage: -500, footprint: -3000, spill: -3000 });
+    expect(OUTCOME_WEIGHTS).toEqual({ objective: 1000, collapse: 3000, leverage: 300, combo: 50, comboCap: 12, rackLeft: 400, pulled: 3000, condemned: 500, heritage: -500, footprint: -3000, spill: -3000, budgetLeft: 10 });
     expect(outcomeTally(facts())).toEqual([
       { label: 'Objective', value: 1000 },
       { label: 'Collapse', value: 1500 },
@@ -183,6 +183,11 @@ describe('stars', () => {
     ['at t2', cast, 'collapse', 0.4, true, 0, { stars: 2, beatBot: false, uncast: false }],
     ['at t3', cast, 'collapse', 0.6, true, 0, { stars: 3, beatBot: false, uncast: false }],
     ['at t3 with heritage broken', cast, 'collapse', 0.6, true, 1, { stars: 2, beatBot: false, uncast: false }],
+    // PT28: heritage costs a star at every tier, not only the third, down to none.
+    ['at t2 with heritage broken', cast, 'collapse', 0.4, true, 1, { stars: 1, beatBot: false, uncast: false }],
+    ['met under t2 with heritage broken: no star', cast, 'collapse', 0.3, true, 25, { stars: 0, beatBot: false, uncast: false }],
+    ['uncast with heritage broken: no star', undefined, 'collapse', 0.9, true, 1, { stars: 0, beatBot: false, uncast: true }],
+    ['past the best with heritage broken', cast, 'collapse', 0.9, true, 1, { stars: 2, beatBot: true, uncast: false }],
     ['at the best is not beating it', cast, 'collapse', 0.8, true, 0, { stars: 3, beatBot: false, uncast: false }],
     ['past the best', cast, 'collapse', 0.8 + 1e-12, true, 0, { stars: 3, beatBot: true, uncast: false }],
   ] as const)('%s', (_name, k, metric, value, met, broken, want) => {
@@ -205,10 +210,14 @@ describe('stars', () => {
     expect(s.total).toBe(1000 + 1500 + 600 + 300 + 800 - 375);
     expect(s).toMatchObject({ stars: 2, stamp: '50% DOWN', leverage: 3, outcome: { collapse: 0.5, metric: 'collapse', value: 0.5, beatBot: false, uncast: false } });
     expect(outcomeScore(facts({ met: false }), cast)).toMatchObject({ stars: 0, stamp: 'INCOMPLETE' });
-    expect(outcomeScore(facts({ collapse: 0.9 }), cast)).toMatchObject({ stamp: 'BEAT THE BOT' });
+    expect(outcomeScore(facts({ collapse: 0.9, heritageBroken: 0 }), cast)).toMatchObject({ stamp: 'BEAT THE BOT' });
+    // PT28: met with heritage broken is never a gold stamp, even past the bot.
+    expect(outcomeScore(facts({ collapse: 0.9 }), cast)).toMatchObject({ stamp: 'HERITAGE LOST', outcome: { beatBot: true } });
+    expect(outcomeScore(facts({ met: false }), cast).stamp).toBe('INCOMPLETE');
     const byScore = outcomeScore(facts(), { metric: 'score', t2: 3000, t3: 3325 });
     expect(byScore).toMatchObject({ total: 3325, stars: 2, outcome: { metric: 'score', value: 3325 } }); // heritage broken: no third star
-    expect(outcomeScore(facts(), undefined)).toMatchObject({ stars: 1, outcome: { metric: 'collapse', uncast: true } });
+    expect(outcomeScore(facts({ heritageBroken: 0 }), undefined)).toMatchObject({ stars: 1, outcome: { metric: 'collapse', uncast: true } });
+    expect(outcomeScore(facts(), undefined)).toMatchObject({ stars: 0, stamp: 'HERITAGE LOST', heritageStarsLost: 1 }); // PT28
   });
 });
 

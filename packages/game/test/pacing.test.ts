@@ -23,7 +23,7 @@ const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 describe('pace feel', () => {
   it('juice and every camera motion are off unless the URL asks for them; the valve and the tail skip are on; every frame is drawn', () => {
     expect(paceFeel(new URLSearchParams(''))).toEqual(DEFAULT_FEEL);
-    expect(DEFAULT_FEEL).toEqual({ hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, handoff: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', fireSide: 'behind', balls: 'painted', marks: true, view: 'goals', impact: true, openAim: true, xray: 'off', fx: 'damage', spent: true, sleepTint: false, sun: 'view', coats: true, pullAnim: true, frozenLook: true });
+    expect(DEFAULT_FEEL).toEqual({ hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, handoff: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', fireSide: 'behind', balls: 'painted', marks: true, view: 'goals', impact: true, openAim: true, xray: 'off', fx: 'damage', spent: true, sleepTint: false, sun: 'view', coats: true, pullAnim: true, frozenLook: true, frozenAim: true });
     // Impact effects follow the damage by default (PT2); keystone.fx=classic restores the old look. Spent ammo fades (PT19), off by keystone.spent=0.
     expect(paceFeel(new URLSearchParams('?keystone.fx=classic'))).toEqual({ ...DEFAULT_FEEL, fx: 'classic' });
     expect(paceFeel(new URLSearchParams('?keystone.spent=0'))).toEqual({ ...DEFAULT_FEEL, spent: false });
@@ -54,6 +54,7 @@ describe('pace feel', () => {
     // Pulls drawn and Bullet Time's frozen look are on by default (playtest PT17, PT8), each off by its key, and write back.
     expect(paceFeel(new URLSearchParams('?keystone.pullanim=0'))).toEqual({ ...DEFAULT_FEEL, pullAnim: false });
     expect(paceFeel(new URLSearchParams('?keystone.frozenlook=0'))).toEqual({ ...DEFAULT_FEEL, frozenLook: false });
+    expect(paceFeel(new URLSearchParams('?keystone.frozenaim=0'))).toEqual({ ...DEFAULT_FEEL, frozenAim: false });
     expect(() => paceFeel(new URLSearchParams('?keystone.frozenlook=off'))).toThrow(/keystone.frozenlook must be 0 or 1: off/);
     const off = new URLSearchParams();
     writePaceFeel({ ...DEFAULT_FEEL, pullAnim: false, frozenLook: false }, off);

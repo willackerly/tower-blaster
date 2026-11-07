@@ -93,7 +93,8 @@ export type Objective =
   | { kind: 'trial'; footprintMax?: number }
   /**
    * Aftershock (docs/game/aftershock.md): every crown down (the condemned towers' tops) and no heritage broken (the
-   * protected towers' tops, judged standing at the settle: LevelDef.heritage 'standing'). Outcome levels only.
+   * protected towers' tops, judged standing at the settle: LevelDef.heritage 'standing'). Outcome levels only. A
+   * retrofit (a level with a build block, M7b) may have no crowns: brace the heritage, then the quake comes.
    */
   | { kind: 'quake'; footprintMax?: number }
   /**
@@ -119,12 +120,13 @@ export type Scoring = (typeof SCORINGS)[number];
  * (crowns down), skyline (end skyline over start skyline, lower is better), score (the tally total)
  * pulled (the share of the structure's mass pulled, Undercut; higher is better), fold (Fuse & Fold:
  * collapse x (1 - spill), what came down discounted by the share of the building that left its lot; higher is better)
- * or energy (the joules fired, Aftershock's quake: lower is better, and an input, so it reads the same on every engine).
+ * energy (the joules fired, Aftershock's quake: lower is better, and an input, so it reads the same on every engine)
+ * or built (what the player placed, catalogue cost: build.ts placedCost; an Aftershock retrofit's bracing, lower is better).
  */
-export const STAR_METRICS = ['collapse', 'crowns', 'skyline', 'score', 'pulled', 'fold', 'energy'] as const;
+export const STAR_METRICS = ['collapse', 'crowns', 'skyline', 'score', 'pulled', 'fold', 'energy', 'built'] as const;
 export type StarMetric = (typeof STAR_METRICS)[number];
-/** Lower is better on this metric (skyline and energy); higher for the rest. */
-export const lowerIsBetter = (metric: StarMetric): boolean => metric === 'skyline' || metric === 'energy';
+/** Lower is better on this metric (skyline, energy and built); higher for the rest. */
+export const lowerIsBetter = (metric: StarMetric): boolean => metric === 'skyline' || metric === 'energy' || metric === 'built';
 
 /**
  * Thresholds cast by the bot for an outcome level (spectacle-mode.md, section 6): two stars at t2,
@@ -134,8 +136,13 @@ export const lowerIsBetter = (metric: StarMetric): boolean => metric === 'skylin
 /**
  * A level's star thresholds, as a cast set them. `waived` names cast gates that failed and were accepted as a
  * documented call (keystone-lab `--waive`; the level's notes say why), so the stars file says which stars rest on one.
+ * `agrees` names engines other than `engine` whose cloud of the cast's best line passed the cross-device gate
+ * (keystone-lab `--cloud-of`, cloudCheck): the stars hold there too, so the game records them there (game onEngine).
  */
-export interface StarsDef { metric: StarMetric; t2: number; t3: number; best?: number; castOn?: string; engine?: string; hash?: string; n?: number; seed?: number; waived?: string[] }
+export interface StarsDef { metric: StarMetric; t2: number; t3: number; best?: number; castOn?: string; engine?: string; agrees?: string[]; hash?: string; n?: number; seed?: number; waived?: string[] }
+
+/** Whether stars `s` hold on engine `kind`: cast there, or checked there by the cross-device gate (StarsDef.agrees). */
+export const starsHoldOn = (s: StarsDef, kind: string): boolean => s.engine === undefined || s.engine === kind || (s.agrees ?? []).includes(kind);
 
 /**
  * x as a StarsDef, or throws naming `where` and the field at fault: the check a stars file (big-levels.ts
@@ -150,7 +157,8 @@ export function checkStars(x: unknown, where = 'stars'): StarsDef {
   for (const k of ['best', 'n', 'seed']) if (o[k] !== undefined && (typeof o[k] !== 'number' || !Number.isFinite(o[k]))) throw new Error(`${where}.${k} must be a finite number when given: ${String(o[k])}`);
   for (const k of ['castOn', 'engine', 'hash']) if (o[k] !== undefined && typeof o[k] !== 'string') throw new Error(`${where}.${k} must be a string when given: ${String(o[k])}`);
   if (o.waived !== undefined && (!Array.isArray(o.waived) || !o.waived.length || !o.waived.every((g) => typeof g === 'string' && g.length > 0))) throw new Error(`${where}.waived must be a non-empty list of gate names when given: ${JSON.stringify(o.waived)}`);
-  const known = new Set(['metric', 't2', 't3', 'best', 'castOn', 'engine', 'hash', 'n', 'seed', 'waived']);
+  if (o.agrees !== undefined && (!Array.isArray(o.agrees) || !o.agrees.length || !o.agrees.every((g) => typeof g === 'string' && g.length > 0 && g !== o.engine))) throw new Error(`${where}.agrees must be a non-empty list of engines other than its own when given: ${JSON.stringify(o.agrees)}`);
+  const known = new Set(['metric', 't2', 't3', 'best', 'castOn', 'engine', 'agrees', 'hash', 'n', 'seed', 'waived']);
   for (const k of Object.keys(o)) if (!known.has(k)) throw new Error(`${where}: unknown field ${k}`);
   const lower = lowerIsBetter(o.metric as StarMetric), t2 = o.t2 as number, t3 = o.t3 as number;
   if (lower ? t3 > t2 : t3 < t2) throw new Error(`${where}: t3 (${t3}) is easier than t2 (${t2}) for ${String(o.metric)}`);
@@ -198,9 +206,10 @@ export interface LevelDef {
   /**
    * Recorded solutions, replayed by tests. `opener` is the pre-aimed first shot a first visit is offered
    * (the door's Fire button), chosen to win the level alone (PT13: keystone-lab opener.ts); absent, the
-   * opener is the ace's or the par line's first shot.
+   * opener is the ace's or the par line's first shot. `teach`: the opener shows the level's mechanic without winning it
+   * (Wavefront's starter push, PT39), so a first visit is offered it on any level of its series, not only the first.
    */
-  solutions?: { par?: Shot[]; ace?: Shot[]; opener?: Shot };
+  solutions?: { par?: Shot[]; ace?: Shot[]; opener?: Shot; teach?: true };
   /** Default 'par': every level before the spectacle mode, scored as before. */
   scoring?: Scoring;
   /** Outcome levels: the cast star thresholds; absent, stars are uncast (only the objective's star). */
@@ -235,6 +244,11 @@ export interface LevelDef {
    * never before it starts (with rapid fire, or in Bullet Time when the player has rapid fire off). Part of the hash.
    */
   cut?: true;
+  /**
+   * Parts the player is meant to push first (Wavefront's starter slabs, PT39): the game marks their bodies with the
+   * crosshair and the HUD names them until the first shot. Presentation only, so not part of the hash.
+   */
+  push?: number[];
   /** The physics the level plays at (default Keystone's: PHYSICS_DEFAULTS). Part of the level hash, so stars cast at one setting never show at another. */
   physics?: PhysicsBlock;
   /** Aftershock (quake.ts): what the quake dial allows, for a level whose rack holds a quake. Part of the hash. */
@@ -368,11 +382,12 @@ function physicsKey(p: PhysicsBlock | undefined): PhysicsBlock | undefined {
 
 /**
  * The level's cast stars if they apply to this compiled level: none on a custom run, and none when the
- * cast recorded another level hash (the level, its physics or its rules changed since).
+ * cast recorded another level hash (the level, its physics or its rules changed since). A build level's stars are
+ * cast against the level as authored (baseHash): what the player built is the play they score.
  */
 export function castStars(c: CompiledLevel): StarsDef | undefined {
   const s = c.def.stars;
-  if (!s || c.def.custom || (s.hash !== undefined && s.hash !== c.hash)) return undefined;
+  if (!s || c.def.custom || (s.hash !== undefined && s.hash !== c.baseHash)) return undefined;
   return s;
 }
 
@@ -446,6 +461,12 @@ export interface CompiledLevel {
   /** Structure height in metres (top of the highest body). */
   height: number;
   hash: string;
+  /**
+   * The level as authored, without what the player placed (parts marked placed), on a level with a build block: the
+   * hash its stars are cast against and its progress is kept under, so a build is a play of the level and not a new
+   * level (the build itself is in `hash`). Equal to `hash` on every other level.
+   */
+  baseHash: string;
 }
 
 export const unitOf = (d: LevelDef) => d.unit ?? DEFAULT_UNIT;
@@ -555,7 +576,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   // Solutions don't change the scene, and the stars are cast against the hash (StarsDef.hash).
   // scoring 'par', autobank false, the scoring's settle rule and physics at its defaults are the defaults, so writing them out names the same level;
   // custom marks overrides the hash already holds.
-  const { solutions: _omit, stars: _stars, custom: _custom, ...geometry } = def;
+  const { solutions: _omit, stars: _stars, custom: _custom, push: _push, ...geometry } = def;
   if (geometry.scoring === 'par') delete geometry.scoring;
   if (geometry.autobank === false) delete geometry.autobank;
   // The settle rule a level plays by hashes as absent when it is the one its scoring used before v3 (par v1, outcome v2), so those
@@ -567,6 +588,11 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   // Ice rules join the hash written out whenever the level has ice (as a defaulted weapon does), so retuning
   // ICE_DEFAULTS drops stars cast under the old ones; levels without ice hash as before, whatever physics.ice says.
   if (mats.includes(materialId('ice'))) geometry.physics = { ...geometry.physics, ice: iceOf(def.physics?.ice) };
+  // Aftershock's keys go last in one fixed order, whatever order a file, a URL or a builder wrote them in (the hash is
+  // the geometry's JSON, so key order counts), and the quake rules' fields in theirs.
+  delete geometry.quake; delete geometry.heritage;
+  if (def.quake !== undefined) geometry.quake = quakeKey(def.quake);
+  if (def.heritage !== undefined) geometry.heritage = def.heritage;
   geometry.parts = geometry.parts.map((pt) => (pt.kind === 'scenario' ? scenarioKey(pt) : pt.kind === 'piece' || pt.kind === 'run' || pt.kind === 'ball' ? placedKey(pt) : pt));
   // A w- item the level gives no weapon of its own plays the built-in (rack.ts weaponOf): the built-in joins the
   // hash as if written out, so retuning one drops stars cast with it. Levels whose rack has none hash as before.
@@ -587,11 +613,23 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   // A scenario part names its bodies by (id, params, seed), and a run by its path: the bodies themselves join the hash, so a
   // change to the scenario's builder or to the brush's spacing (stroke.ts) is a different level too. Levels without either hash as before.
   const built = def.parts.some((pt) => pt.kind === 'scenario' || pt.kind === 'run') ? `|${bodiesDigest(bodies)}` : '';
-  const c: CompiledLevel = { def, scene, meta, frame, arms: {}, lot, height, hash: hashString(JSON.stringify(geometry) + built) };
+  const hash = hashString(JSON.stringify(geometry) + built);
+  // A build level's own hash: the same level with only the authored parts. (A placed part outside a build level, a
+  // file's, is authored geometry like any other.)
+  const isPlaced = (pt: Part) => 'placed' in pt && pt.placed === true;
+  const baseHash = def.build && def.parts.some(isPlaced) ? compileLevel({ ...def, parts: def.parts.filter((pt) => !isPlaced(pt)) }).hash : hash;
+  const c: CompiledLevel = { def, scene, meta, frame, arms: {}, lot, height, hash, baseHash };
   const arms = rackArms(c);
   c.arms = arms;
   frame.shells = Object.fromEntries(Object.entries(arms).map(([k, a]) => [k, a.shell]));
   return c;
+}
+
+/** Quake rules as the hash sees them: QuakeRules' fields in one order, the fixed quake's too. */
+function quakeKey(q: QuakeRules): QuakeRules {
+  const pick = <K extends keyof QuakeRules>(k: K) => (q[k] !== undefined ? { [k]: q[k] } : {});
+  const f = q.fixed;
+  return { ...pick('peakMax'), ...pick('hz'), ...pick('sec'), ...pick('budget'), ...pick('axisStep'), ...(f ? { fixed: { peak: f.peak, hz: f.hz, sec: f.sec, axis: f.axis } } : {}) };
 }
 
 /**
@@ -715,7 +753,8 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
   if (fz) issues.push({ code: 'freeze', message: fz });
   for (const message of chargeIssues(c)) issues.push({ code: 'charge', message });
   if (def.rack.includes(PLUNGER) && !(def.charges ?? []).some((ch) => (ch.arm ?? 'plunger') === 'plunger')) issues.push({ code: 'charge', message: 'the rack has a plunger, and the level no charge a plunger arms' });
-  if (def.objective.kind === 'quake' && (m.crowns.length === 0 || m.heritage.length === 0)) issues.push({ code: 'objective', message: 'a quake objective needs a crown to bring down and a heritage body to keep standing' });
+  // A retrofit (a quake level with a build block, M7b) may have nothing to bring down: its towers are all to save.
+  if (def.objective.kind === 'quake' && (m.heritage.length === 0 || (m.crowns.length === 0 && !def.build))) issues.push({ code: 'objective', message: def.build ? 'a quake objective needs a heritage body to keep standing' : 'a quake objective needs a crown to bring down and a heritage body to keep standing (a retrofit, with a build block, needs only the heritage)' });
   if (def.rack.includes(QUAKE)) {
     if (scoringOf(def) !== 'outcome') issues.push({ code: 'objective', message: 'a quake level needs outcome scoring' });
     if (physicsOf(def).bounce !== null) issues.push({ code: 'objective', message: 'a quake level plays without Bounce: the AVBD restitution pass refuses pinned bodies, and Aftershock levels stand on pins' });

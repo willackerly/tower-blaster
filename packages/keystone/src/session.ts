@@ -185,6 +185,15 @@ export class Session {
   private get liveOnly(): boolean { return this.level.def.cut === true && this.phase !== 'running'; }
 
   /**
+   * Nothing left in the rack can go in once the world is still: the rack is empty, or on a Cut level it holds
+   * only pulls (which wait for a running shot that no item left can start). A settle with the rack spent ends the
+   * round; without the Cut case a missed push on W5 left the round open with nothing to fire (agent playtest 2).
+   */
+  private get rackSpent(): boolean {
+    return this.rackLeft.length === 0 || (this.level.def.cut === true && this.rackLeft.every((a) => a === PULL));
+  }
+
+  /**
    * How many more shots may go in while another runs (LevelDef.freeze, Bullet Time): the level's
    * budget less the shots that have cut one; Infinity when the level sets none. A shot fired while
    * aiming spends nothing, and neither does freezing the world without firing (the game's pause).
@@ -394,11 +403,11 @@ export class Session {
     if (this.scoring === 'outcome') {
       // Hollow: a crown down at a settle ends the level there.
       const toppled = c.def.objective.kind === 'hold' && crownsTotal > 0;
-      if (toppled || this.rackLeft.length === 0 || (c.def.autobank && cleared)) out.push(this.end(step));
+      if (toppled || this.rackSpent || (c.def.autobank && cleared)) out.push(this.end(step));
       else this.phase = 'aiming';
       return out;
     }
-    if (cleared || this.rackLeft.length === 0) {
+    if (cleared || this.rackSpent) {
       this.phase = cleared ? 'cleared' : 'failed';
       // Rube Lab: a binary clear, starred on the build's cost against the parts par (rules.ts partsStars).
       this.score = levelScore(c.def, this.outcomes, cleared, m.n, c.def.build?.par !== undefined ? placedCost(c.def) : 0);
@@ -465,6 +474,7 @@ export class Session {
       ...(c.def.objective.kind === 'quake' ? { quake: true } : {}),
       energy: energyFired(this.outcomes),
       ...(c.def.objective.kind === 'fold' ? { spill: last ? spillOf(last.red) : 0 } : {}),
+      ...(c.def.build ? { built: { spent: placedCost(c.def), ...(c.def.build.budget !== undefined ? { budget: c.def.build.budget } : {}) } } : {}),
     };
   }
 

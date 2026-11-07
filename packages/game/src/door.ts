@@ -90,6 +90,7 @@ export function thresholdText(metric: StarMetric, t: number): string {
     case 'pulled': return `${pct(t)} pulled`;
     case 'energy': return `a quake of ${Math.round(t)} J or less`;
     case 'fold': return `${pct(t)} folded`;
+    case 'built': return `braced with ${Math.round(t)} blocks or fewer`;
   }
 }
 
@@ -106,7 +107,7 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** A star threshold as a bare number: "70%", "3,200". */
 export function thresholdShort(metric: StarMetric, t: number): string {
-  return metric === 'collapse' || metric === 'skyline' || metric === 'pulled' || metric === 'fold' ? pct(t) : metric === 'energy' ? `${Math.round(t)} J` : fmtPoints(Math.round(t));
+  return metric === 'collapse' || metric === 'skyline' || metric === 'pulled' || metric === 'fold' ? pct(t) : metric === 'energy' ? `${Math.round(t)} J` : metric === 'built' ? `${Math.round(t)} blocks` : fmtPoints(Math.round(t));
 }
 
 /** What the objective asks, in a word or number. */
@@ -416,9 +417,10 @@ export function preaimMode(q: URLSearchParams): PreaimMode {
  * (solutions.opener: a shot that wins it alone, PT13), else the first shot of its best recorded line
  * (solutions.ace, else solutions.par), or null. Under auto only the series' first level has
  * one, and only until the player has a record for it: the first-minute promise is for a first visit, and
- * handing every level its best opener would give the stars away.
+ * handing every level its best opener would give the stars away. A teaching opener (solutions.teach: Wavefront's
+ * starter push, which starts the wave without winning the level, PT39) is offered on a first visit of any level.
  */
 export function openerFor(def: LevelDef, index: number, mode: PreaimMode, played: boolean): Shot | null {
-  if (mode === '0' || (mode === 'auto' && (index !== 0 || played))) return null;
+  if (mode === '0' || (mode === 'auto' && (played || (index !== 0 && !def.solutions?.teach)))) return null;
   return def.solutions?.opener ?? def.solutions?.ace?.[0] ?? def.solutions?.par?.[0] ?? null;
 }

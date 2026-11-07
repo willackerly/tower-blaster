@@ -3,8 +3,8 @@
 Roadmap node M7 (docs/game/modes-roadmap.md). The player gets one quake and a site of towers. Each tower is
 **condemned** (its top is a crown: bring it down) or **protected** (its top is heritage: it must still stand when
 the dust settles). The player sets the quake's strength, frequency, duration and axis, watches the ground shake,
-and is scored on what fell and what stood. Retrofitting (placing bracing before the quake, roadmap step e) is its own
-roadmap row, M7b, built on the C9 placement tool, and is not in this first cut.
+and is scored on what fell and what stood. Retrofitting (roadmap row M7b, "Retrofit" below) turns it around: the
+quake is the level's, and the player braces the town before it comes, with C9's build tool and a block budget.
 
 ## The verb: a quake shot
 
@@ -147,6 +147,132 @@ selected:
 **Camera.** The camera moves only on player input (Will, 2026-11-02). A quake moves no camera: the shaking is the
 ground's, seen from the ground, so the view stays put and the towers rock in it. Screen shake stays opt-in.
 
+## Retrofit (M7b)
+
+A retrofit is an Aftershock level turned around. The quake is the level's own and is coming; the player braces
+the town first, with C9's build phase and a block budget, and is scored on what stands and on what was spent.
+
+### Grammar
+
+- **The level's own quake** (`quake: { fixed: { peak, hz, sec, axis } }`, keystone `quake.ts`): the dial is locked
+  to it. `quakeRulesOf` collapses the ranges onto it, `quakeRefusal` refuses any other quake ("this level's quake is
+  fixed: 30% g, 1 Hz, 1 s at 0 degrees"), and `naiveQuake` is it. `checkQuakeRules` takes whole dial numbers only and
+  no `peakMax`, `hz`, `sec` or `axisStep` beside it (a budget may stand beside it: the energy is still shown).
+- **The objective** (`objective: { kind: 'quake' }` with a `build` block): no crown is needed, only heritage. Met at
+  the settle with every protected tower standing (`heritage: 'standing'`). Without a build block a quake level still
+  needs a crown.
+- **Sites** (`RETROFIT_SITES`, `aftershockLevel` with `build`): protected columns among the rest of the town, role
+  `city` (sturdy halls, `slab<n>x3`, which this quake does not move). A retrofit site must have `quake.fixed`.
+- **The bin** (`RETROFIT_BUILD`): cube, pier of three, course of four, wall 4x2, plank, beam and slab; no domino
+  brush. Pinned parts (C8, M10) are allowed in a retrofit's authored geometry, and the viewer's level file now
+  reads `pinned`, `quake`, `heritage` and quake solutions.
+- **Settle v3**: every Aftershock level names `settle: 'v3'` (every cast and gate ran under it), in the level file's
+  place for it, so the hashes hold whichever outcome default main has (PT6b, docs/game/settle-v4.md).
+
+### The game
+
+The level opens in the build phase (C9): the status line shows "N of budget left" and every placement spends from
+it. Play loads the level as built. The quake panel is the fixed panel (`fixedPanelHtml`): the quake's four values
+without buttons or keys, the compass and seismograph, "spent / budget braced", Start (Enter) and the note "the
+level's quake: it is coming, brace for it". Retry keeps the build; B rebuilds before the quake.
+
+### Scoring and stars
+
+- **Tally**: Objective (1,000 when met), then **Budget left**, 10 a block unspent (only when met), and Heritage
+  (-500 a protected tower broken) as in Aftershock. A retrofit has no condemned towers, so no Condemned line.
+- **Stars on what was built** (`metric: 'built'`, lower is better): `OutcomeFacts.built.spent` is `placedCost` of
+  the level as played. One star for the objective, two at or under T2 blocks, three at or under T3. T3 (and the
+  best) is the cheapest robust bracing the search found; T2 the other family's cheapest. So either way of bracing
+  earns two stars and the cheaper three.
+- **Stars and progress belong to the level as authored** (`CompiledLevel.baseHash`): a build changes the level's
+  hash (its placed parts are geometry), but the stars and the game's progress (best, record) are keyed on the hash
+  of the level with its placed parts taken out. Without this, every build would be a new level with no stars and a
+  fresh record (Rube Lab's progress reset on every build until now; it is keyed the same way).
+- **The budget**: half as much again as the dearer family's starting bracing, rounded up to ten, at most 200 (the
+  roadmap's bound): room for either family and a clumsy build, not for bracing everything twice.
+
+### The search and the gate
+
+`pnpm keystone:retrofit RC-1,...` (keystone-lab `retrofit-search.ts`), on the reference engine. Every brace is a
+program of build-tool steps (`BuildSession`: a face hit, snap, overlap and budget checks), as a player places it:
+
+- **buttress**: a pier beside the tower on each side along the quake's axis, k cubes high (k = 3 is one pier stamp);
+- **tie**: a plank (or a beam, or a slab) from the tower's top onto a hall of its height one cell away along the axis.
+
+A bracing is **robust** if every protected tower stands on at least 7 of 8 nudged builds (the M7 nudges, placed
+bodies too). Each family starts from every tower braced (a tie family buttresses the towers with no hall to tie to)
+and is made cheaper one brace at a time (a lower pier, a cheaper tie, or none) while it stays robust. A site ships if:
+
+1. the bare site meets the objective on at most 1 of 8 builds, and **every protected tower falls** on all but at
+   most 1 of 8 (no tower is decoration: each brace is needed);
+2. at least two families have a robust bracing within the budget;
+3. the obvious wrong build (every tower buttressed across the quake) fails as the bare site does.
+
+The quake: 0.3 g, 1 Hz, 1 s. The probes found it fells a lone column of 5 or 6 cubes on every build, and a pier
+half the column's height either side along the axis, or a plank tie to a hall, saves it on every build; it does not
+move a 3-cell-square hall even at 0.35 g. What does not save a column: a pier on one side only, full-height piers,
+filling the cell between the column and its hall, or capping a pair of columns with a slab, plank or beam.
+
+**Where the halls stand.** A column with a hall one cell away on the axis's minus side leans on it at under 10
+degrees and stands unbraced (the quake's first swing throws it that way, on the evidence of the bare runs: every
+column with its hall on the plus side fell on 8 of 8), and a column between two halls always does. The first RC-2 and RC-3 each had such a column (8 and 3 of 8 bare builds stood); the per-tower bare
+check found them, and their halls moved to the plus side.
+
+### Levels
+
+| id | name | site | quake | bare | three stars (T3) | two stars (T2) | budget |
+|---|---|---|---|---|---|---|---|
+| A6 | Lean on Me | 3 col6, each with a hall on its + side along x | 0.3 g, 1 Hz, 1 s along x | 0 of 8 builds; every column falls on 8 | 6 blocks: a plank from each column onto its hall (8/8) | 14: piers 2, 2 and 3 high (7/8) | 30 |
+| A7 | Cross Ties | col6, col5, col6, col5; halls along z for two, along x only for two | along z | 0 of 8; every column falls on 8 | 12: ties for the two with a hall along the quake, piers 2 high for the others (8/8) | 16: piers 2 high everywhere (8/8) | 40 |
+| A8 | Old Town | six columns of 5 and 6 in two rows, four with halls along x | along x | 0 of 8; every column falls on 8 | 16: four ties, two piers 2 high (8/8) | 28: piers 3 high by two col6, 2 elsewhere (7/8) | 60 |
+
+Order: one lever per level. Lean on Me teaches that a tie is cheaper than a pier (both work). Cross Ties turns the
+quake across half the halls, so a tie across the quake is no tie and those columns must be buttressed. Old Town is a
+town of both. In every level the wrong build (piers of three across the quake beside every column) fails on 8 of 8.
+The search's wall times on 4 cores: 330 s, 1,296 s and 1,131 s (results/retrofit/, not committed).
+
+### Verification
+
+- `keystone/test/retrofit.test.ts`: the fixed quake (locks the dial, refuses others, the naive quake is it,
+  validation), the objective with and without a build block, the tally's Budget left line, stars on `built` (lower
+  is better, the default metric when a quake level has a build), a session's built facts, `baseHash` (a build keeps
+  it, a level without a build block keeps base = hash) and cast stars kept across a build, the candidate sites, and
+  the shipped retrofits (the sites' scenes exactly, valid, settle v3, stars on `built` against `baseHash`, budget at
+  most 200).
+- `keystone-lab/test/retrofit-ref-A*.test.ts` (reference, 8 nudged builds each, one file per level): the bare level
+  fails, both recorded bracings (`retrofit-solutions.ts`, through the build tool) are robust and inside the budget,
+  the wrong build fails, and the stars are the bracings' costs.
+- `keystone-lab/test/retrofit-gpu-A*.test.ts` (GPU solver through the game's cast page, SwiftShader in CI): the bare
+  level and the wrong build lose a protected tower, both bracings keep every one standing.
+- On a PR both run A6 only, the family's representative (CI rule O5); A7 and A8 run with PHYSICS_GPU_SLOW=1
+  (nightly) and, on the GPU, with TB_CHANNEL set. All three passed both gates when they shipped (reference and SwiftShader runs).
+- `game/test/retrofit-e2e.test.ts` (game page, Rapier): A6 opens building with the budget shown; three planks placed
+  through the page equal the build tool's; Play loads the build; the quake panel is fixed (keys do nothing, no dial
+  buttons, "6 / 30 braced"); Enter starts the level's quake; the page ends where `runSession` does; the card shows
+  Budget left.
+- `game/test/quake-panel.test.ts`: the fixed dial and panel. `viewer/test/level-file.test.ts`: every Aftershock
+  level and a braced retrofit round-trip through the level file to the same hash and base hash.
+
+### Alternatives considered (retrofit)
+
+- **A dialled quake as well as a build** (brace, then design the quake): two puzzles at once, and the stars would
+  have to price joules against blocks. The fixed quake makes the build the whole puzzle; the grammar still allows a
+  dialled retrofit later.
+- **Stars on energy or on Budget left points**: energy is fixed here. Points and blocks order the same, but blocks
+  read directly ("braced with 6 blocks or fewer") and match the build panel's count.
+- **T2 at 1.5 times T3** (the energy casts' habit): on Lean on Me it gives 9, which ranks the piers (14) with no
+  bracing at all. The other family's cost says "a real bracing earns two stars, the clever one three".
+- **Stars and progress per build hash**: every build would be a new level. The base hash keeps them on the level the
+  designer authored; the build is the play.
+- **Judging in many worlds at once** (M8's `Islands.pushField`): the nudged reference runs are the M7 gate's judge
+  already, independent and bit-reproducible; islands would cut wall time, not change the verdict. A later retrofit
+  with many candidate builds might want them.
+- **Recording builds as part lists**: programs through the build tool also check the bin, snap and budget on replay
+  (as Rube Lab's do).
+- **Caps, fills, one-sided and full piers** as families: all fail on the probes (above).
+- **Hashing with `settle` moved last** (to make the key order irrelevant): it would move every hash with an explicit
+  settle rule (B1 to B3's Metal-cast stars). Named in the level file's place instead.
+
 ## Alternatives considered
 
 - **Resonance and frequency-only design** (the roadmap's first idea): rejected by X6. Friction stacks do not
@@ -184,5 +310,7 @@ ground's, seen from the ground, so the view stays put and the towers rock in it.
 ## Follow-ups
 
 - Metal casts (M5 Max) of the shipped levels' aces and the gate's confirm stage, through the coordinator.
-- Retrofit is roadmap row M7b (after M7 and C9): placed bracing from a budget before the quake.
+- Retrofit: Metal runs of the retrofit tests (TB_CHANNEL=chrome) through the coordinator; a v4 recast of A1 to A8 to
+  drop the settle v3 pin (low priority); a retrofit with a dialled quake as well as a build (the grammar allows it);
+  and build moves for the agent playtest.
 - The agent playtest (G9b) cannot yet dial a quake.

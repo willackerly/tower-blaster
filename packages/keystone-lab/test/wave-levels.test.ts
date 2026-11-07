@@ -11,7 +11,7 @@
 // The GPU plays W3's clean line, a W4 relay and W5's cut in wave-gpu-W*.test.ts.
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
-import { compileLevel, type LevelDef, parStars, type Shot, validateLevel, W3, W3_STREETS, W4, W4_TOWERS, W5, W5_TOWERS, WAVE_LEVELS, type WaveResult, wavePlay } from '@tb/keystone';
+import { compileLevel, Driver, type LevelDef, playShots, parStars, type Shot, validateLevel, W3, W3_STREETS, W4, W4_TOWERS, W5, W5_TOWERS, WAVE_LEVELS, type WaveResult, wavePlay } from '@tb/keystone';
 import { build, ground } from '../src/rube.ts';
 import { pushShot, starterPart, starterShot, towerFace, towerGroups } from '../src/wave.ts';
 
@@ -30,7 +30,7 @@ const HITS = [{ dx: 0, fy: 2 / 3 }, { dx: 0.9, fy: 0.95 }, { dx: -0.9, fy: 0.5 }
 
 describe('Wavefront levels on Rapier', () => {
   it('every level compiles clean and plays asleep in its window', () => {
-    for (const l of WAVE_LEVELS) {
+    for (const l of WAVE_LEVELS.filter((d) => !d.rube)) { // the Steer and Cut levels; Lay levels are lay-levels.test.ts
       const k = compileLevel(l);
       expect(validateLevel(k).map((i) => i.code), l.id).toEqual([]);
       expect(l.runWindow).toBeGreaterThan(30);
@@ -105,5 +105,30 @@ describe('Wavefront levels on Rapier', () => {
     expect(r.cleared).toBe(t.cleared);
     expect(r.heritageBroken > 0).toBe(t.heritage);
     expect(parStars(r.cleared, strokes, W5.par, r.heritageBroken)).toBe(t.stars);
+  });
+  // Agent playtest 2 (G9c): a push that missed left W5's round open with only a pull in the rack, which a Cut level
+  // refuses while aiming, so no result came. The settle with nothing fireable left now ends the round, failed.
+  it('W5: a push that misses ends the round at its settle, failed, with the pull unspent', { timeout: 120_000 }, async () => {
+    const c = compileLevel(W5), e = new RapierEngine();
+    try {
+      const d = new Driver(e, c);
+      await d.reset();
+      // Into the ground 3 cells east of the street, clear of every tower and the starter.
+      const miss = pushShot(c, [3 * c.frame.pitch * c.frame.unit, 0.3 * c.frame.unit, 2 * c.frame.pitch * c.frame.unit], [0, 1]);
+      const r = await playShots(d, [miss], 0, { maxSteps: e.stepIndex + 6000, bank: false });
+      expect(r.session.phase).toBe('failed');
+      expect(r.session.rackLeft).toEqual(['pull']);
+      expect(r.session.score?.stars).toBe(0);
+    } finally { e.dispose(); }
+  });
+  // PT39 (agent playtest 2): no first visit started a wave. The teaching opener, fired untouched, pushes a starter
+  // from two thirds up: W3's middle street falls to its gap (3 towers), W4's to the avenue (3), W5's whole street (8).
+  it.for([['W3', 3], ['W4', 3], ['W5', 8]] as const)('%s: the teaching opener fired untouched starts the wave (%i towers)', { timeout: 120_000 }, async ([id, n]) => {
+    const def = { W3, W4, W5 }[id];
+    expect(def.solutions?.teach).toBe(true);
+    const r = await play(def, () => def.solutions!.opener!);
+    console.log(`${id} opener: ${r.order.length} towers in order ${r.order.join(' ')}, D ${r.collapse.toFixed(3)}`);
+    expect(r.order.length).toBe(n);
+    expect(r.order).toEqual([...r.order].sort((a, b) => a - b).slice(0, n));
   });
 });

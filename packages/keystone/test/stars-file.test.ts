@@ -34,6 +34,7 @@ describe('checkStars', () => {
     expect(checkStars(ok)).toBe(ok);
     expect(() => checkStars(B1.stars)).not.toThrow();
     expect(() => checkStars({ ...ok, waived: ['skill'] })).not.toThrow();
+    expect(() => checkStars({ ...ok, engine: 'ref', agrees: ['gpu'] })).not.toThrow();
   });
   it.each([
     [null, /must be an object/],
@@ -47,6 +48,9 @@ describe('checkStars', () => {
     [{ ...ok, waived: 'skill' }, /waived must be a non-empty list/],
     [{ ...ok, waived: [] }, /waived must be a non-empty list/],
     [{ ...ok, waived: [''] }, /waived must be a non-empty list/],
+    [{ ...ok, agrees: 'gpu' }, /agrees must be a non-empty list of engines/],
+    [{ ...ok, agrees: [] }, /agrees must be a non-empty list of engines/],
+    [{ ...ok, engine: 'ref', agrees: ['ref'] }, /agrees must be a non-empty list of engines other than its own/],
     [{ ...ok, t3: 0.4 }, /t3 \(0.4\) is easier than t2/],
     [{ metric: 'skyline', t2: 0.5, t3: 0.6 }, /t3 \(0.6\) is easier than t2/],
   ])('refuses %j', (x, msg) => {
