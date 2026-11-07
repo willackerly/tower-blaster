@@ -136,7 +136,7 @@
   "packages/keystone-lab/test/footprint-play.test.ts": 12,
   "packages/keystone-lab/test/fork.test.ts": 64.6,
   "packages/keystone-lab/test/freeze.test.ts": 1.1,
-  "packages/keystone-lab/test/fuse-levels.test.ts": 78,
+  "packages/keystone-lab/test/fuse-levels.test.ts": 110,
   "packages/keystone-lab/test/fuse-search.test.ts": 8.5,
   "packages/keystone-lab/test/goal-lab.test.ts": 13.5,
   "packages/keystone-lab/test/ice.test.ts": 9,
