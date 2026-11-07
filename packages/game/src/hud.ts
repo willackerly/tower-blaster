@@ -47,7 +47,7 @@ export const WEAPON_LABEL: Readonly<Record<string, string>> = { grenades: 'Small
 export function itemLabel(item: RackItem): string {
   const r = itemRef(item);
   if (!r) return item;
-  const label = r.kind === 'ammo' ? AMMO_LABEL[r.ammo] : r.kind === 'pull' ? 'Pull' : r.kind === 'plunger' ? 'Plunger' : r.kind === 'preset' ? PROJECTILE_PRESETS[r.preset].label : WEAPON_LABEL[r.key] ?? r.key;
+  const label = r.kind === 'ammo' ? AMMO_LABEL[r.ammo] : r.kind === 'pull' ? 'Pull' : r.kind === 'plunger' ? 'Plunger' : r.kind === 'quake' ? 'Quake' : r.kind === 'preset' ? PROJECTILE_PRESETS[r.preset].label : WEAPON_LABEL[r.key] ?? r.key;
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
@@ -111,6 +111,8 @@ export interface HudState {
   duel?: string;
   /** Outcome levels: the star thresholds on the Down (or Pulled) bar (meterTicks); no bar without any. */
   ticks?: readonly MeterTick[];
+  /** Aftershock: the quake designer's block (quake-panel.ts quakePanelHtml) while the Quake chip is selected, in place of power and height. */
+  quake?: string;
   /** Bullet Time levels (LevelDef.freeze): freezes left of the level's, whether the shot is frozen now, and whether it can be. */
   freezes?: { left: number; total: number; frozen: boolean; can: boolean };
 }
@@ -182,6 +184,7 @@ export function objectiveText(o: Objective): string {
     case 'skyline': return `skyline under ${o.maxH} h`;
     case 'collapse': return `bring ${pct(o.min)} down`;
     case 'hold': return 'keep the crown up';
+    case 'quake': return 'fell the condemned, spare the heritage';
     case 'fold': return `fold ${pct(o.min)} into its lot, neighbours untouched`;
     case 'bell': return 'ring the bell';
   }
@@ -278,10 +281,12 @@ export function hudHtml(s: HudState, sheet = ''): string {
   const chips = s.chips.map((c) => `<button class="chip${c.selected ? ' on' : ''}${c.left ? '' : ' spent'}" data-act="ammo" data-arg="${c.key}"><kbd>${c.key}</kbd> ${esc(itemLabel(c.ammo))} <b>${c.left}</b>/${c.total}</button>`).join('');
   const heritage = s.heritageTotal ? `<div class="row"><span>Heritage</span><span class="${s.heritageBroken ? 'bad' : 'ok'}">${s.heritageBroken ? `${s.heritageBroken} cracked` : 'intact'}</span></div>` : '';
   const sel = s.chips.find((c) => c.selected)?.ammo;
+  // A rack of one quake: the docked phone HUD drops its chip while the quake panel stands for it (ui.ts).
+  const onlyQuake = s.chips.length === 1 && sel === 'quake' && s.quake ? ' only-quake' : '';
   // The power bar, with minus and plus buttons on a touch screen (keys Q and E).
-  // A plunger aims at nothing (the timeline sets it): no power, no launcher height.
-  const power = sel === 'drop' || sel === 'pull' || sel === 'plunger' ? '' : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
-  const height = sel === 'drop' || sel === 'pull' || sel === 'plunger' || s.launch === undefined ? '' : launchRow(s.launch);
+  // A plunger aims at nothing (the timeline sets it): no power, no launcher height. A quake has its own designer instead.
+  const power = sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake' ? (sel === 'quake' ? s.quake ?? '' : '') : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
+  const height = sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake' || s.launch === undefined ? '' : launchRow(s.launch);
   const reach = s.pullRefused ? `<div class="${s.pullRefused === 'tapped' ? 'bad' : 'hint'} small pull-hint">${PULL_HINT}</div>` : s.reachable === false ? '<div class="bad small reach">Out of reach at this power</div>' : '';
   const ctl = `<div class="ctl">${power}${height}</div>`;
   const pace = s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : '';
@@ -290,7 +295,7 @@ export function hudHtml(s: HudState, sheet = ''): string {
     <div class="title">${esc(d.name)}${pace}</div>
     ${s.duel}
     </div><div class="tray">
-    <div class="chips">${chips}</div>
+    <div class="chips${onlyQuake}">${chips}</div>
     ${ctl}<div class="above">${reach}</div>
     </div>`;
   }
@@ -303,7 +308,7 @@ export function hudHtml(s: HudState, sheet = ''): string {
   const fz = s.freezes;
   const freezes = fz ? `<div class="row"><span>Freezes</span><span class="${fz.left ? '' : 'spent'}">${fz.left} / ${fz.total}</span></div>` : '';
   const crowns = d.objective.kind === 'hold' ? keepRow(s.crownsDown, s.crownsTotal)
-    : !outcome || s.crownsTotal ? `<div class="row"><span>Crowns</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
+    : !outcome || s.crownsTotal ? `<div class="row"><span>${d.objective.kind === 'quake' ? 'Condemned down' : 'Crowns'}</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
   const act = slotAction(s);
   const button = slotHtml(act, s);
   const slot = `<div class="row slot-row${act ? '' : ' idle'}"><span class="slot${act ? '' : ' empty'}">${button}</span><span class="small note">${act ? SLOT_NOTE[act] : ''}</span>${touchActs(s.strokes)}</div>`;
@@ -317,7 +322,7 @@ export function hudHtml(s: HudState, sheet = ''): string {
     ${leverageRow(s.strokes, s.leverage)}
     ${sheet}
     </div><div class="tray">
-    <div class="chips">${chips}</div>
+    <div class="chips${onlyQuake}">${chips}</div>
     ${ctl}<div class="above">${reach}${s.strokes > 0 ? '' : `<div class="tch-hint">${TOUCH_HELP}</div>`}</div>
     ${slot}
     </div>`;
