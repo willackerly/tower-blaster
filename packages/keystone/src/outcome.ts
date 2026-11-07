@@ -4,24 +4,33 @@
 // and the compiled level; energies are integer millijoules so any summation
 // order (and a later GPU reduction) gives the same number.
 import type { Vec3 } from '@tb/engine-api';
-import type { CompiledLevel, Objective, Scoring, StarMetric, StarsDef } from './level.ts';
-import { aabbTop, floorTotal, HEIGHT_BINS, type LevelScore, peOf_mJ, type Reductions, type ScoreLine, skyline } from './rules.ts';
+import { type CompiledLevel, lowerIsBetter, type Objective, type Scoring, type StarMetric, type StarsDef } from './level.ts';
+import { aabbTop, floorTotal, HEIGHT_BINS, type LevelScore, peOf_mJ, type Reductions, type ScoreLine, skyline, spillOf } from './rules.ts';
+
+const HERITAGE = 2;
+
+/**
+ * A fold level's collapse is the building's (docs/game/fuse-and-fold.md): heritage neighbours stand outside
+ * it, and their mass would otherwise cap the fraction (stone houses beside a plaster frame held a felled
+ * tower to 0.45). Elsewhere the whole structure counts, as before. `building` below: skip heritage.
+ */
+export const buildingOnly = (c: CompiledLevel): boolean => c.def.objective.kind === 'fold';
 
 /**
  * Floor energy PE_floor: every structure body lying flat on the ground on its largest face, so its
  * centre at its smallest half-extent. Static per level; the bottom of the collapse fraction's range.
  */
-export function floorPotential_mJ(c: CompiledLevel): number {
+export function floorPotential_mJ(c: CompiledLevel, building = false): number {
   const m = c.meta;
   let pe = 0;
-  for (let i = 0; i < m.n; i++) pe += peOf_mJ(m.mass[i]!, Math.min(m.half[3 * i]!, m.half[3 * i + 1]!, m.half[3 * i + 2]!));
+  for (let i = 0; i < m.n; i++) if (!building || m.role[i] !== HERITAGE) pe += peOf_mJ(m.mass[i]!, Math.min(m.half[3 * i]!, m.half[3 * i + 1]!, m.half[3 * i + 2]!));
   return pe;
 }
 
 /** The structure's potential energy with its bodies at `home` (3 per body; default the authored poses): PE(B0) from the pre-settled home. */
-export function homePotential_mJ(c: CompiledLevel, home: ArrayLike<number> = c.meta.home): number {
+export function homePotential_mJ(c: CompiledLevel, home: ArrayLike<number> = c.meta.home, building = false): number {
   let pe = 0;
-  for (let i = 0; i < c.meta.n; i++) pe += peOf_mJ(c.meta.mass[i]!, home[3 * i + 1]!);
+  for (let i = 0; i < c.meta.n; i++) if (!building || c.meta.role[i] !== HERITAGE) pe += peOf_mJ(c.meta.mass[i]!, home[3 * i + 1]!);
   return pe;
 }
 
@@ -46,8 +55,8 @@ export function homeSkyline(c: CompiledLevel, home: ArrayLike<number> = c.meta.h
   return skyline(hist, c.height);
 }
 
-/** What an objective needs to know at a settle. */
-export interface ObjectiveFacts { red: Reductions; crownsTotal: number; collapse: number }
+/** What an objective needs to know at a settle; heritage (bodies broken so far) only the fold and quake objectives read (absent: none). */
+export interface ObjectiveFacts { red: Reductions; crownsTotal: number; collapse: number; heritage?: number }
 
 /**
  * Whether the objective is met. Par scoring keeps its rule (a skyline objective's footprintMax is part
@@ -60,6 +69,8 @@ export function objectiveMet(c: CompiledLevel, f: ObjectiveFacts, scoring: Scori
       && (scoring === 'outcome' || obj.footprintMax === undefined || f.red.outOfLot <= obj.footprintMax * c.meta.n);
     case 'collapse': return f.collapse >= obj.min;
     case 'hold': return c.meta.crowns.length > 0 && f.crownsTotal === 0;
+    case 'quake': return c.meta.crowns.length > 0 && f.crownsTotal === c.meta.crowns.length && (f.heritage ?? 0) === 0;
+    case 'fold': return f.collapse >= obj.min && spillOf(f.red) <= obj.spillMax + 1e-12 && (f.heritage ?? 0) === 0;
     case 'bell': return c.meta.crowns.length > 0 && f.crownsTotal === c.meta.crowns.length;
   }
 }
@@ -77,8 +88,12 @@ export const OUTCOME_WEIGHTS = {
   rackLeft: 400,
   /** Hold levels: per share of the structure's mass pulled (all of it: 3000, as collapse). */
   pulled: 3000,
+  /** Quake levels: per condemned tower down. */
+  condemned: 500,
   heritage: -500,
   footprint: -3000,
+  /** Fuse & Fold: per share of the building's mass outside its lot (all of it: -3000, as the footprint line). */
+  spill: -3000,
 } as const;
 
 /** What happened in an outcome level, as of its end. */
@@ -104,6 +119,12 @@ export interface OutcomeFacts {
   pulled: number;
   /** The objective is hold (Undercut's Hollow): scored on what was pulled, not on what came down. */
   hold?: boolean;
+  /** The objective is quake (Aftershock): scored on the condemned towers down, not on the collapse. */
+  quake?: boolean;
+  /** Energy fired over the round, J (each shot's ke + yield; a quake's is quakeEnergy): the energy metric. */
+  energy?: number;
+  /** Fold levels (Fuse & Fold): the building's spill at the end (rules.ts spillOf), 0 to 1; absent on other levels. */
+  spill?: number;
 }
 
 const tri = (n: number) => (n * (n + 1)) / 2;
@@ -119,14 +140,25 @@ export function outcomeTally(f: OutcomeFacts, w = OUTCOME_WEIGHTS): ScoreLine[] 
     if (f.footprintMax !== undefined && f.outOfLot > f.footprintMax) lines.push({ label: 'Footprint', value: Math.floor(w.footprint * (f.outOfLot - f.footprintMax)) });
     return lines;
   }
+  if (f.quake) {
+    // Aftershock: each condemned tower down and each protected one broken. No Collapse or Leverage line: both pay
+    // for the protected towers coming down as well. The quake's economy is the stars' metric (energy) instead.
+    lines.push({ label: 'Condemned', value: w.condemned * f.crownsDown });
+    if (f.heritageBroken) lines.push({ label: 'Heritage', value: w.heritage * f.heritageBroken });
+    return lines;
+  }
   lines.push({ label: 'Collapse', value: Math.floor(w.collapse * f.collapse) });
   lines.push({ label: 'Leverage', value: Math.floor(w.leverage * Math.log2(1 + f.leverage)) });
   if (f.hasCrowns) lines.push({ label: 'Combo', value: w.combo * tri(Math.min(Math.max(0, f.comboMax), w.comboCap)) });
   if (f.met && f.rackLeft > 0) lines.push({ label: 'Rack left', value: w.rackLeft * f.rackLeft });
   if (f.heritageBroken) lines.push({ label: 'Heritage', value: w.heritage * f.heritageBroken });
   if (f.footprintMax !== undefined && f.outOfLot > f.footprintMax) lines.push({ label: 'Footprint', value: Math.floor(w.footprint * (f.outOfLot - f.footprintMax)) });
+  if (f.spill !== undefined && f.spill > 0) lines.push({ label: 'Spill', value: Math.floor(w.spill * f.spill) });
   return lines;
 }
+
+/** Fuse & Fold's star metric: the collapse fraction discounted by the spill, collapse x (1 - spill), 0 to 1. */
+export const foldValue = (collapse: number, spill: number): number => collapse * (1 - spill);
 
 // ---- Stars ----
 
@@ -138,11 +170,13 @@ export function metricValue(metric: StarMetric, f: OutcomeFacts, total: number):
     case 'skyline': return f.skylineRatio;
     case 'score': return total;
     case 'pulled': return f.pulled;
+    case 'energy': return f.energy ?? Infinity;
+    case 'fold': return foldValue(f.collapse, f.spill ?? 0);
   }
 }
 
 /** a at least as good as threshold t on this metric. */
-export const atLeast = (metric: StarMetric, a: number, t: number) => (metric === 'skyline' ? a <= t : a >= t);
+export const atLeast = (metric: StarMetric, a: number, t: number) => (lowerIsBetter(metric) ? a <= t : a >= t);
 
 export interface OutcomeStars {
   stars: 0 | 1 | 2 | 3;
@@ -160,7 +194,7 @@ export function outcomeStars(cast: StarsDef | undefined, metric: StarMetric, val
   const uncast = !cast || cast.metric !== metric;
   if (!met) return { stars: 0, beatBot: false, uncast };
   if (uncast) return { stars: 1, beatBot: false, uncast };
-  const beatBot = cast.best !== undefined && (metric === 'skyline' ? value < cast.best : value > cast.best);
+  const beatBot = cast.best !== undefined && (lowerIsBetter(metric) ? value < cast.best : value > cast.best);
   const stars = atLeast(metric, value, cast.t3) && heritageBroken === 0 ? 3 : atLeast(metric, value, cast.t2) ? 2 : 1;
   return { stars, beatBot, uncast };
 }
@@ -175,7 +209,7 @@ export interface OutcomeScore extends LevelScore {
  * hold level), BEAT THE BOT past the best cast play, else how much came down ("72% DOWN"), or on a
  * hold level how much was pulled ("35% PULLED").
  */
-export function outcomeScore(f: OutcomeFacts, cast: StarsDef | undefined, metric: StarMetric = cast?.metric ?? (f.hold ? 'pulled' : 'collapse')): OutcomeScore {
+export function outcomeScore(f: OutcomeFacts, cast: StarsDef | undefined, metric: StarMetric = cast?.metric ?? (f.hold ? 'pulled' : f.quake ? 'energy' : 'collapse')): OutcomeScore {
   const lines = outcomeTally(f);
   const total = floorTotal(lines);
   const value = metricValue(metric, f, total);

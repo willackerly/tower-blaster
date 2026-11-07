@@ -1,9 +1,19 @@
 // Field events (field.ts, roadmap C7): the grid, the queue checks, the generators and fieldGravity.
 import { describe, expect, it } from 'vitest';
-import { checkInputQueue, FIELD_MAX, FIELD_QUANTUM, type FieldEvent, fieldGravity, gravityChanges, type InputEvent, joltEvent, kicks, onFieldGrid, quakeEvents, quantiseField, quantiseVec3, scheduleEvents, tiltEvent, type Vec3 } from '../src/index.ts';
+import { checkInputQueue, exactCos, exactSin, FIELD_MAX, FIELD_QUANTUM, type FieldEvent, fieldGravity, gravityChanges, type InputEvent, joltEvent, kicks, onFieldGrid, quakeEvents, quantiseField, quantiseVec3, scheduleEvents, tiltEvent, type Vec3 } from '../src/index.ts';
 
 const G: Vec3 = quantiseVec3([0, -9.81, 0]);
 const f32 = (x: number) => Math.fround(x);
+
+/** FNV-1a over a field schedule's steps and gravity components (as multiples of the quantum: integers). */
+function fieldDigest(events: readonly FieldEvent[]): string {
+  let h = 0x811c9dc5;
+  const mix = (v: number) => { for (const ch of String(v)) h = Math.imul(h ^ ch.charCodeAt(0), 0x01000193) >>> 0; h = Math.imul(h ^ 44, 0x01000193) >>> 0; };
+  for (const e of events) { mix(e.step); for (const g of e.gravity ?? []) mix(g / FIELD_QUANTUM); }
+  return h.toString(16).padStart(8, '0');
+}
+/** The digest of the quake in the pinned test; a change here is a change to every level's quake. */
+const QUAKE_DIGEST = '51ddc5f3';
 
 describe('the field grid', () => {
   it('rounds to multiples of 2^-12, exactly representable in f32, and refuses values out of range', () => {
@@ -85,6 +95,26 @@ describe('the generators', () => {
     // Keys strictly increasing in step, at most one per step.
     for (let i = 1; i < q.length; i++) expect(q[i]!.step).toBeGreaterThan(q[i - 1]!.step);
     expect(() => quakeEvents({ step: 0, seconds: 0, dt, peak: 0.3 }, G)).toThrow();
+  });
+
+  it('exactSin and exactCos track Math.sin and Math.cos within 5e-13 out to 1500 rad, and keep sin odd', () => {
+    let worst = 0;
+    for (let i = -20000; i <= 20000; i++) {
+      const x = i * 0.0731;
+      if (Math.abs(x) < 2) expect(Math.abs(exactSin(x) - Math.sin(x))).toBeLessThan(1e-15);
+      worst = Math.max(worst, Math.abs(exactSin(x) - Math.sin(x)), Math.abs(exactCos(x) - Math.cos(x)));
+      expect(exactSin(-x) + exactSin(x)).toBe(0);
+    }
+    expect(worst).toBeLessThan(5e-13);
+    expect(exactSin(0)).toBe(0);
+    expect(Math.abs(exactSin(Math.PI / 2) - 1)).toBeLessThan(1e-15);
+    expect(Math.abs(exactCos(0) - 1)).toBeLessThan(1e-15);
+    expect(Number.isNaN(exactSin(Infinity))).toBe(true);
+  });
+
+  it('quakeEvents keys are pinned: exact arithmetic only, so Node and every browser give these bits (QUAKE_DIGEST)', () => {
+    const q = quakeEvents({ step: 10, seconds: 3, dt: 1 / 60, peak: 0.45, hz: 1.3, azimuth: Math.PI / 3 }, G);
+    expect(fieldDigest(q)).toBe(QUAKE_DIGEST);
   });
 
   it('joltEvent quantises its kick', () => {

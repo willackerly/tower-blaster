@@ -106,16 +106,46 @@ export function scheduleEvents(from: number, to: number, g: (step: number) => Ve
   return out;
 }
 
-/** The unit vector in the ground plane at `azimuth` radians from +x toward +z. */
-const along = (azimuth: number): Vec3 => [Math.cos(azimuth), 0, Math.sin(azimuth)];
+// ---- Exact trigonometry ----
+// ECMAScript leaves Math.sin and Math.cos "implementation-approximated": V8 in Node, Chromium and Safari may
+// differ in the last bit, so a quake keyed with Math.sin could land one key on the other side of a 2^-12
+// rounding edge on another machine, and a level's quake would not be the same input everywhere. These use only
+// + - * / and Math.round, which IEEE 754 and ECMAScript define exactly, so every engine computes the same bits.
+// Range reduction by a two-part 2 pi, then an odd Taylor polynomial to x^19 on [-pi/2, pi/2]: within 1e-15 of the
+// true sine near 0, and under 5e-13 out to |x| = 1500 rad where the reduction's rounding grows (field.test.ts); a
+// quake's phase stays under 300 rad. All far below the field grid.
+const TWO_PI_HI = 6.283185307179586, TWO_PI_LO = 2.4492935982947064e-16;
+const PI_HI = 3.141592653589793, PI_LO = 1.2246467991473532e-16, HALF_PI = 1.5707963267948966;
+// 1 / (2k + 1)! for k = 1..9, alternating signs folded in below.
+const SIN_C = [1 / 6, 1 / 120, 1 / 5040, 1 / 362880, 1 / 39916800, 1 / 6227020800, 1 / 1307674368000, 1 / 355687428096000, 1 / 121645100408832000];
+
+/** sin(x), the same bits on every engine (only exactly-defined operations); within 5e-13 of Math.sin for |x| < 1500. */
+export function exactSin(x: number): number {
+  if (!Number.isFinite(x)) return NaN;
+  const k = Math.round(x / TWO_PI_HI);
+  let r = x - k * TWO_PI_HI - k * TWO_PI_LO;
+  if (r > HALF_PI) r = PI_HI - r + PI_LO;
+  else if (r < -HALF_PI) r = -PI_HI - r - PI_LO;
+  const r2 = r * r;
+  let p = 0;
+  for (let i = SIN_C.length - 1; i >= 0; i--) p = (i % 2 === 0 ? -SIN_C[i]! : SIN_C[i]!) + r2 * p;
+  return r + r * r2 * p;
+}
+
+/** cos(x) as exactSin(x + pi/2): the same bits on every engine. */
+export const exactCos = (x: number): number => exactSin(x + HALF_PI);
+
+/** The unit vector in the ground plane at `azimuth` radians from +x toward +z (exact trigonometry: the same on every engine). */
+const along = (azimuth: number): Vec3 => [exactCos(azimuth), 0, exactSin(azimuth)];
 
 /**
  * One key that turns gravity by `degrees` from straight down toward `azimuth` (radians from +x toward +z), keeping its
  * magnitude: a steady side load of |g| sin(degrees). A column of n cubes tips once the side load passes g / n.
+ * Exact trigonometry (exactSin), so the key is the same on every engine.
  */
 export function tiltEvent(step: number, degrees: number, base: Vec3, azimuth = 0): FieldEvent {
-  const m = Math.hypot(base[0], base[1], base[2]), t = (degrees * Math.PI) / 180, a = along(azimuth);
-  return { step, kind: 'field', gravity: quantiseVec3([m * Math.sin(t) * a[0], -m * Math.cos(t), m * Math.sin(t) * a[2]]) };
+  const m = Math.sqrt(base[0] * base[0] + base[1] * base[1] + base[2] * base[2]), t = (degrees * Math.PI) / 180, a = along(azimuth);
+  return { step, kind: 'field', gravity: quantiseVec3([m * exactSin(t) * a[0], -m * exactCos(t), m * exactSin(t) * a[2]]) };
 }
 
 export interface QuakeSpec {
@@ -140,15 +170,17 @@ export interface QuakeSpec {
  * A quake: gravity base + peak |base| envelope(t) sin(2 pi hz t) along the azimuth, one quantised key per step that
  * changes it, and a last key at the end that restores `base`. The envelope rises linearly over `rise` seconds and
  * falls over `fall`. Seen from the ground it is the ground shaking side to side (a horizontal gravity on a still
- * ground is an accelerating ground in its own frame).
+ * ground is an accelerating ground in its own frame). Built from exactly-defined arithmetic only (exactSin), so the
+ * same spec gives the same keys in Node and in every browser: a level's quake is one input everywhere.
  */
 export function quakeEvents(q: QuakeSpec, base: Vec3): FieldEvent[] {
   const hz = q.hz ?? 1, a = along(q.azimuth ?? 0), rise = q.rise ?? q.seconds / 4, fall = q.fall ?? q.seconds / 4;
   if (!(q.seconds > 0 && q.dt > 0 && q.peak >= 0 && hz > 0 && rise >= 0 && fall >= 0)) throw new Error(`quakeEvents: bad spec ${JSON.stringify(q)}`);
-  const m = Math.hypot(base[0], base[1], base[2]), n = Math.round(q.seconds / q.dt);
+  // Math.sqrt is exact (correctly rounded) everywhere; Math.hypot is not.
+  const m = Math.sqrt(base[0] * base[0] + base[1] * base[1] + base[2] * base[2]), n = Math.round(q.seconds / q.dt);
   const env = (t: number) => Math.max(0, Math.min(1, rise > 0 ? t / rise : 1, fall > 0 ? (q.seconds - t) / fall : 1));
   const g = (s: number): Vec3 => {
-    const t = (s - q.step) * q.dt, side = q.peak * m * env(t) * Math.sin(2 * Math.PI * hz * t);
+    const t = (s - q.step) * q.dt, side = q.peak * m * env(t) * exactSin(2 * Math.PI * hz * t);
     return [base[0] + side * a[0], base[1], base[2] + side * a[2]];
   };
   const out = scheduleEvents(q.step, q.step + n, g, base);

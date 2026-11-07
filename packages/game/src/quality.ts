@@ -52,7 +52,11 @@ export const MIN_BUDGET_MS = 1;
 /**
  * Dependent dispatches per step of a 1k level: a step of the GPU solver costs about this many of the
  * probe's chain dispatches. SwiftShader (4 cores, 2026-11-06): B1's steps in a shot cost a median 299 ms,
- * the chain 0.125 ms a dispatch, so 2400. The M5's own ratio is on the bench queue.
+ * the chain 0.125 ms a dispatch, so 2400. That ratio holds only where work dominates a dispatch (a CPU
+ * running 4,096 threads); on a GPU a dispatch is mostly latency and the ratio is the solver's own dispatch
+ * count, several times smaller. So it is applied only on adapters it was measured on (ProbeResult.calibrated):
+ * the M5 in Chrome read it as a 1k step past a whole frame and picked low (2026-11-07), where its real
+ * 1k step is about 5 ms.
  */
 export const STEP_DISPATCHES = 2400;
 /** A tier's frame is ruled out after a timed frame this many times over budget: one is enough. */
@@ -62,6 +66,12 @@ export const STOP_FACTOR = 3;
 export interface ProbeResult {
   /** A software adapter (SwiftShader, llvmpipe): low without timing anything. */
   software: boolean;
+  /**
+   * The step proxy (STEP_DISPATCHES) was calibrated on this class of adapter, so its predicted step may shrink
+   * the frame budget and rule a tier out: software adapters only, so far. Elsewhere the step is reported, and
+   * the frames are held to the budget of a frame without physics.
+   */
+  calibrated: boolean;
   /** Wall ms per dependent compute dispatch (NaN when not measured). */
   dispatchMs: number;
   /** Median frame ms at high's size and toggles, and at mid's. */
@@ -72,7 +82,7 @@ export interface ProbeResult {
 }
 
 /**
- * Why a tier: the probe's software, physics (steps leave under MIN_BUDGET_MS of a frame), frame (mid's frame
+ * Why a tier: the probe's software, physics (a calibrated step proxy leaves under MIN_BUDGET_MS of a frame), frame (mid's frame
  * did not fit) or fits; the player's setting; offscreen (an offscreen page without ?quality=auto runs no
  * probe and keeps high); error (the probe threw: mid).
  */
@@ -90,15 +100,21 @@ export function frameBudgetMs(stepMs: number): number {
   return FRAME_SHARE * (TIER_FRAME_MS - (Number.isFinite(stepMs) ? stepMs : TIER_FRAME_MS));
 }
 
+/** The frame budget the probe holds frames to: after the predicted step where the proxy is calibrated, else a whole frame's. */
+export function budgetFor(calibrated: boolean, stepMs: number): number {
+  return frameBudgetMs(calibrated ? stepMs : 0);
+}
+
 /**
  * The tier from the probe's measurements: the highest whose frame fits the budget left after a step.
- * A software adapter is low; so is a device whose physics leaves under MIN_BUDGET_MS of a frame.
+ * A software adapter is low; so is a device whose physics leaves under MIN_BUDGET_MS of a frame, where
+ * the step proxy is calibrated (elsewhere the budget is a frame's without physics: budgetFor).
  * A frame not measured (NaN) does not fit.
  */
-export function pickTier(p: Pick<ProbeResult, 'software' | 'dispatchMs' | 'highFrameMs' | 'midFrameMs'>): TierPick {
-  const stepMs = predictedStepMs(p.dispatchMs), budgetMs = frameBudgetMs(stepMs);
+export function pickTier(p: Pick<ProbeResult, 'software' | 'calibrated' | 'dispatchMs' | 'highFrameMs' | 'midFrameMs'>): TierPick {
+  const stepMs = predictedStepMs(p.dispatchMs), budgetMs = budgetFor(p.calibrated, stepMs);
   if (p.software) return { tier: 'low', reason: 'software', budgetMs, stepMs };
-  if (!(budgetMs >= MIN_BUDGET_MS)) return { tier: 'low', reason: 'physics', budgetMs, stepMs };
+  if (p.calibrated && !(budgetMs >= MIN_BUDGET_MS)) return { tier: 'low', reason: 'physics', budgetMs, stepMs };
   if (p.highFrameMs <= budgetMs) return { tier: 'high', reason: 'fits', budgetMs, stepMs };
   if (p.midFrameMs <= budgetMs) return { tier: 'mid', reason: 'fits', budgetMs, stepMs };
   return { tier: 'low', reason: 'frame', budgetMs, stepMs };

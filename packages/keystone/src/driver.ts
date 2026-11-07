@@ -10,6 +10,7 @@ import { type CompiledLevel, physicsOf } from './level.ts';
 import { CpuObserver, type Observation } from './rules.ts';
 import { type Feedback, Session } from './session.ts';
 import type { Shot } from './shots.ts';
+import { quakeInputs, quakeSteps } from './quake.ts';
 
 /**
  * Steps run after init before play starts. New AVBD contacts hold nothing for
@@ -139,7 +140,7 @@ export interface DriverCheckpoint {
 interface DriverState {
   session: Session; snapshot: Snapshot; snapshotStep: number; observed: Observation | null; pushed: InputEvent[];
   observer: CpuObserver; spawnSteps: number[]; spawns: InputEvent[]; descs: BodyDesc[]; arsenal: Arsenal;
-  blastsDue: Extract<Feedback, { t: 'blast' }>[]; ice: IceBreaker; removals: Map<number, number>;
+  blastsDue: Extract<Feedback, { t: 'blast' }>[]; ice: IceBreaker; removals: Map<number, number>; quakeUntil: number;
 }
 
 export class Driver {
@@ -175,6 +176,10 @@ export class Driver {
   private ice!: IceBreaker;
   /** Every removal pushed (pulls, shatters, weapons, charges): body id to the step it is due. A charge riding one is dropped. */
   private removals = new Map<number, number>();
+  /** The engine step a running quake's last field key is due at (-1: none): its shot holds open until then (quake.ts). */
+  private quakeUntil = -1;
+  /** The step the last quake ends (its gravity restored), or -1: the game's seismograph reads it. */
+  get quakeEnd(): number { return this.quakeUntil; }
   /** Whether body id is removed by engine step `step` (a removal of it pushed, due by then): arsenal.ts Gone. */
   private isGone(id: number, step: number): boolean {
     const at = this.removals.get(id);
@@ -222,6 +227,7 @@ export class Driver {
     this.blastsDue = [];
     this.ice = new IceBreaker(this.level);
     this.removals = new Map();
+    this.quakeUntil = -1;
     this.observed = null;
     // Charges armed at start (relays): their clocks start here; anything due at once goes in before the first step.
     this.pushCharges(this.arsenal.armStart(this.snapshot, this.snapshotStep, this.gone));
@@ -241,7 +247,7 @@ export class Driver {
     const own = (): DriverState => ({
       session: this.session, snapshot: this.snapshot, snapshotStep: this.snapshotStep, observed: this.observed, pushed: this.pushed,
       observer: this.observer, spawnSteps: this.spawnSteps, spawns: this.spawns, descs: this.descs, arsenal: this.arsenal, blastsDue: this.blastsDue,
-      ice: this.ice, removals: this.removals,
+      ice: this.ice, removals: this.removals, quakeUntil: this.quakeUntil,
     });
     // The compiled level and its bodies are immutable inputs: shared, not copied.
     const shared = [this.level, ...this.level.scene.bodies];
@@ -276,6 +282,7 @@ export class Driver {
         this.blastsDue = c.blastsDue;
         this.ice = c.ice;
         this.removals = c.removals;
+        this.quakeUntil = c.quakeUntil;
         this.ahead = ahead ? this.read() : null;
       },
       dispose: () => { saved = null; engine.dispose(); },
@@ -320,6 +327,12 @@ export class Driver {
     const now = this.session.phase === 'running' ? this.observer.peek(ruled, this.snapshotStep, this.session.watchIdx) : undefined;
     const { spawn, event, feedback } = this.session.fire(shot, step, body, now);
     this.observer.setBaseline(ruled, step);
+    if (shot.ammo === 'quake') {
+      // Nothing spawned: the ground shakes, one gravity key per step from now until it ends; the shot holds open to then.
+      this.quakeUntil = step + quakeSteps(shot, this.level.scene.dt);
+      this.pushNow(quakeInputs(this.level, shot, step));
+      return feedback;
+    }
     if (shot.ammo === 'plunger') {
       // Nothing spawned: the charges it names are armed, and what is due at once goes in now.
       this.pushCharges(this.arsenal.plunger(shot, step, this.snapshot, this.snapshotStep, this.gone));
@@ -440,7 +453,7 @@ export class Driver {
       await this.engine.step();
       this.snapshot = await this.engine.snapshot();
       this.snapshotStep = this.engine.stepIndex;
-      const out: Feedback[] = [], hold = this.arm(out) || this.chorusHold();
+      const out: Feedback[] = [], hold = this.arm(out) || this.quakeUntil > this.snapshotStep || this.chorusHold();
       this.breakIce(out);
       this.observed = this.observer.observe(this.ice.view(this.snapshot), this.engine.stepIndex, this.session.watchIdx);
       return this.rescore([...out, ...this.session.observe(this.observed, hold)]);
@@ -455,7 +468,7 @@ export class Driver {
     this.snapshot = await this.ahead;
     this.snapshotStep = n;
     this.ahead = this.read();
-    const out: Feedback[] = [], hold = this.arm(out) || this.chorusHold();
+    const out: Feedback[] = [], hold = this.arm(out) || this.quakeUntil > this.snapshotStep || this.chorusHold();
     this.breakIce(out);
     this.observed = this.observer.observe(this.ice.view(this.snapshot), n, this.session.watchIdx);
     const feedback = this.rescore([...out, ...this.session.observe(this.observed, hold)]);

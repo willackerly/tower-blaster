@@ -159,6 +159,7 @@ export function shotFor(c: CompiledLevel, ammo: RackItem, az: number, power: num
   if (ammo === 'cue') return null; // no starter level racks a cue yet
   if (ammo === 'pull') return null; // a pull picks a block, not a point: pullFor
   if (ammo === 'plunger') return null; // a plunger arms charges, it aims at nothing
+  if (ammo === 'quake') return null; // a quake shakes the ground: the quake panel sets it
   const a = aimAt(f, ammo, { az, y: launchY(c, ammo, at), power }, target, { substeps });
   return { shot: a.shot, error: a.error, reachable: a.error <= REACH };
 }

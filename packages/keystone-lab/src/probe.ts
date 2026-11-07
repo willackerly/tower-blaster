@@ -33,7 +33,7 @@ export function nudge(s: Shot, a: number, power: number): Shot {
   const q = Math.abs(a) >= 4 ? Math.sign(a) : 0, qp = Math.abs(power) >= 3 ? Math.sign(power) : 0;
   if (s.ammo === 'drop') return { ...s, x: s.x + q, z: s.z + qp };
   if (s.ammo === 'cue') return s.dir < 2 ? { ...s, z: s.z + q, power: clampP(s.power) } : { ...s, x: s.x + q, power: clampP(s.power) };
-  if (s.ammo === 'pull' || s.ammo === 'plunger') return s;
+  if (s.ammo === 'pull' || s.ammo === 'plunger' || s.ammo === 'quake') return s;
   return { ...s, yaw: s.yaw + a, power: clampP(s.power) };
 }
 

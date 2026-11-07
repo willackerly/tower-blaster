@@ -3,7 +3,7 @@
 // code change. The file is checked at import (checkStars).
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { B1, B2, B3, BIG_LEVELS, castOf, castStars, checkStars, compileLevel, STARS_FILE } from '../src/index.ts';
+import { B1, B2, B3, BIG_LEVELS, castOf, castStars, checkStars, compileLevel, FUSE_LEVELS, STARS_FILE } from '../src/index.ts';
 
 const FILE = new URL('../src/stars.json', import.meta.url);
 
@@ -12,10 +12,10 @@ describe('stars.json', () => {
     expect(B1.stars).toEqual({ metric: 'collapse', t2: 0.7, t3: 0.94, best: 0.9583025426945702, castOn: 'apple metal-3', engine: 'gpu', hash: '18cf21360845bb8b', n: 372, seed: 1 });
     expect(B2.stars).toEqual({ metric: 'score', t2: 770, t3: 3000, best: 3805, castOn: 'apple metal-3', engine: 'gpu', hash: 'c75fbd9832e6814b', n: 236, seed: 1 });
   });
-  it('every entry names a big level and matches its hash (a stale cast would silently not show)', () => {
+  it('every entry names a big or Fuse & Fold level and matches its hash (a stale cast would silently not show)', () => {
     for (const [id, s] of Object.entries(STARS_FILE)) {
-      const def = BIG_LEVELS.find((d) => d.id === id);
-      expect(def, `stars.json ${id} is no big level`).toBeDefined();
+      const def = [...BIG_LEVELS, ...FUSE_LEVELS].find((d) => d.id === id);
+      expect(def, `stars.json ${id} is no big or Fuse & Fold level`).toBeDefined();
       expect(castStars(compileLevel(def!))).toBe(s);
     }
   });
