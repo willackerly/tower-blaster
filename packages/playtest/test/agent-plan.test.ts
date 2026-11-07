@@ -3,7 +3,7 @@
 // its file names and contact sheets are well formed. The browser run itself is
 // `pnpm playtest:agent` (minutes to an hour on SwiftShader), not a CI test.
 import { describe, expect, it } from 'vitest';
-import { AFTERSHOCK_LEVELS, BIG_LEVELS, DUELS, FUSE_LEVELS, LEVELS, MASON_LEVELS, RUBE_LEVELS, TRIAL_LEVELS, UNDERCUT_LEVELS } from '@tb/keystone';
+import { AFTERSHOCK_LEVELS, BIG_LEVELS, DUELS, FUSE_LEVELS, LEVELS, MASON_LEVELS, RUBE_LEVELS, TRIAL_LEVELS, UNDERCUT_LEVELS, WAVE_LEVELS } from '@tb/keystone';
 import { agentPlan, frameName, lineOf, NOT_ON_PAGE, noviceAim, rng, sheetGrid, spiral, VIEWPORTS, withLook } from '../src/agent/plan.ts';
 
 const plan = agentPlan();
@@ -49,12 +49,14 @@ describe('agent playtest plan', () => {
       const novice = plan.find((s) => s.id === `${l.id}-novice`);
       expect([l.id, novice?.viewports, novice?.engine, novice?.script]).toEqual([l.id, ['desktop', 'phone', 'phone-landscape'], 'gpu', { kind: 'play', policy: 'novice', shots: 1 }]);
     }
+    // Wavefront (on main since #265): a first visit at all three, two shots where the rack has them (W5's push, then its live pull).
+    for (const l of WAVE_LEVELS) expect([l.id, plan.find((s) => s.id === `${l.id}-novice`)?.engine, plan.find((s) => s.id === `${l.id}-novice`)?.script]).toEqual([l.id, 'gpu', { kind: 'play', policy: 'novice', shots: Math.min(l.rack.length, 2) }]);
     for (const l of FUSE_LEVELS) expect(plan.find((s) => s.id === `${l.id}-sweep`)?.script).toEqual({ kind: 'play', policy: 'sweep', shots: 1 });
     for (const l of [...AFTERSHOCK_LEVELS, ...RUBE_LEVELS]) expect([l.id, plan.find((s) => s.id === `${l.id}-line`)?.script]).toEqual([l.id, { kind: 'play', policy: 'line', shots: 1 }]);
     // Mason's Trial is not on the game page yet (?level=MT1 is refused): not played, and listed as such.
     for (const l of MASON_LEVELS) expect(plan.some((s) => s.level === l.id)).toBe(false);
     expect(NOT_ON_PAGE.mason).toEqual(MASON_LEVELS.map((l) => l.id));
-    expect(new Set(plan.filter((s) => s.engine === 'gpu').map((s) => s.mode))).toEqual(new Set(['level', 'bullet-time', 'siege-table', 'look', 'fuse', 'aftershock', 'rube']));
+    expect(new Set(plan.filter((s) => s.engine === 'gpu').map((s) => s.mode))).toEqual(new Set(['level', 'bullet-time', 'siege-table', 'look', 'fuse', 'aftershock', 'rube', 'wave']));
   });
 
   it('has unique, file-safe ids and only known viewports', () => {

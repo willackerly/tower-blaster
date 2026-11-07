@@ -2,7 +2,7 @@
 // pages it opens, at which viewports, and how it plays each one. Pure data and
 // small pure functions, so the coverage (every level, every mode, both form
 // factors) is a unit test and not a hope; run.ts drives the browser from it.
-import { AFTERSHOCK_LEVELS, BIG_LEVELS, DUELS, FUSE_LEVELS, LEVELS, type LevelDef, MASON_LEVELS, RUBE_LEVELS, type Shot, TRIAL_LEVELS, UNDERCUT_LEVELS } from '@tb/keystone';
+import { AFTERSHOCK_LEVELS, BIG_LEVELS, DUELS, FUSE_LEVELS, LEVELS, type LevelDef, MASON_LEVELS, RUBE_LEVELS, type Shot, TRIAL_LEVELS, UNDERCUT_LEVELS, WAVE_LEVELS } from '@tb/keystone';
 import { RUBE_SOLUTIONS } from '../../../keystone-lab/src/rube-solutions.ts';
 
 /** The form factors played: a laptop, a phone held upright (touch), and the same phone turned. */
@@ -66,8 +66,11 @@ export interface Scenario {
 const BOTH: ViewportName[] = ['desktop', 'phone'];
 const hasLine = (l: LevelDef) => !!(l.solutions?.par ?? l.solutions?.ace);
 
-/** The new mode series round 2 adds (each small: tens of bodies, so the players' GPU solver throughout), by mode name. */
-export const NEW_MODES = [['fuse', FUSE_LEVELS], ['aftershock', AFTERSHOCK_LEVELS], ['rube', RUBE_LEVELS]] as const;
+/**
+ * The new mode series round 2 adds, by mode name, on the players' GPU solver throughout (Fuse & Fold, Aftershock and
+ * Rube Lab are tens of bodies; Wavefront's streets sleep until the wave reaches them, WAVE_RULES).
+ */
+export const NEW_MODES = [['fuse', FUSE_LEVELS], ['aftershock', AFTERSHOCK_LEVELS], ['rube', RUBE_LEVELS], ['wave', WAVE_LEVELS]] as const;
 /**
  * Not on the game page yet, so not played: Mason's Trial (MT1-MT4: its test phase, door series and `?level=` land in
  * a second PR, docs/game/masons-trial.md follow-ups) and Chorus (#269, a draft). Named here so the report says so.
@@ -105,7 +108,7 @@ export function agentPlan(): Scenario[] {
   for (const [mode, levels] of NEW_MODES) {
     for (const l of levels) {
       const at = { engine: 'gpu' as const, mode, search: `?level=${l.id}`, level: l.id };
-      out.push({ ...at, id: `${l.id}-novice`, title: `${l.id} ${l.name}, first visit`, viewports: [...BOTH, 'phone-landscape'], script: { kind: 'play', policy: 'novice', shots: 1 } });
+      out.push({ ...at, id: `${l.id}-novice`, title: `${l.id} ${l.name}, first visit`, viewports: [...BOTH, 'phone-landscape'], script: { kind: 'play', policy: 'novice', shots: mode === 'wave' ? Math.min(l.rack.length, 2) : 1 } });
       if (mode === 'fuse') out.push({ ...at, id: `${l.id}-sweep`, title: `${l.id} ${l.name}, swept toward the yard`, viewports: ['desktop'], script: { kind: 'play', policy: 'sweep', shots: 1 } });
       if (l.solutions?.ace || RUBE_SOLUTIONS[l.id]) out.push({ ...at, id: `${l.id}-line`, title: `${l.id} ${l.name}, recorded ${mode === 'rube' ? 'build' : 'line'}`, viewports: ['desktop'], script: { kind: 'play', policy: 'line', shots: 1 } });
     }
