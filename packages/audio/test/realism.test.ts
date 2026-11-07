@@ -140,7 +140,6 @@ describe('the energy law (table modes)', () => {
   // stopping in 1 ms) the compact formula overstates it, a known limit (docs/sound.md, Realism).
   it('a real material radiates at most ~10% of the impact\'s energy, modes and field together (dv 0.5-4 m/s)', () => {
     for (const [name, m] of Object.entries(REAL)) {
-      if (name === 'pine') continue; // the velocity law (classic), unchanged
       for (const edge of [0.5, 1]) for (const dv of [0.5, 1, 4]) {
         const e = new CollapseEngine({ sampleRate: SR, seed: 1, fullScale: 1 });
         e.setMaterial(0, { ...m, clickDb: -Infinity }, edge); e.lowcut = 0; e.limiter.process = () => {};
@@ -364,7 +363,10 @@ describe('step 2c defaults (Will away 2026-11-06: the recommended picks, stone E
     expect(soundMaterials('real1')).toBe(REAL1_SOUND_MATERIALS);
     expect(soundMaterials()).toBe(SOUND_MATERIALS);
     const R1 = REAL1_SOUND_MATERIALS as Record<string, SoundMaterial>;
-    for (const k of Object.keys(REAL)) if (k !== 'stone' && k !== 'ice') expect(REAL[k], k).toBe(R1[k]);
+    for (const k of Object.keys(REAL)) if (k !== 'stone' && k !== 'ice' && k !== 'pine') expect(REAL[k], k).toBe(R1[k]);
+    // A9: Kapla pine damped as in a pile, under the energy law; real1's and classic's stay the free plank.
+    expect(REAL.pine).toEqual({ ...CLASSIC.pine, law: 'energy', eta: 0.045 });
+    expect(R1.pine).toBe(CLASSIC.pine);
     expect(REAL.stone).toEqual({ ...R1.stone, overlap: 1, jitter: 0.15, gritDb: 50, gritRate: 10, face: 0.6, gritShare: 0.0015, levelDb: -10 });
     expect(REAL.ice).toEqual({ ...R1.ice, jitter: 0.08, gritDb: 50, gritRate: 30, gritSpread: 0.08, face: 0.5, gritShare: 0.01, levelDb: -7 });
     for (const m of [REAL.stone!, REAL.ice!]) expect(parseSoundMaterial({}, m)).toEqual(m);

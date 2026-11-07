@@ -2,11 +2,13 @@
 // collapse rendered through it (on Rapier, which clears L1 too) at the game's level.
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
-import { CEILING, contactTime, loudness, mass, parseSoundMaterial, ROUGH_T } from '@tb/audio';
-import { AMMO_KINDS, ammoBody, compileLevel, grenadeShell, iceOf, KEYSTONE_GRENADE, L1, levelById, LEVELS, masonProbes, materialId, MATERIALS, shatterPieces } from '@tb/keystone';
+import { type AudioFrame, BLOCK, binOf, CEILING, cellOf, CollapseEngine, contactTime, DV_EDGES, loudness, mass, parseSoundMaterial, pitchZ, ROUGH_T, type SoundMaterial, soundMaterials, TOP_FIELDS } from '@tb/audio';
+import { AMMO_KINDS, ammoBody, catalog, compileLevel, DOMINO_HALF, grenadeShell, iceOf, KEYSTONE_GRENADE, L1, levelById, LEVELS, masonProbes, materialId, MATERIALS, shatterPieces } from '@tb/keystone';
 import { PRESET_NAMES, presetMass, PROJECTILE_PRESETS } from '@tb/weapons';
 import { capture, render } from '../src/sound-cli.ts';
-import { AMMO_SLOT, PIECE_SLOT, PRESET_SLOT, presetOf, presetSound, ammoKindOf, ammoOn, mainMaterial, pairEc, GAME_SOUND_DB, gameSoundDb, KEYSTONE_SOUNDS, keystoneSounds, slotSounds, SOUND_SLOTS, soundSetOf, soundSlotOf } from '../src/sound-map.ts';
+import { CollapseSound } from '../src/collapse-sound.ts';
+import { kaplaSoundOf } from '../src/options/kaplasound.ts';
+import { AMMO_SLOT, isKaplaPlank, KAPLA_DIMS, KAPLA_SLOT, kaplaLevelDb, kaplaSound, PIECE_SLOT, PRESET_SLOT, presetOf, presetSound, ammoKindOf, ammoOn, mainMaterial, pairEc, GAME_SOUND_DB, gameSoundDb, KEYSTONE_SOUNDS, keystoneSounds, slotSounds, SOUND_SLOTS, soundSetOf, soundSlotOf } from '../src/sound-map.ts';
 
 describe('game sound slots', () => {
   it('every Keystone material and ammo kind has a valid sound at its own size', () => {
@@ -48,7 +50,8 @@ describe('game sound slots', () => {
 
   it('each rack preset sounds as itself, at its real size, its mass near the real one', () => {
     const c = compileLevel(L1), slots = slotSounds(c), classic = slotSounds(c, 'classic');
-    expect(SOUND_SLOTS).toBe(PRESET_SLOT + PRESET_NAMES.length);
+    expect(KAPLA_SLOT).toBe(PRESET_SLOT + PRESET_NAMES.length);
+    expect(SOUND_SLOTS).toBe(KAPLA_SLOT + 1);
     PRESET_NAMES.forEach((p, k) => {
       const b = ammoBody(`p-${p}`, c.frame.unit, [0, 0, 0], [0, 0, 0]), slot = slots[PRESET_SLOT + k]!;
       expect(presetOf(b)).toBe(p);
@@ -117,6 +120,86 @@ describe('game sound slots', () => {
     const c = compileLevel(L1);
     for (let i = 0; i < c.meta.n; i++) expect(soundSlotOf(c, c.scene.bodies[i]!, i)).toBe(c.meta.material[i]);
     expect(soundSlotOf(c, ammoBody('cannonball', c.frame.unit, [0, 0, 0], [0, 0, 0]), c.meta.n)).toBe(AMMO_SLOT + AMMO_KINDS.indexOf('cannonball'));
+  });
+});
+
+describe('Kapla planks (A9)', () => {
+  const box = (half: [number, number, number]) => ({ ...ammoBody('drop', 0.5, [0, 0, 0], [0, 0, 0]), shape: { kind: 'box' as const, half } });
+
+  it('a plaster box in a Kapla plank\'s proportions (15:3:1) is one: every plank of B5\'s towers, and the build tool\'s Plank', () => {
+    const c = compileLevel(levelById('T-B5A')), plaster = materialId('plaster');
+    expect(c.meta.n).toBe(2884);
+    for (let i = 0; i < c.meta.n; i++) {
+      expect(isKaplaPlank(c.scene.bodies[i]!), `plank ${i}`).toBe(true);
+      expect(soundSlotOf(c, c.scene.bodies[i]!, i)).toBe(KAPLA_SLOT);
+      expect(soundSlotOf(c, c.scene.bodies[i]!, i, false)).toBe(plaster); // keystone.kaplasound=plaster, and the classic set
+    }
+    const items = Object.fromEntries(catalog(1.02).map((x) => [x.name, x.boxes[0]!.half]));
+    expect(isKaplaPlank(box(items.plank!))).toBe(true);
+    for (const k of ['cube', 'domino', 'slab', 'beam', 'ramp', 'bumper', 'relay']) expect(isKaplaPlank(box(items[k]!)), k).toBe(false);
+    expect(isKaplaPlank(box([...DOMINO_HALF]))).toBe(false);
+    expect(isKaplaPlank(box([2.5 * 1.03, 1 / 6, 0.5]))).toBe(false); // 3% long: not Kapla's 15:3:1
+    expect(isKaplaPlank({ ...box([0.5, 0.5, 0.5]), shape: { kind: 'sphere', radius: 0.5 } })).toBe(false);
+    // Other levels' structure is untouched: L1's cubes, X3B's bricks, X1's dominoes.
+    for (const id of ['L1', 'T-X3B', 'T-X1']) {
+      const l = compileLevel(levelById(id));
+      for (let i = 0; i < l.meta.n; i++) expect(soundSlotOf(l, l.scene.bodies[i]!, i), id).toBe(l.meta.material[i]);
+    }
+    // keystone.kaplasound reads pine or plaster; the classic set never plays Kapla (G6's sound).
+    expect(kaplaSoundOf('pine')).toBe('pine');
+    expect(kaplaSoundOf('plaster')).toBe('plaster');
+    expect(() => kaplaSoundOf('oak')).toThrow(/keystone.kaplasound must be pine or plaster: oak/);
+    const on = (set: 'real' | 'real1' | 'classic', kapla: boolean) => (new CollapseSound(0, set, kapla) as unknown as { kapla: boolean }).kapla;
+    expect([on('real', true), on('real1', true), on('classic', true), on('real', false)]).toEqual([true, true, false, false]);
+    // A stone box in Kapla's proportions stays stone.
+    const stone = { ...c, meta: { ...c.meta, material: c.meta.material.map(() => materialId('stone')) } };
+    expect(soundSlotOf(stone, c.scene.bodies[0]!, 0)).toBe(materialId('stone'));
+  });
+
+  it('the slot is the set\'s pine at a real plank\'s size, as loud as the plank on screen: +30 log10(5 h / 117 mm)', () => {
+    const c = compileLevel(levelById('T-B5A')), h = c.frame.unit;
+    expect(h).toBe(0.3);
+    expect(KAPLA_DIMS).toEqual([0.117, 0.0234, 0.0078]);
+    expect(kaplaLevelDb(KAPLA_DIMS[0])).toBe(0);
+    expect(kaplaLevelDb(1.5)).toBeCloseTo(33.24, 2);
+    for (const set of ['real', 'real1', 'classic'] as const) {
+      const s = kaplaSound(c, set);
+      expect(slotSounds(c, set)[KAPLA_SLOT]).toEqual(s);
+      expect(s).toEqual({ material: { ...soundMaterials(set).pine, levelDb: kaplaLevelDb(5 * h) }, edge: KAPLA_DIMS[0] });
+      expect(() => parseSoundMaterial(s.material)).not.toThrow();
+    }
+    // Under the energy law the trim is the mass's: a real plank scaled up to 5 h radiates as the trim says, within 1 dB.
+    const pine = soundMaterials('real').pine, scaled = mass({ ...pine, dims: KAPLA_DIMS.map((x) => (x * 5 * h) / KAPLA_DIMS[0]) as [number, number, number] }) / mass(pine);
+    expect(10 * Math.log10(scaled)).toBeCloseTo(kaplaLevelDb(5 * h), 6);
+  });
+
+  it('B5\'s planks sound within 3 dB of the plaster blocks they replace (a 2 s pile of impacts, 10 m off)', () => {
+    // Impacts as a tap posts them: 12 a frame, speeds exponential (mean 1.5 m/s), all on slot 0, 10 m away.
+    let a = 7;
+    const r = () => { a = (Math.imul(a, 1664525) + 1013904223) >>> 0; return a / 2 ** 32; };
+    const frames: AudioFrame[] = [];
+    for (let f = 0; f < 120; f++) {
+      const counts = new Float32Array(DV_EDGES.length * 4), a2 = new Float32Array(DV_EDGES.length * 4), hits: number[][] = [];
+      for (let k = 0; k < 12; k++) { const dv = 0.3 - 1.5 * Math.log(1 - 0.95 * r()), A = dv / 10, cell = cellOf(0, binOf(dv), k % 4, 4); counts[cell]! += 1; a2[cell]! += A * A; hits.push([A, dv, 10, (k % 4) / 2 - 0.75, 0, pitchZ(f * 12 + k)]); }
+      hits.sort((p, q) => q[0]! - p[0]!);
+      const top = new Float32Array(8 * TOP_FIELDS);
+      hits.slice(0, 8).forEach((x, j) => top.set(x.slice(1), j * TOP_FIELDS));
+      frames.push({ dt: 1 / 60, materials: 1, sectors: 4, counts, a2, top });
+    }
+    const lufs = (m: SoundMaterial, edge: number) => {
+      const e = new CollapseEngine({ sampleRate: 48000, seed: 1, fullScale: 1 }), n = 180 * 800 / BLOCK, L = new Float32Array(n * BLOCK), R = new Float32Array(n * BLOCK);
+      e.setMaterial(0, m, edge); e.limiter.process = () => {};
+      const l = new Float32Array(BLOCK), rr = new Float32Array(BLOCK);
+      let due = 0, b = 0;
+      const out = () => { e.render(l, rr); L.set(l, b * BLOCK); R.set(rr, b * BLOCK); b++; };
+      for (const fr of frames) { e.push(fr); for (due += 800; due >= BLOCK && b < n; due -= BLOCK) out(); }
+      while (b < n) out();
+      return loudness(L, R);
+    };
+    const c = compileLevel(levelById('T-B5A')), slots = slotSounds(c);
+    const kapla = lufs(slots[KAPLA_SLOT]!.material, slots[KAPLA_SLOT]!.edge), plaster = lufs(slots[materialId('plaster')]!.material, c.frame.unit);
+    expect(Number.isFinite(kapla)).toBe(true);
+    expect(Math.abs(kapla - plaster)).toBeLessThan(3);
   });
 });
 

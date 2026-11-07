@@ -573,7 +573,7 @@ What the tower found, and what changed:
 - **The takes were 5-17 dB louder than the sounds they replaced.** Step 2c judged them peak-normalised,
   so their level was never heard: the face contact alone adds ~10 dB for stone and ~6 dB for ice (a
   shorter contact puts more force into the radiating modes), and grit at the 5% cap added up to 7 dB
-  more on a tower. In the game a stone tower would have limited by 13 dB. New key `levelDb` (-60 to 20,
+  more on a tower. In the game a stone tower would have limited by 13 dB. New key `levelDb` (-60 to 60 since A9,
   absent 0): one gain on everything the material sounds (top voices, background, dense field, grit;
   it scales A = dv / distance, which all of them are linear in), so timbre is untouched. Stone takes
   -10 dB and ice -7 dB, the medians of real-minus-real1 loudness over knock, clatter, tumble and the four
@@ -707,6 +707,63 @@ every model; no Keystone material or ammo had one. The inflated balls' wall mode
 "ping") and a preset's own size for a weapon shell (a shell takes the nearest ammo slot's size: B2's
 ram, 1 m across, sounds as the 0.5 m cannonball). The judge separates these less than it did stone
 from ice; the baseline here is silence.
+
+## Kapla (A9, 2026-11-07)
+
+Pine (Kapla, 117 x 23.4 x 7.8 mm) was the one material A1 left alone: a free plank's loss factor, eta 0.01,
+which is the judge's glass band (step 1). Every step read as glass or bells: knock 0.49, clatter 0.50, tumble
+0.38, and a 2,000-plank topple of the viewer's S15 tower (capture-cli scene=kapla planks=2000, 23,726 impacts)
+0.39 with "Jingle bell, Glass, Bell" on top.
+
+The real set's pine is the classic plank damped as in a pile, under the energy law (the other real materials'):
+`{ ...classic pine, law: 'energy', eta: 0.045 }`. Contact with neighbours carries a plank's energy away as it
+does a block's (2-15x a free body's); 0.045 is the middle of the plateau. Real share, level-free, judged on
+the ladder (dist 0.6 m) and on two topples (2,000 and 3,000 planks):
+
+| eta, roughness | knock | clatter | tumble | topple 2k | topple 3k | topple top classes |
+|---|---|---|---|---|---|---|
+| 0.01 (classic) | 0.49 | 0.50 | 0.38 | 0.39 | | Jingle bell, Glass, Bell |
+| 0.03, smooth | 0.83 | 0.70 | 0.42 | 0.86 | | Rattle, Snake, Glass |
+| 0.04, smooth | 0.83 | 0.72 | 0.56 | 0.90 | 0.87 | Crack, Scrape, Coin, Rattle |
+| **0.045, smooth** | **0.81** | **0.71** | **0.56** | **0.92** | **0.90** | **Crack, Scrape, Breaking, Rattle** |
+| 0.05, smooth | 0.79 | 0.69 | 0.58 | 0.93 | 0.92 | Crack, Scrape, Breaking / Fart |
+| 0.06, smooth | 0.77 | 0.67 | 0.60 | 0.97 | 0.94 | Crack, Fireworks / Explosion |
+| 0.045, roughDb -6 | 0.82 | 0.69 | 0.65 | 0.89 | 0.87 | Snake, Rattle / Fireworks |
+| 0.08, roughDb -6 | 0.76 | 0.72 | 0.68 | 0.99 | | Fireworks, Explosion, Firecracker |
+
+Knock and clatter read as wood (wood share 0.43-0.46, the highest of the four materials, with Tick and "Inside,
+small room" on top, which is what real wood on wood gets: DiffImpact, step 2). Above 0.05, or with contact
+roughness, the topple turns to fireworks, as stone grit did on a tower (step 3); planed wood is smooth, so pine has no `roughDb`.
+real1 and classic keep the free plank (the classic set still hashes as G6's).
+
+The voice cap. The 2k topple posts about 140 impacts a frame; the tap plays the 8 loudest as voices and the rest
+through the background bank. With 32 voices the same topple reads Fireworks, Explosion: more of the loudest
+hits as their own sharp pops. The game and the viewer keep 8.
+
+**In the game.** B5 Kapla Spire (T-B5A to T-B5C: 2,884-3,106 planks of 1.5 x 0.3 x 0.1 m at h 0.3) is built of
+plaster, so its planks sounded as plaster cubes at the level's edge. A Kapla plank is now its own slot
+(sound-map.ts `KAPLA_SLOT`): a plaster box in a Kapla plank's proportions, 15:3:1 within 2% (`isKaplaPlank`).
+That is every plank of B5's towers and the build tool's Plank (5 h x h x h/3), and no other body in any level
+(a scan of every series). The slot plays a real plank (its timbre) with the on-screen plank's energy: under
+the energy law a mode's amplitude goes as the square root of the body's mass, which goes as length^3 at fixed
+proportions, so `levelDb = 30 log10(5 h / 117 mm)`, +33.2 dB in B5. On a pile of impacts 10 m off it
+plays 0.9 dB under the plaster it replaces (test), and B5's grenade shot within 0.4 LU of it.
+
+Rejected: the plank at the game's size. A 1.5 m pine beam rings from 194 Hz, a marimba bar, and the judge
+heard exactly that on every step (knock: Music 0.46; clatter: Music, Drum machine; topple: Music, Heart sounds;
+real share 0.02-0.19). B5's own copy calls it a toy tower in slow motion (13x real Kapla, falling 3.6x slower),
+so it sounds as the toy. A new Keystone wood material (physics, render, editor) would also do it; it is a
+bigger change than the sound needs, and B5 renders plaster for now.
+
+Option `keystone.kaplasound` = `pine` (default) | `plaster` (the old sound); the classic set (keystone.sound=classic)
+always plays plaster, as G6 did.
+
+Cost (cost-cli, this VM; a sanity check, not an M5 number): the 2k and 3k topples take 4.0% and 4.9% of a core
+as real pine, against 6.5% and 8.2% as classic pine and 6.6% and 8.0% as plaster at 0.3 m (what B5 played):
+shorter decays leave fewer resonators ringing. Inside A3's budget.
+
+Clips for listening (before, after): /mnt/project-files/sound/kapla/ (knock, clatter, the 2k topple, B5's
+grenade shot level-free).
 
 ## Plan (each step lands with its test)
 

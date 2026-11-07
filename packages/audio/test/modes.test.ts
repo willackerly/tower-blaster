@@ -7,7 +7,7 @@ import { rng } from '@tb/scenarios';
 import { MIN_MODE_HZ } from '../src/modes.ts';
 import { framesOf, renderLadder, script } from '../src/ladder-cli.ts';
 
-const pine: SoundMaterial = SOUND_MATERIALS.pine, acrylic: SoundMaterial = SOUND_MATERIALS.acrylic, stone: SoundMaterial = REAL1_SOUND_MATERIALS.stone; // the plain Hertz cube (the default's adds a face contact)
+const pine: SoundMaterial = CLASSIC_SOUND_MATERIALS.pine, acrylic: SoundMaterial = SOUND_MATERIALS.acrylic, stone: SoundMaterial = REAL1_SOUND_MATERIALS.stone; // the free plank (the real set's is damped as in a pile, A9); the plain Hertz cube (the default's adds a face contact)
 const sorted = (a: Float64Array) => [...a].sort((x, y) => x - y);
 
 describe('plank (Kapla)', () => {

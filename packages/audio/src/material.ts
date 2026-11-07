@@ -188,7 +188,7 @@ export const REAL1_SOUND_MATERIALS = {
  * to overlap 1, each block its own pitch (natural stone varies ~15%), audible chips, and a landing that
  * rolls from an edge onto a face (3.2 dB rms from 16 real stone knocks and impacts, whose own spread is
  * 6.8). Ice: a burst of cracks over 80 ms on every hit, the same landing (Crack, Breaking; 2.5 dB from
- * 39 real ice recordings). The step 2b sounds stay as set 'real1'.
+ * 39 real ice recordings). Pine (Kapla) is a plank in a pile (A9, docs/sound.md, Kapla). The step 2b sounds stay as set 'real1'.
  */
 export const SOUND_MATERIALS = {
   ...REAL1_SOUND_MATERIALS,
@@ -196,6 +196,11 @@ export const SOUND_MATERIALS = {
   // lower; levelDb brings each back to real1's loudness (the takes were picked level-free).
   stone: { ...REAL1_SOUND_MATERIALS.stone, overlap: 1, jitter: 0.15, gritDb: 50, gritRate: 10, face: 0.6, gritShare: 0.0015, levelDb: -10 },
   ice: { ...REAL1_SOUND_MATERIALS.ice, jitter: 0.08, gritDb: 50, gritRate: 30, gritSpread: 0.08, face: 0.5, gritShare: 0.01, levelDb: -7 },
+  // A9 (Kapla): a plank in a pile, not a free one. The free plank's eta 0.01 is the judge's glass band (Jingle bell,
+  // Glass, Chink); contact damping in a pile (2-15x, as for the blocks) puts it at 0.045, the middle of the plateau
+  // (0.04-0.05) where a knock, a clatter and a 2k-plank topple all read as real impacts (Crack, Scrape, Breaking).
+  // The energy law as every other real material; no roughness (planed wood is smooth: with it a topple reads Fireworks).
+  pine: { ...CLASSIC_SOUND_MATERIALS.pine, law: 'energy', eta: 0.045 },
 } as const satisfies Record<keyof typeof CLASSIC_SOUND_MATERIALS, SoundMaterial>;
 
 /** A named material set: 'real' (SOUND_MATERIALS, the default), 'real1' (the real set before step 2c's stone and ice) or 'classic' (G6's). */
@@ -232,7 +237,7 @@ export function parseSoundMaterial(input: Partial<Record<keyof SoundMaterial, un
   if (out.gritRate !== undefined && !(out.gritRate >= 0.1 && out.gritRate <= 60)) throw new Error('sound material gritRate must be 0.1 to 60 grains per m/s');
   if (out.face !== undefined && !(out.face >= 0 && out.face <= 1)) throw new Error('sound material face must be 0 to 1');
   if (out.gritRing !== undefined && !(out.gritRing >= 0 && out.gritRing <= 1)) throw new Error('sound material gritRing must be 0 to 1');
-  if (out.levelDb !== undefined && !(out.levelDb >= -60 && out.levelDb <= 20)) throw new Error('sound material levelDb must be -60 to 20 dB');
+  if (out.levelDb !== undefined && !(out.levelDb >= -60 && out.levelDb <= 60)) throw new Error('sound material levelDb must be -60 to 60 dB');
   if (out.gritShare !== undefined && !(out.gritShare >= 0 && out.gritShare <= 1)) throw new Error('sound material gritShare must be 0 to 1');
   if (out.gritSpread !== undefined && !(out.gritSpread >= 0.001 && out.gritSpread <= 0.25)) throw new Error('sound material gritSpread must be 0.001 to 0.25 s');
   if (out.roughT !== undefined && !(out.roughT >= 1e-5 && out.roughT <= 0.05)) throw new Error('sound material roughT must be 1e-5 to 0.05 s');

@@ -37,7 +37,7 @@ describe('sound options', () => {
       up.forEach((f, k) => expect(f / want[k]!).toBeCloseTo(1, 9));
     }
     const t = tunedMaterial(SOUND_MATERIALS.pine, { ring: 3, click: -2, grit: 6, damping: 2, pitch: 0, spread: 2 });
-    expect([t.ringDb, t.clickDb, t.gritDb, t.eta, t.jitter]).toEqual([3, -2, -Infinity, 0.02, 0.06]); // pine has no grit to raise
+    expect([t.ringDb, t.clickDb, t.gritDb, t.eta, t.jitter]).toEqual([3, -2, -Infinity, 2 * SOUND_MATERIALS.pine.eta, 0.06]); // pine has no grit to raise
     expect(tunedMaterial(SOUND_MATERIALS.stone, { ...knobs, grit: -6 }).gritDb).toBe(SOUND_MATERIALS.stone.gritDb - 6);
     const base = modes(SOUND_MATERIALS.pine), damped = modes(t);
     expect(damped.tau[0]! / base.tau[0]!).toBeCloseTo(0.5, 9);

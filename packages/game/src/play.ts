@@ -573,7 +573,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let synth: Synth | null = null;
   let muted = env.muted ?? false;
   const soundMode = env.sound ?? 'collapse';
-  const collapse = soundMode !== 'synth' ? new CollapseSound(env.impactsDb ?? 0, soundSetOf(soundMode)) : null;
+  const collapse = soundMode !== 'synth' ? new CollapseSound(env.impactsDb ?? 0, soundSetOf(soundMode), feel.kaplaSound === 'pine') : null;
   handle.ice = (slots = []) => ({ count: renderer.ice.count, cracks: slots.map((i) => (renderer.surfaceOf(i).kind === 'ice' ? renderer.surfaceOf(i).crack : -1)) });
   handle.sound = () => ({ mode: soundMode, status: collapse?.status ?? 'off', error: collapse?.error ?? '', posted: collapse?.posted ?? 0, stats: collapse?.stats ?? null });
   const voices: Voice[] = [];
