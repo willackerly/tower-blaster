@@ -99,7 +99,10 @@ export const DOCK_CSS = `
     body.kg-touch .kg-dock .tray .ctl .qdials { grid-template-columns: minmax(0, 1fr); }
     body.kg-touch .kg-dock .tray .qfoot .quake-go { min-height: 36px; }
     body.kg-touch .kg-dock > .st { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
-    body.kg-touch .kg-dock .above { left: 100%; right: auto; bottom: 0; margin: 0 0 0 8px; width: max-content; max-width: 50vw; }
+    /* Sideways the hints go at the top, right of the rail, in the sky the opening view keeps free (view.ts TOP_MARGIN; play.ts
+       dockedHud adds their box to the top inset), not over the structure's base beside the tray (PT3b). The tray (a
+       backdrop-filter, so the containing block) ends 8 px above the screen's bottom: 100% + 16px - 100dvh from its top is 8 px from the screen's. */
+    body.kg-touch .kg-dock .above { left: 100%; right: auto; top: calc(100% + 16px - 100vh); top: calc(100% + 16px - 100dvh); bottom: auto; margin: 0 0 0 8px; width: max-content; max-width: 50vw; }
     body.kg-building.kg-touch .kg-dock ~ .kg-build { max-height: calc(100% - 72px); width: min(340px, 42vw); box-sizing: border-box; }
   }
 `;

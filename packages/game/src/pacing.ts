@@ -29,8 +29,10 @@ export { ballStyle } from './options/balls.ts';
 export { DEFAULT_BUDGET_MS } from './options/budget.ts';
 export { effectStyle } from './options/fx.ts';
 export { launchMode } from './options/launch.ts';
+export { OPENING_VIEWS, type OpeningView, openingView } from './options/openview.ts';
 export { sunMode } from './options/sun.ts';
 export { DEFAULT_UNDO_MB, MAX_UNDO_MB } from './options/undo.ts';
+export { XRAY_MODES, type XrayMode, xrayMode } from './options/xray.ts';
 
 /** Every feel option's URL key (0 or 1 for a flag, keystone.budget ms 0 to 1000, keystone.undo MB 0 to MAX_UNDO_MB, the named choices for the others); any other value is refused, naming the key. */
 export function paceFeel(q: URLSearchParams): PaceFeel {

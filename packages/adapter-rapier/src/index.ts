@@ -59,7 +59,10 @@ export class RapierEngine implements PhysicsEngine {
   }
 
   private add(b: BodyDesc): void {
-    // A pinned body (engine-api pinned.ts) is a Rapier fixed body, at rest whatever its description says.
+    // A pinned body (engine-api pinned.ts) is a Rapier fixed body, at rest whatever its description says. A body that
+    // starts asleep (engine-api asleep.ts) runs awake here, as on an engine that does not sleep: Rapier creates a body
+    // made sleeping (RigidBodyDesc.setSleeping) without its contacts, so it fell 5 cm into the ground before they caught
+    // it (testkit asleep.ts, 2026-11-07). Rapier puts a body at rest to sleep within a second anyway.
     const pinned = b.pinned === true;
     const { body, collider } = createBody(this.world!, pinned ? { ...b, linVel: [0, 0, 0], angVel: [0, 0, 0] } : b, this.sleep, pinned ? RAPIER.RigidBodyDesc.fixed() : RAPIER.RigidBodyDesc.dynamic());
     // Every collider carries the scene's rules (Rapier uses the higher-priority rule of a pair).

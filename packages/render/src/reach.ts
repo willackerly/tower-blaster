@@ -19,6 +19,12 @@
 // The disc is lifted by max(1 cm per metre of radius, 2 cm) so a blast
 // aimed at the floor does not depth-fight the floor.
 //
+// The same shader draws the impact marker (PT14: every aimed shot, not only a bomb, shows where it will
+// hit): Renderer.impact(point, normal, radius) is a second zone whose disc lies on the face the arc meets
+// (its plane through the point, square to the face's normal), in the aim beads' coral, with no dome and no
+// ripple, so it reads as a reticle stamped on that face. A zone with the default normal (up), red tint,
+// dome and ripple is the blast zone exactly as before.
+//
 // Cost: nothing while not aiming (no draw; nothing compiled before the
 // first aim); while aiming, two quads over the sphere's silhouette with an
 // arithmetic-only fragment.
@@ -34,13 +40,13 @@ import { HDR_FORMAT } from './post.ts';
 import type { Mat4, V3 } from './math.ts';
 
 const SAMPLES = 4;
-const UNIFORM_FLOATS = 40;
+const UNIFORM_FLOATS = 48;
 /** Strength of the part of the zone hidden behind geometry. */
 export const XRAY = 0.3;
 
 export const REACH_WGSL = /* wgsl */ `
 override XRAY: f32 = 1.0;
-struct ReachFrame { viewProj: mat4x4f, invViewProj: mat4x4f, viewport: vec2f, time: f32, gain: f32, centre: vec3f, radius: f32 }
+struct ReachFrame { viewProj: mat4x4f, invViewProj: mat4x4f, viewport: vec2f, time: f32, gain: f32, centre: vec3f, radius: f32, normal: vec3f, dome: f32, tint: vec3f, ripple: f32 }
 @group(0) @binding(0) var<uniform> rf: ReachFrame;
 
 @vertex fn vsReach(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
@@ -57,7 +63,6 @@ struct ReachFrame { viewProj: mat4x4f, invViewProj: mat4x4f, viewport: vec2f, ti
   return rf.viewProj * vec4f(C + (right * corner.x + up * corner.y) * half, 1.0);
 }
 
-const RED = vec3f(1.0, 0.1, 0.03);
 
 struct FOut { @location(0) c: vec4f, @builtin(frag_depth) depth: f32 }
 
@@ -73,11 +78,17 @@ fn depthAt(p: vec3f) -> f32 {
   let ndc = vec2f(pos.x / rf.viewport.x * 2.0 - 1.0, 1.0 - pos.y / rf.viewport.y * 2.0);
   let fp = rf.invViewProj * vec4f(ndc, 1.0, 1.0);
   let dir = normalize(fp.xyz / fp.w);
-  // The disc's plane (camera-relative y), every quantity computed before any branch so the derivatives are valid.
-  let py = C.y + max(0.01 * R, 0.02);
-  let dy = select(dir.y, 1e-6, abs(dir.y) < 1e-6);
-  let tp = py / dy;
-  let q = (dir * tp - C).xz / R;            // disc coordinates, 1 at the edge
+  // The disc's plane (through the centre lifted along the normal, camera-relative), every quantity computed before
+  // any branch so the derivatives are valid. Level (normal up), its axes are x and z, as the blast zone always had.
+  let n = rf.normal;
+  let lift = max(0.01 * R, 0.02);
+  let dn = dot(dir, n);
+  let tp = (dot(C, n) + lift) / select(dn, 1e-6, abs(dn) < 1e-6);
+  let level = abs(n.y) > 0.999;
+  let ax = select(normalize(cross(vec3f(0.0, 1.0, 0.0), n)), vec3f(1.0, 0.0, 0.0), level);
+  let az = select(cross(ax, n), vec3f(0.0, 0.0, 1.0), level);
+  let rel = dir * tp - C;
+  let q = vec2f(dot(rel, ax), dot(rel, az)) / R; // disc coordinates, 1 at the edge
   let r = length(q);
   let aa = max(fwidth(r), 1e-4);
   let qa = max(fwidth(q.x) + fwidth(q.y), 1e-4);
@@ -93,7 +104,7 @@ fn depthAt(p: vec3f) -> f32 {
   let stroke = smoothstep(1.0, 1.0 + aa, r) * (1.0 - smoothstep(1.0 + sw, 1.0 + sw + aa, r));
   // A ripple running from the centre to the edge once a second.
   let ph = fract(rf.time);
-  let ripple = exp(-pow((r - ph) / max(0.03, 2.0 * aa), 2.0)) * (1.0 - ph);
+  let ripple = rf.ripple * exp(-pow((r - ph) / max(0.03, 2.0 * aa), 2.0)) * (1.0 - ph);
   let onDisc = tp > 0.0 && r < 1.0 + sw + aa;
 
   // The sphere: front surface, and the chord through a thin layer at the limb (brightest at the silhouette).
@@ -106,40 +117,52 @@ fn depthAt(p: vec3f) -> f32 {
   let ri = R - w;
   let e = 2.0 * (sqrt(max(R * R - p2, 0.0)) - sqrt(max(ri * ri - p2, 0.0))) / (2.0 * sqrt(max(R * R - ri * ri, 1e-8)));
   let front = dir * t0;
-  let onDome = disc > 0.0 && b + sq > 0.0 && front.y > py;
+  let onDome = rf.dome > 0.5 && disc > 0.0 && b + sq > 0.0 && dot(front - C, n) > lift;
 
   if (onDisc) {
     let inside = 1.0 - smoothstep(1.0, 1.0 + aa, r);
     let a = clamp((0.14 + 0.75 * edge + 0.8 * bar + 0.25 * ripple) * inside, 0.0, 1.0) * XRAY;
     let glow = 1.0 + 0.8 * max(edge, bar);
     let sa = 0.55 * stroke * XRAY;
-    out.c = vec4f(RED * rf.gain * glow * XRAY * a * (1.0 - sa), a + sa - a * sa);
+    out.c = vec4f(rf.tint * rf.gain * glow * XRAY * a * (1.0 - sa), a + sa - a * sa);
     out.depth = depthAt(dir * tp);
     return out;
   }
   if (!onDome) { discard; }
   let a = clamp(0.4 * e * e * e, 0.0, 1.0) * XRAY;
-  out.c = vec4f(RED * rf.gain * 1.2 * XRAY * a, a);
+  out.c = vec4f(rf.tint * rf.gain * 1.2 * XRAY * a, a);
   out.depth = depthAt(front);
   return out;
 }
 `;
 
+/** How a zone is drawn: its tint (linear RGB, scaled by the look's sun), whether the dome and the ripple show. */
+export interface ZoneStyle { tint: V3; dome: boolean; ripple: boolean }
+/** The blast zone: red, a dome, a ripple running out to the edge. */
+export const BLAST_STYLE: ZoneStyle = { tint: [1.0, 0.1, 0.03], dome: true, ripple: true };
+/** The impact marker: the aim beads' coral (scene.ts BEAD_COLOUR), flat on the face, still. */
+export const IMPACT_STYLE: ZoneStyle = { tint: [1.0, 0.36, 0.22], dome: false, ripple: false };
+
 /** CPU side: the zone (if shown), the two pipelines (made at the first show) and the draws. */
 export class BlastReach {
-  private zone: { centre: V3; radius: number } | null = null;
+  private zone: { centre: V3; radius: number; normal: V3 } | null = null;
   private gpu: { front: GPURenderPipeline; hidden: GPURenderPipeline; uniform: GPUBuffer; bind: GPUBindGroup } | null = null;
   private live = false;
 
-  constructor(private readonly device: GPUDevice) {}
+  constructor(private readonly device: GPUDevice, readonly style: ZoneStyle = BLAST_STYLE) {}
 
-  /** Show the zone of a blast of radius (world units) going off at centre; null (or a radius that is not positive) hides it. */
-  set(centre: readonly number[] | null, radius = 0): void {
-    this.zone = centre && radius > 0 && centre.length >= 3 && centre.every(Number.isFinite) ? { centre: [centre[0]!, centre[1]!, centre[2]!], radius } : null;
+  /**
+   * Show the zone of radius (world units) at centre, its disc square to `normal` (default up: a level disc);
+   * null (or a radius that is not positive, or a normal of no length) hides it.
+   */
+  set(centre: readonly number[] | null, radius = 0, normal: readonly number[] = [0, 1, 0]): void {
+    const l = Math.hypot(normal[0] ?? 0, normal[1] ?? 0, normal[2] ?? 0);
+    this.zone = centre && radius > 0 && centre.length >= 3 && centre.every(Number.isFinite) && l > 1e-9 && Number.isFinite(l)
+      ? { centre: [centre[0]!, centre[1]!, centre[2]!], radius, normal: [normal[0]! / l, normal[1]! / l, normal[2]! / l] } : null;
   }
 
   /** The zone shown, if any. */
-  get shown(): Readonly<{ centre: V3; radius: number }> | null { return this.zone; }
+  get shown(): Readonly<{ centre: V3; radius: number; normal: V3 }> | null { return this.zone; }
 
   /** Upload this frame's uniforms; returns whether draw() has anything to record. viewProj is camera-relative; gain is the look's sun luminance. */
   prepare(f: { eye: V3; viewProj: Mat4; invViewProj: Mat4; viewport: [number, number]; time: number; gain: number }): boolean {
@@ -151,6 +174,8 @@ export class BlastReach {
     u[32] = f.viewport[0]; u[33] = f.viewport[1]; u[34] = f.time; u[35] = f.gain;
     const c = this.zone.centre;
     u[36] = c[0] - f.eye[0]; u[37] = c[1] - f.eye[1]; u[38] = c[2] - f.eye[2]; u[39] = this.zone.radius;
+    u.set(this.zone.normal, 40); u[43] = this.style.dome ? 1 : 0;
+    u.set(this.style.tint, 44); u[47] = this.style.ripple ? 1 : 0;
     this.device.queue.writeBuffer(g.uniform, 0, u);
     return true;
   }

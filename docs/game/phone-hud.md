@@ -46,9 +46,21 @@ Measured (browser test, Rapier, 1x): upright the strip and tray together are 26.
 6. **Delay measured in sim steps** instead of wall time. Sim time runs at fast-forward after the last crown, so a step count would vary with the device and the pace; the player's eye is on wall time.
 7. **CSS columns** for the sideways card instead of the `.c1` / `.c2` grid: columns cannot keep the buttons with the stamp in the right column and split unpredictably with the lot sheet's length.
 
-## Camera framing
+## Camera framing (PT3b)
 
-The upright camera frames the structure below the top 40% of the screen (`view.ts` `PORTRAIT_HUD_SHARE`), sized for the old tall panel. With the docked HUD the free band is from about 12% (under the strip) to about 76% (above the tray and the hint) of the height, and sideways right of the rail. Framing into that band is the next step: the objectives thread (PT1/PT14) is generalising `viewOf` to take screen insets, and this page will pass the band it measures from the HUD's boxes. Until it lands, L1 upright opens with the bottom 2% of its base under the tray's top edge (every other rated level clears it; measured from `viewOf` at 390 x 844).
+Docked, the opening view keeps clear of the HUD **as measured**, not the old guess. `view.ts` `PORTRAIT_HUD_SHARE` (the top 40% of an upright phone, sized for the old tall panel) still applies to the panel and to Layout classic.
+
+- **What is measured** (`play.ts` `dockedHud`, only while the dock CSS applies: a touch screen, the HUD carrying `kg-dock`, `DOCK_PORTRAIT` or `DOCK_SIDEWAYS`):
+  - Upright: the strip, the tray, and the tray's `.above` holder (the touch and pull hints, the tray's width), each a band (`layout.ts` `hudInsets`). At 390 x 844 that is the top 10.5 to 12% and the bottom 24%.
+  - Sideways: the rail's two groups (the left 27%), and the hints' box as a top band.
+  - Boxes are picked by orientation, so `hudInsets` never reads a narrow hint as a rail (measuring every box, the test's first draft read the sideways hint as a right rail of 72%).
+- **When:** at load, after the new level's HUD is drawn (its lot sheet and rows set: the block that makes the opening view now runs after them), and in the prefetch with the current HUD's band. The prefetch's band can differ from the next level's by a row; then the load searches again (B2's search is about 0.2 s). Measuring the next level's HUD in a hidden copy would make the two agree, at the cost of building its HUD state outside a load; not worth it for a cache miss.
+- **How it frames** (`viewOf` `opts.hud`, `defaultInsets(aspect, hud)`): the measured band over the wide screen's 10% sky margin, in place of the guess; then joined with the level's own panels (`openingInsets`, the fuse panel). Wide, `fitBox` frames the screen's middle square, so `fitShares` turns the rail's share of the width into the part of that square it covers (844 x 390, a rail to 0.27: 0.002).
+- **The search's mask** (`hudRects`, shape `'docked'`): nothing. The fit keeps every corner of the structure's box inside the screen less the measured band, so no body is under the HUD; the floating panel's top-left box (`WIDE_HUD`) stays for the desktop. The search's cache key carries the shape.
+- **Sideways hints moved to the top**, right of the rail: they sat at the bottom beside the tray, over the structure's base (B1's wall, L1's tower). Counting them as a bottom inset would have shrunk every sideways opening by 12% for a hint that goes at the first shot; at the top they sit in the sky the fit keeps free anyway (they add about 2% to the top inset).
+- **Result** (screenshots, 390 x 844): L1's tower stands whole between the strip and the tray, larger than before (it had its base under the hint and tray); B1's wall base is clear of the hint. Duels keep their framing (the Siege Table thread's).
+
+Tests: `view.test.ts` (every series level, upright and sideways with the measured bands: every corner of the structure on screen clear of them, and the objectives in sight; L1's base under the tray on the guess and clear of it docked; `fitShares`, `defaultInsets`, `hudRects`), `phone-hud-e2e.test.ts` (L1, L2, B1 on the page at both shapes: the band the view used matches the HUD's boxes measured in the test, and the structure clears them; Layout classic measures nothing), and the PT1 gate (`sightlines-gpu.test.ts`, the docked HUD at 390 x 844).
 
 ## The Build panel (C9) on a docked phone (PT18, 2026-11-07)
 
