@@ -77,7 +77,8 @@ describe('the Build panel in the docked phone HUD (PT18, C9)', () => {
     const o = await game.open('/?level=T-W1&engine=rapier&offscreen=1&progress=off&door=0', 2 * MINUTES, phone);
     if (!o) return ctx.skip();
     const { page, errors } = o;
-    await page.waitForFunction(() => window.__game.edit.on, undefined, { timeout: 2 * MINUTES, polling: 100 });
+    // Building, and the HUD drawn (its first frame can follow the build phase's start on a loaded machine).
+    await page.waitForFunction(() => window.__game.edit.on && document.querySelector('.kg-hud .st') !== null, undefined, { timeout: 2 * MINUTES, polling: 100 });
 
     // Building: the panel open, the tray put away.
     const b = await boxes(page);
