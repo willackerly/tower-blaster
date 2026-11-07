@@ -55,6 +55,7 @@ When the player changes a setting on the door, it is stored and its URL key is d
 
 - **A separate title page** (its own HTML entry) instead of an overlay. Rejected: the overlay lets B1 load and pre-settle behind the door, which is most of the first-minute budget on a 1k-block level.
 - **Locking levels until the previous one has a star.** Rejected for the playtest: testers have little time and B3 (10k blocks) is the spectacle to judge. The Play button already points at the next unstarred level.
+- **A pull as the opener.** Rejected (PT35): one pull brings nothing down alone, so it keeps no first-minute promise, and U1 (the first Undercut level) would have its par line's first pull played for the player, half the puzzle's answer; agent playtest 2 saw exactly that (the opener pulled a leg, and any adjacent leg then cleared it). `openerFor` never pre-aims a pull, under any `keystone.preaim`.
 - **The pre-aimed opener on every level.** Rejected: it hands out each level's best opening. It is offered once, on a first visit, as an option (`keystone.preaim=1` for all).
 - **Progress keyed by level id only.** Rejected: levels will be re-tuned between playtest deploys, and an old best would read as earned on the new level.
 

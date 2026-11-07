@@ -3,8 +3,10 @@
 // classic; three URL keys say each part for a visit, and the URL wins:
 //   keystone.hud=dock|panel     a phone's HUD: docked (status strip and aim tray upright, a side rail
 //                               sideways) or the one panel at the top left as before
-//   keystone.card=dock|center   the result card: docked aside (right on a wide screen, bottom upright,
-//                               two columns sideways) or centred as before
+//   keystone.card=strip|dock|center  the result card: on a phone a strip in the band the docked HUD held (the
+//                               tray upright, the rail sideways) that opens to the whole card on Details (PT30),
+//                               docked aside (right on a wide screen, bottom upright, two columns sideways) or
+//                               centred as before; on a wide screen strip and dock are the same
 //   keystone.carddelay=<s>      seconds of wall time from the round's end to the card, the tallying
 //                               banner showing meanwhile (0 to 10; docked default 1.2, classic 0)
 
@@ -15,8 +17,8 @@ export const LAYOUT_SETTINGS: readonly LayoutSetting[] = ['docked', 'classic'];
 export interface Layout {
   /** A phone's HUD docked (kg-dock: status strip and aim tray, or a side rail) or the panel. */
   hud: 'dock' | 'panel';
-  /** The result card docked aside (kg-result dock) or centred. */
-  card: 'dock' | 'center';
+  /** The result card: a strip on a phone (kg-result dock strip, PT30), docked aside (kg-result dock) or centred. */
+  card: 'strip' | 'dock' | 'center';
   /** Wall-time seconds from the round's end (its settle) to the card; the tallying banner shows meanwhile. */
   cardDelay: number;
 }
@@ -31,7 +33,7 @@ export const LAYOUT_KEYS = ['keystone.hud', 'keystone.card', 'keystone.carddelay
 
 /** What a Layout setting means with no URL keys. */
 export function layoutFor(setting: LayoutSetting): Layout {
-  return setting === 'docked' ? { hud: 'dock', card: 'dock', cardDelay: CARD_DELAY_S } : { hud: 'panel', card: 'center', cardDelay: 0 };
+  return setting === 'docked' ? { hud: 'dock', card: 'strip', cardDelay: CARD_DELAY_S } : { hud: 'panel', card: 'center', cardDelay: 0 };
 }
 
 /** The layout in effect: each URL key where it says (a bad value is refused, naming the key), else the setting's. */
@@ -43,7 +45,7 @@ export function layoutOf(q: URLSearchParams, setting: LayoutSetting): Layout {
     out.hud = hud;
   }
   if (card !== null) {
-    if (card !== 'dock' && card !== 'center') throw new Error(`keystone.card must be dock or center: ${card}`);
+    if (card !== 'strip' && card !== 'dock' && card !== 'center') throw new Error(`keystone.card must be strip, dock or center: ${card}`);
     out.card = card;
   }
   if (delay !== null) {

@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   BETA_L, beamBending, clickKernel, contactTime, mass, materialFromJson, materialToJson, modes, parseSoundMaterial,
-  pulseSpectrum, CLASSIC_SOUND_MATERIALS, SOUND_MATERIALS, type SoundMaterial,
+  pulseSpectrum, CLASSIC_SOUND_MATERIALS, REAL1_SOUND_MATERIALS, SOUND_MATERIALS, type SoundMaterial,
 } from '@tb/audio';
 import { rng } from '@tb/scenarios';
 
-const pine: SoundMaterial = SOUND_MATERIALS.pine, acrylic: SoundMaterial = SOUND_MATERIALS.acrylic, stone: SoundMaterial = SOUND_MATERIALS.stone;
+const pine: SoundMaterial = SOUND_MATERIALS.pine, acrylic: SoundMaterial = SOUND_MATERIALS.acrylic, stone: SoundMaterial = REAL1_SOUND_MATERIALS.stone; // the plain Hertz cube (the default's adds a face contact)
 const sorted = (a: Float64Array) => [...a].sort((x, y) => x - y);
 
 describe('plank (Kapla)', () => {

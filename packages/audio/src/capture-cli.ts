@@ -5,21 +5,27 @@
 //   kapla  (S15) real Kapla planks (KAPLA_SCALE m a unit), heard standing (eye 1.7 m) `dist` metres
 //          from the tower's foot (6). The scene runs in unit time, which is real time sped up by
 //          k = sqrt(1 / KAPLA_SCALE); the tap reads every few steps and gets real speeds.
-// usage: tsx packages/audio/src/capture-cli.ts out.json [scene=city|kapla N=10000 F=6 H=20 planks=3000 steps= dist=]
+//   tower  (S5, one building F x F x H) the game's blocks (DEFAULT_UNIT, 0.5 m), knocked by a ball
+//          (r 0.7 units, 15 units/s, 11.5 cube masses), heard from the viewer's default camera angle
+//          `dist` metres from the tower's middle (8); unit time is sped up as for kapla.
+// usage: tsx packages/audio/src/capture-cli.ts out.json [scene=city|kapla|tower N=10000 F=6 H=20 planks=3000 steps= dist=]
 import { writeFileSync } from 'node:fs';
 import { RapierEngine } from '@tb/adapter-rapier';
 import { buildScenario, KAPLA_SCALE } from '@tb/scenarios';
+import { DEFAULT_UNIT } from '@tb/keystone';
 import { FrameTap } from './tap.ts';
 
 const [out = 'frames.json', ...kv] = process.argv.slice(2);
 const kv2 = Object.fromEntries(kv.map((a) => a.split('=') as [string, string]));
-const kapla = (kv2.scene ?? 'city') === 'kapla';
-if (!['city', 'kapla'].includes(kv2.scene ?? 'city')) throw new Error(`scene must be city or kapla: ${kv2.scene}`);
-const o: Record<string, number> = kapla ? { planks: 3000, steps: 1200, dist: 6 } : { N: 10000, F: 6, H: 20, steps: 420, dist: 75 };
+const which = kv2.scene ?? 'city', kapla = which === 'kapla', towerScene = which === 'tower';
+if (!['city', 'kapla', 'tower'].includes(which)) throw new Error(`scene must be city, kapla or tower: ${which}`);
+const o: Record<string, number> = kapla ? { planks: 3000, steps: 1200, dist: 6 } : towerScene ? { F: 3, H: 12, steps: 420, dist: 8, speed: 15 } : { N: 10000, F: 6, H: 20, steps: 420, dist: 75 };
 for (const [k, v] of Object.entries(kv2)) { if (k === 'scene') continue; if (!(k in o)) throw new Error(`unknown option ${k}`); o[k] = Number(v); }
 // city: the viewer's default ball (1.4 m across, 40 m/s, 8x a cube's density), fired at step 30. kapla: the scene's own topple.
-const scene = kapla ? buildScenario('S15', { planks: o.planks! }, 1) : buildScenario('S5', { N: o.N!, F: o.F!, H: o.H!, radius: 0.7, speed: 40, massRatio: 11.5, fireStep: 30 }, 1);
-const metres = kapla ? KAPLA_SCALE : 1, k = kapla ? Math.sqrt(1 / KAPLA_SCALE) : 1, every = Math.max(1, Math.round(k)); // steps a frame: ~60 Hz of real time
+const scene = kapla ? buildScenario('S15', { planks: o.planks! }, 1)
+  : towerScene ? buildScenario('S5', { N: o.F! * o.F! * o.H!, F: o.F!, H: o.H!, radius: 0.7, speed: o.speed!, massRatio: 11.5, fireStep: 30 }, 1)
+  : buildScenario('S5', { N: o.N!, F: o.F!, H: o.H!, radius: 0.7, speed: 40, massRatio: 11.5, fireStep: 30 }, 1);
+const metres = kapla ? KAPLA_SCALE : towerScene ? DEFAULT_UNIT : 1, k = metres === 1 ? 1 : Math.sqrt(1 / metres), every = Math.max(1, Math.round(k)); // steps a frame: ~60 Hz of real time
 const n0 = scene.bodies.length, xs = scene.bodies.map((b) => b.pos[0]), zs = scene.bodies.map((b) => b.pos[2]);
 let eye: [number, number, number], target: readonly [number, number, number];
 if (kapla) {
@@ -27,7 +33,8 @@ if (kapla) {
   target = [0, 1.7, 0];
   eye = [o.dist!, 1.7, 0.3 * o.dist!];
 } else {
-  target = [(Math.min(...xs) + Math.max(...xs)) / 2, o.H! / 2, (Math.min(...zs) + Math.max(...zs)) / 2];
+  // In metres (the tap's camera is in metres; metres = 1 for the city).
+  target = [metres * (Math.min(...xs) + Math.max(...xs)) / 2, metres * o.H! / 2, metres * (Math.min(...zs) + Math.max(...zs)) / 2];
   const yaw = (36 * Math.PI) / 180, pitch = (12 * Math.PI) / 180, d = o.dist!;
   eye = [target[0] + d * Math.cos(pitch) * Math.sin(yaw), target[1] + d * Math.sin(pitch), target[2] + d * Math.cos(pitch) * Math.cos(yaw)];
 }

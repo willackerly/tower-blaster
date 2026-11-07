@@ -40,54 +40,115 @@ const battlement = (x: number, y: number): Part[] => [
   { kind: 'block', at: [x + 2, y, -0.5], size: [1, 1, 1], material: 'stone' },
 ];
 
+/** Block parts as unit cubes, in the order compileLevel expands a block (course by course, then x, then z). */
+export function unitCubes(parts: readonly Part[]): Part[] {
+  return parts.flatMap((p): Part[] => {
+    if (p.kind !== 'block' || p.courses || (p.size[0] === 1 && p.size[1] === 1 && p.size[2] === 1)) return [p];
+    const out: Part[] = [];
+    for (let k = 0; k < p.size[1]; k++) for (let i = 0; i < p.size[0]; i++) for (let j = 0; j < p.size[2]; j++) out.push({ ...p, at: [p.at[0] + i, p.at[1] + k, p.at[2] + j], size: [1, 1, 1] });
+    return out;
+  });
+}
+
+/** A block part turned half way round the table's vertical axis: (x, z) to (-x, -z). */
+export const halfTurn = (p: Part): Part => {
+  if (p.kind !== 'block') throw new Error(`halfTurn: only blocks turn, not a ${p.kind}`);
+  return { ...p, at: [-p.at[0] - p.size[0], p.at[1], -p.at[2] - p.size[2]] };
+};
+
+/** D1's keeps: courses below the battlement (four since PT22; six before). */
+export const KEEP_COURSES = 4;
 /**
- * D1 Two Keeps: two 3 x 3 stone keeps six courses high, 21 cells apart, each with a battlement round its top and a
- * gold or blue king cube sunk in the middle of it, and a low plaster wall between them that misses turn into rubble
- * ramps. Each side fires from behind its own keep. Topple the other king to win.
+ * Gold's half of D1, as unit cubes: the keep, the king (2 cubes), then the battlement's two courses. Blue's half is
+ * the same list turned half way round, cube for cube in the same order (PT22): the solver then meets both keeps'
+ * bodies in the same order and with the same neighbours, so a shot and its mirror image play out alike.
+ */
+const D1_GOLD: Part[] = unitCubes([
+  { kind: 'block', at: [-12, 0, -1.5], size: [3, KEEP_COURSES, 3], material: 'stone' },
+  { kind: 'block', at: [-11, KEEP_COURSES, -0.5], size: [1, 2, 1], material: 'stone', role: 'crown' },
+  ...battlement(-12, KEEP_COURSES),
+  ...battlement(-12, KEEP_COURSES + 1),
+]);
+const D1_KING = D1_GOLD.flatMap((p, i) => (p.role === 'crown' ? [i] : []));
+const D1_SIDE = D1_GOLD.length, range = (from: number, n: number) => Array.from({ length: n }, (_, k) => from + k);
+
+/**
+ * D1 Two Keeps: two 3 x 3 stone keeps four courses high, 21 cells apart, each with a two-course battlement round its
+ * top and a gold or blue king, two cubes tall, sunk in the middle of it flush with the top, and a low plaster wall between
+ * them that misses turn into rubble ramps. Each side fires from behind its own keep. Topple the other king to win:
+ * a king is down once both its cubes have left the battlement (each half a course below its place: off the keep).
  *
  * Stone with a sunk king, since the 2026-11-06 agent playtest (PT5): the first table's plaster keeps with the king on
  * top lost their king to almost any first cannonball, so most novice duels were over in one round (Rapier novice
- * bot, 40 seeds: 28% draws, 2.6 turns a duel); stone keeps with the king in a battlement last 5.2 turns, 18% draws,
- * and either side wins about as often (docs/game/siege-table.md, "Balance").
- * Parts: 0 and 1 the keeps, 2 and 3 the kings, 4 the wall, 5 to 8 and 9 to 12 the battlements (west, east).
+ * bot, 40 seeds: 28% draws, 2.6 turns a duel); stone keeps with the king in a battlement lasted 5.2 turns, 18% draws.
+ * Lower, with a second battlement course, since round 2 (PT22): on a phone's view the novice's first cannonball hit
+ * the six-course keep low and felled it, king and all (40 of 72 blocks; 30 of 40 Rapier duels over in 2 turns, a
+ * third of them draws). Four courses and a flush king: median 4 turns on the phone, 6 on a wide screen
+ * (docs/game/siege-table.md, "Balance").
+ * Parts: Gold's keep, king and battlement as unit cubes (D1_SIDE of them), Blue's the same turned half way round, then the wall.
  */
 export const D1: DuelDef = {
   id: 'D1', name: DUEL_NAMES.tables.D1, ruleset: 'keeps',
   level: table('D1', DUEL_NAMES.tables.D1, [
-    { kind: 'block', at: [-12, 0, -1.5], size: [3, 6, 3], material: 'stone' },
-    { kind: 'block', at: [9, 0, -1.5], size: [3, 6, 3], material: 'stone' },
-    { kind: 'block', at: [-11, 6, -0.5], size: [1, 2, 1], material: 'stone', role: 'crown' },
-    { kind: 'block', at: [10, 6, -0.5], size: [1, 2, 1], material: 'stone', role: 'crown' },
+    ...D1_GOLD,
+    ...D1_GOLD.map(halfTurn),
     { kind: 'block', at: [-0.5, 0, -3], size: [1, 3, 6], material: 'plaster' },
-    ...battlement(-12, 6),
-    ...battlement(9, 6),
-  ], 18, 8),
+  ], 18, KEEP_COURSES + 2),
   sides: [
-    { name: 'Gold', owns: { parts: [0, 2, 5, 6, 7, 8] }, king: { parts: [2] }, arc: WEST_ARC, rack: KEEP_RACK, ink: INK.gold },
-    { name: 'Blue', owns: { parts: [1, 3, 9, 10, 11, 12] }, king: { parts: [3] }, arc: EAST_ARC, rack: KEEP_RACK, ink: INK.blue },
+    { name: 'Gold', owns: { parts: range(0, D1_SIDE) }, king: { parts: D1_KING }, arc: WEST_ARC, rack: KEEP_RACK, ink: INK.gold },
+    { name: 'Blue', owns: { parts: range(D1_SIDE, D1_SIDE) }, king: { parts: D1_KING.map((i) => D1_SIDE + i) }, arc: EAST_ARC, rack: KEEP_RACK, ink: INK.blue },
   ] as [DuelSide, DuelSide],
 };
 
 const COURSES = 12;
-/** D2's half-courses, bottom up, south half (z below 0) then north: Gold owns the south half of even courses and the north half of odd ones. */
-const HERALD_PARTS: Part[] = Array.from({ length: 2 * COURSES }, (_, i) => ({ kind: 'block' as const, at: [-1.5, Math.floor(i / 2), i % 2 ? 0 : -2] as [number, number, number], size: [3, 1, 2] as [number, number, number], material: 'stone' as const }));
-const heraldOwns = (gold: boolean) => HERALD_PARTS.map((_, i) => i).filter((i) => (Math.floor(i / 2) % 2 === i % 2) === gold);
+/**
+ * D2's tower, course by course from the bottom: the west face (a column of four cells, x -1.5 to -0.5), the east face
+ * (x 0.5 to 1.5) and the core between them in two halves, south (z below 0) and north. Gold owns the east face (the
+ * one Blue fires at) and one core half, south on even courses and north on odd ones; Blue the rest. A half turn about
+ * the tower's axis maps the west face onto the east and the south core onto the north, so it maps the tower onto
+ * itself with the colours swapped.
+ */
+const HERALD_TOWER: Part[] = Array.from({ length: COURSES }, (_, y): Part[] => [
+  { kind: 'block', at: [-1.5, y, -2], size: [1, 1, 4], material: 'stone' },
+  { kind: 'block', at: [0.5, y, -2], size: [1, 1, 4], material: 'stone' },
+  { kind: 'block', at: [-0.5, y, -2], size: [1, 1, 2], material: 'stone' },
+  { kind: 'block', at: [-0.5, y, 0], size: [1, 1, 2], material: 'stone' },
+]).flat();
+const HERALD_GOLD = unitCubes(HERALD_TOWER.filter((_, i) => { const y = Math.floor(i / 4), k = i % 4; return k === 1 || (k === 2 && y % 2 === 0) || (k === 3 && y % 2 === 1); }));
+/**
+ * D2's parts as unit cubes, each gold cube followed by its half-turn image, which is blue (PT22): on the GPU solver a
+ * contact's first body is the one listed first, and in this order a contact and its mirror image have mirrored first
+ * bodies, so neither colour is always first. (Gold's cubes and then Blue's would put gold first in every gold-blue contact.)
+ */
+const HERALD_PARTS: Part[] = HERALD_GOLD.flatMap((p) => [p, halfTurn(p)]);
+/**
+ * Heraldry's rack: one cannonball to open the face, then marbles to pick at it (PT22). With two cannonballs each the
+ * second cannonball brought down about as much of your own as the rival's (novice median margin 4.5 points over 40
+ * Rapier duels; four cannonballs 2), one gives a median margin of 7; four marbles bring nothing down.
+ */
+const HERALD_RACK: RackItem[] = ['cannonball', 'marble', 'marble', 'marble'];
+const heraldOwns = (gold: boolean) => HERALD_PARTS.flatMap((_, i) => (i % 2 === (gold ? 0 : 1) ? [i] : []));
 
 /**
- * D2 Heraldry: one stone tower, 3 by 4 cells and twelve courses high, quartered: each course half gold and half blue,
- * the halves swapping course by course. Each shot scores the rival's blocks it brings down, less your own.
+ * D2 Heraldry: one stone tower, 3 by 4 cells and twelve courses high. Each side's colour faces the rival's fire:
+ * Blue's blocks make the west face, the one Gold fires at, Gold's the east, and the core between them is mixed. Each
+ * shot scores the rival's blocks it brings down, less your own. A shot that breaks the face it meets scores; one that
+ * brings the whole tower down costs your own colour behind it.
  *
- * Quartered since the 2026-11-06 agent playtest (PT5): the first table's whole courses (gold at the bottom, blue on
- * top) gave every shot more blue blocks down than gold, so Gold won 29 of 30 novice duels whoever went first. Split
- * north and south, the tower looks the same to each side with the colours swapped, so neither owns the bottom or the
- * top. Stone, so it takes more than one round to bring down. Novice bot, 30 seeds: 15 wins each, 8 turns a duel.
+ * Faces since the 2026-11-07 agent playtest round 2 (PT22): the first table's whole courses (gold at the bottom) gave
+ * Gold 29 of 30 novice duels, and their quartered replacement (each course half gold and half blue, swapping course
+ * by course) made almost every shot net about zero (+16/-15): 4 of 18 GPU duels went to the tie-break, and a novice
+ * could not see what a good shot was. With the faces, a shot at the rival's face nets points and a shot that topples
+ * the tower costs (docs/game/siege-table.md, "Balance").
  */
 export const D2: DuelDef = {
   id: 'D2', name: DUEL_NAMES.tables.D2, ruleset: 'heraldry',
+  // The tower stands at the ring's centre, so a launcher behind the camera fires straight away from the eye (PT34).
+  lead: 20,
   level: table('D2', DUEL_NAMES.tables.D2, HERALD_PARTS, 14, COURSES),
   sides: [
-    { name: 'Gold', owns: { parts: heraldOwns(true) }, arc: WEST_ARC, rack: ['cannonball', 'cannonball', 'marble', 'marble'], ink: INK.gold },
-    { name: 'Blue', owns: { parts: heraldOwns(false) }, arc: EAST_ARC, rack: ['cannonball', 'cannonball', 'marble', 'marble'], ink: INK.blue },
+    { name: 'Gold', owns: { parts: heraldOwns(true) }, arc: WEST_ARC, rack: HERALD_RACK, ink: INK.gold },
+    { name: 'Blue', owns: { parts: heraldOwns(false) }, arc: EAST_ARC, rack: HERALD_RACK, ink: INK.blue },
   ] as [DuelSide, DuelSide],
 };
 

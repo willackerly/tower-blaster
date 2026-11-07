@@ -42,8 +42,9 @@ describe('Bullet Time on the game page', () => {
     expect(await page.evaluate(() => ({ frozen: window.__game.frozen, phase: window.__game.phase }))).toEqual({ frozen: true, phase: 'running' });
     // Resume without firing: free, and the shot runs on.
     expect(await fz(false)).toBe(true);
-    await page.waitForFunction((n) => window.__game.stepIndex >= n, held + 5, { timeout: 60_000, polling: 20 });
-    expect(await fz(true)).toBe(true);
+    // Freeze again from inside the page as soon as the shot has run on: the miss leaves the lot about 20 steps after
+    // it is fired, and a freeze polled from the test could land after that on a slow runner (CI saw it refused).
+    expect(await page.evaluate((n) => new Promise<boolean>((done) => { const id = setInterval(() => { if (window.__game.stepIndex >= n) { clearInterval(id); done(window.__game.freeze(true)); } }, 1); }), held + 2)).toBe(true);
     const frozenAt = await at();
     expect(await page.evaluate((s) => window.__game.fire(s), par)).toBe(true);
     expect(await page.evaluate(() => ({ frozen: window.__game.frozen, strokes: window.__game.strokes }))).toEqual({ frozen: false, strokes: 2 });

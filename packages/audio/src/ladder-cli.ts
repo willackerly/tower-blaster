@@ -10,7 +10,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { BLOCK, CollapseEngine } from './engine.ts';
 import { type AudioFrame, binOf, cellOf, DV_EDGES, pitchZ, sectorOf, TOP_FIELDS } from './frame.ts';
-import { type SoundMaterial, soundMaterials, type SoundSet } from './material.ts';
+import { SOUND_SETS, type SoundMaterial, soundMaterials, type SoundSet } from './material.ts';
 import { SOUND_KNOBS, type SoundKnob, tunedMaterial } from './options.ts';
 
 const SR = 48000, FPS = 60, SECTORS = 4, TOP = 8;
@@ -92,7 +92,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   for (const k of Object.keys(kv)) if (!KEYS.has(k) && !k.startsWith('m.')) throw new Error(`unknown option ${k}`);
   if (!kv.out) throw new Error('out= is required');
   const set = (kv.set ?? 'real') as SoundSet;
-  if (set !== 'real' && set !== 'classic') throw new Error(`set must be real or classic: ${set}`);
+  if (!(SOUND_SETS as readonly string[]).includes(set)) throw new Error(`set must be one of ${SOUND_SETS.join(', ')}: ${set}`);
   const mats = soundMaterials(set) as Record<string, SoundMaterial>;
   const knobs = Object.fromEntries((Object.keys(SOUND_KNOBS) as SoundKnob[]).map((k) => [k, kv[k] === undefined ? SOUND_KNOBS[k].def : Number(kv[k])])) as Record<SoundKnob, number>;
   const over = Object.fromEntries(Object.entries(kv).filter(([k]) => k.startsWith('m.')).map(([k, v]) => [k.slice(2), Number.isNaN(Number(v)) ? v : Number(v)]));

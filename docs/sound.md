@@ -526,7 +526,91 @@ Fixed: `sparseModes` hung on a body with no mode table (a 5 cm stone cube, whose
 Page for Will: https://claude.ai/artifact/Rx7wFWSp5tVpMhauwwYpQ4 (stone A-E, ice now and B-E, and
 real recordings of each). His picks become the real set's defaults.
 
-Next: Will's picks, then a tower. The free-text describer (CLAP) still needs huggingface.co.
+Defaults (2026-11-07). Will, away for a while, delegated the picks, so the recommended takes are the
+real set: stone E (`overlap: 1, jitter: 0.15, gritDb: 50, gritRate: 10, face: 0.6`) and ice E
+(`jitter: 0.08, gritDb: 50, gritRate: 30, gritSpread: 0.08, face: 0.5`), with step 3's level trims and
+grit caps (below: stone `gritShare: 0.0015, levelDb: -10`, ice `gritShare: 0.01, levelDb: -7`). The real set before this is
+the set `real1` (viewer `snd.set=real1`, game `keystone.sound=real1`); `classic` stays G6's.
+
+A loud crack burst grows as rate dv^3 against the impact's dv^2: ice at 4 m/s would radiate 16% of the
+impact's kinetic energy as grit. Grit is now capped at GRIT_SHARE (5%) of it (fewer grains of the same
+size past that); soft hits and G6's grit are far under the cap, so they play as before. With step 3's
+trims L1-L5 keep their level: L1 limits 0.9 dB (real1: 1.1), L2 (13 stone hits) peaks at 0.39 (real1: 0.43;
+untrimmed 0.67).
+
+### Step 3: a tower (2026-11-07)
+
+The ladder's scripts stop at a hand-made pile (`tumble`); a tower is the first step the physics writes.
+`capture-cli.ts scene=tower` stands one building of the game's blocks (S5, F x F x H cubes of
+DEFAULT_UNIT, 0.5 m) on Rapier, knocks it down with the viewer's ball and taps it from the viewer's camera
+angle `dist` m away. Four towers: F3 H12 ball 15 units/s at 8 m (1148 impacts), F2 H10 10/s (645), F4 H8
+20/s (1581), F3 H16 12/s at 12 m (917). Each take is rendered level-free (peak 0.5) and judged
+(tools/sound-judge), and matched on octave spectra (dist.py) to the real rock-break, brick and stone drops
+(stone) or ice break and crack (ice). Means over the four:
+
+| take | real share | mineral | fireworks-like | crack-like | tonal | octave rms (dB) |
+|---|---|---|---|---|---|---|
+| stone real1 (step 2b) | 0.60 | 0.35 | 0.00 | 0.05 | 0.02 | 8.1 |
+| stone E, grit at GRIT_SHARE 5% | 0.98 | 0.49 | **0.69** | 0.27 | 0.00 | 6.6 |
+| stone E, gritShare 0.0015 (default) | 0.95 | 0.50 | 0.08 | **0.39** | 0.00 | **4.9** |
+| stone E, no grit | 0.91 | 0.42 | 0.04 | 0.09 | 0.00 | 5.0 |
+| ice real1 | 0.47 | 0.05 | 0.00 | 0.00 | 0.88 | 10.9 |
+| ice E, grit at 5% | 0.97 | 0.44 | **0.69** | 0.20 | 0.00 | 2.0 |
+| ice E, gritShare 0.01 (default) | 0.92 | 0.50 | 0.19 | 0.33 | 0.01 | 2.7 |
+| ice E, no grit | 0.42 | 0.10 | 0.00 | 0.00 | 0.50 | 3.4 |
+
+(fireworks-like: Explosion, Fireworks, Firecracker, Cap gun, Gunshot, Burst in the judge's top six;
+crack-like: Crack, Breaking, Crackle, Crumpling, Scrape, Shatter, Smash, Rumble, Thud, Clatter, Rattle.
+The real rock-break and ice-break clips read Crack, Breaking, Crackle, Crumpling; none reads fireworks.)
+
+What the tower found, and what changed:
+
+- **Grit at a tower's speeds read as fireworks.** Knocks and clatters (0.5-3 m/s) shed little grit; a ball
+  at 10 m/s and the blocks it throws shed it at the 5% cap, a dense string of loud dry pops. New key
+  `gritShare` (0 to 1, absent GRIT_SHARE): the material's own cap. Stone takes 0.0015 and ice 0.01
+  (ice needs its crackle: with no grit it reads glass and tonal again). Below the cap nothing changes,
+  so the knock and clatter takes are as judged (their loudness moves 0.0 dB for stone, 0.3 dB for ice).
+- **The takes were 5-17 dB louder than the sounds they replaced.** Step 2c judged them peak-normalised,
+  so their level was never heard: the face contact alone adds ~10 dB for stone and ~6 dB for ice (a
+  shorter contact puts more force into the radiating modes), and grit at the 5% cap added up to 7 dB
+  more on a tower. In the game a stone tower would have limited by 13 dB. New key `levelDb` (-60 to 20,
+  absent 0): one gain on everything the material sounds (top voices, background, dense field, grit;
+  it scales A = dv / distance, which all of them are linear in), so timbre is untouched. Stone takes
+  -10 dB and ice -7 dB, the medians of real-minus-real1 loudness over knock, clatter, tumble and the four
+  towers (spread +-1.4 dB). A level trim, not physics: the game was mixed on real1, and the tower now
+  plays stone within 1.0 dB and ice within 0.3 dB of it (test: knock, clatter and tumble within 3 dB).
+
+`levels-cli.ts` takes `set=`.
+
+### Step 4: a level (2026-11-07)
+
+The game's own path: `sound-cli.ts` plays a level on the AVBD reference, taps it from the game's opening
+camera and renders it through the level's sound slots at the game's level, limiter and all. It now takes
+any built-in level (its par line, else its showcase line, else `shots=`), and maps every body by its
+description as the page does (a spawned ice piece was an index past the shots). The ice trials have no
+recorded line, so each takes a cannonball at the centre then a grenade from 20 degrees round
+(`cannonball.0.16.0.20.100_w-grenade.40.12.0.30.100`).
+
+| level (impacts) | set | judge: real share, top classes | limiter: worst, time under -3 dB |
+|---|---|---|---|
+| T-I1 ice tower (526 block, 6449 piece) | real1 | 0.79: Glass, Chink, Music, Ding | -6.9 dB, 80 ms |
+| | **real** | **0.93**: Explosion, Chainsaw, Breaking (mineral .42) | -12.3 dB, 370 ms |
+| T-I2 ice wall (1083, 1185) | real1 | 0.62: Glass, Chink, Ding, Music | none |
+| | **real** | **0.89**: Glass, Explosion, Chink, Fireworks | none |
+| T-I3 stone keep, ice top (476 stone, 299 ice, 1429 piece) | real1 | 0.64: Glass, Music, Chink, Breaking | -7.6 dB, 100 ms |
+| | **real** | **0.86**: Sound effect, Camera, Fire (mineral .39) | -9.9 dB, 340 ms |
+
+What the level found:
+
+- **A shattered ice block's pieces sounded as whole blocks.** Keystone splits a block 2 x 2 x 2 (ice.ts);
+  every piece played ice at the block's edge, so a grenade's 6000 piece hits rang like 6000 blocks. New
+  slot `PIECE_SLOT` (sound-map.ts, after the ammo): ice at half the edge, an octave up with an eighth of
+  a block's energy. The pieces now sit 12-18 LU under the blocks.
+- **A grenade among ice blocks drives the limiter in either set**: the whole blocks it throws peak
+  7-9 dB over full scale at the game's level (real1 too). The real set holds it 3-4 times as long (its
+  grit is crackle: peak-to-loudness 2-6 dB over real1's). Left as is: it lasts a third of a second inside
+  an explosion, which is what the limiter is there for; a listening item for Will.
+- The real set reads as breaking where real1 read as glass and music on every ice level.
 
 ## Plan (each step lands with its test)
 

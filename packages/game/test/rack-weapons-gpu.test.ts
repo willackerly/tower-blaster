@@ -1,3 +1,4 @@
+// Nightly only (vitest.nightly.json, PHYSICS_GPU_SLOW=1): one case over the 300 s a CI file may take.
 // WeaponSpec weapons in the rack (roadmap G3.4) on the GPU solver, the game's default:
 // the page plays a firework line from the link, the GPU engine holds the firework's
 // whole budget (gpuOptions: its shell and 12 stars), the split, blasts and removals run

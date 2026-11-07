@@ -3,10 +3,10 @@
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
 import { CEILING, contactTime, loudness, parseSoundMaterial, ROUGH_T } from '@tb/audio';
-import { AMMO_KINDS, ammoBody, compileLevel, grenadeShell, KEYSTONE_GRENADE, L1, LEVELS, MATERIALS } from '@tb/keystone';
+import { AMMO_KINDS, ammoBody, compileLevel, grenadeShell, iceOf, KEYSTONE_GRENADE, L1, levelById, LEVELS, MATERIALS, shatterPieces } from '@tb/keystone';
 import { PRESET_NAMES } from '@tb/weapons';
 import { capture, render } from '../src/sound-cli.ts';
-import { AMMO_SLOT, ammoKindOf, ammoOn, mainMaterial, pairEc, GAME_SOUND_DB, gameSoundDb, KEYSTONE_SOUNDS, keystoneSounds, slotSounds, SOUND_SLOTS, soundSetOf, soundSlotOf } from '../src/sound-map.ts';
+import { AMMO_SLOT, PIECE_SLOT, ammoKindOf, ammoOn, mainMaterial, pairEc, GAME_SOUND_DB, gameSoundDb, KEYSTONE_SOUNDS, keystoneSounds, slotSounds, SOUND_SLOTS, soundSetOf, soundSlotOf } from '../src/sound-map.ts';
 
 describe('game sound slots', () => {
   it('every Keystone material and ammo kind has a valid sound at its own size', () => {
@@ -62,12 +62,23 @@ describe('game sound slots', () => {
     for (const l of LEVELS.filter((x) => /^L[1-5]$/.test(x.id))) {
       const c = compileLevel(l), real = slotSounds(c), classic = slotSounds(c, 'classic');
       expect(mainMaterial(c)).toBe('plaster');
-      for (let k = AMMO_SLOT; k < SOUND_SLOTS; k++) {
+      for (let k = AMMO_SLOT; k < PIECE_SLOT; k++) {
         expect(real[k]!.material.Ec).toBeCloseTo(on.Ec!, -3);
         expect(classic[k]!.material.Ec).toBeUndefined(); // G6's steel on steel
         expect(() => parseSoundMaterial(real[k]!.material)).not.toThrow();
       }
     }
+  });
+
+  it('a shattered ice block\'s pieces sound as ice at half the edge (an octave up, an eighth of the energy), not as whole blocks', () => {
+    const c = compileLevel(L1), h = c.frame.unit, slot = slotSounds(c)[PIECE_SLOT]!;
+    expect(PIECE_SLOT).toBe(SOUND_SLOTS - 1);
+    expect(slot).toEqual({ material: KEYSTONE_SOUNDS.ice, edge: h / 2 });
+    const block = compileLevel(levelById('T-I1')).scene.bodies[0]!; // an ice block, as a level stands it
+    const pieces = shatterPieces(block, block.pos, block.rot, [0, 0, 0], [0, 0, 0], 6, iceOf(undefined), 0);
+    expect(pieces).toHaveLength(8);
+    for (const e of pieces) expect(soundSlotOf(c, e.body, c.meta.n + 1)).toBe(PIECE_SLOT);
+    expect(soundSlotOf(c, block, c.meta.n + 1)).toBe(-1); // a body at ice's own density spawned later is not a piece
   });
 
   it('structure bodies sound as their material, spawned ones as their ammo', () => {

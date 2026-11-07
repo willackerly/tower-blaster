@@ -1,6 +1,6 @@
 // The cast on the GPU solver (roadmap G5.1): the game's cast page plays lines
 // exactly as the game builds its engine, so the same line twice on one device
-// ends bit for bit the same, and a small cast runs end to end. SwiftShader in
+// ends bit for bit the same (a small cast end to end: cast-gpu-small.test.ts). SwiftShader in
 // CI (a 6-cube level with 60 pre-settle steps keeps a play near 10 s there);
 // Metal with TB_CHANNEL=chrome. Big levels cast with pnpm keystone:cast.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -50,14 +50,4 @@ describe('cast on the GPU solver', () => {
     }
     console.log(`reopens: ${player.reopens.join(' | ')}`);
   }, 10 * MINUTES);
-
-  it('a small cast runs end to end: every play complete, no limit hit, thresholds ordered', async (ctx) => {
-    if (!player) return ctx.skip();
-    const r = await castLevel(TINY, player, { recipe: { competent: 3, climbLines: 1, climbMoves: 1, climbNudges: 1, cloud: 2 }, seed: 1 });
-    expect(r.n).toBe(7);
-    expect(r.lines.every((l) => l.complete && l.limits.length === 0)).toBe(true);
-    expect(r.stars).toMatchObject({ metric: 'collapse', engine: 'gpu', castOn: player.adapter, hash: compileLevel(TINY).hash, n: 7 });
-    expect(r.stars.t2).toBeLessThanOrEqual(r.stars.t3);
-    expect(r.gates.limits.pass && r.gates.complete.pass).toBe(true);
-  }, 15 * MINUTES);
 });

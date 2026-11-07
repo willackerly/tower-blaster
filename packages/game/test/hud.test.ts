@@ -32,8 +32,8 @@ describe('formatting', () => {
     const base = { level: L2, strokes: 0, crownsDown: 1, crownsTotal: 6, heritageBroken: 0, heritageTotal: 36, power: 60, leverage: { round: 0, shot: 0 }, phase: 'aiming', reachable: null };
     // A bell level (Rube Lab, PT26) says what it wants, and ticks it once rung; other par levels show no objective row.
     const bell = hudHtml({ ...base, level: RL1, crownsDown: 0, crownsTotal: 1, heritageTotal: 0, chips: rackChips(RL1.rack, RL1.rack, 'plunger') });
-    expect(bell).toMatch(/<span>Objective<\/span><span class="">ring the bell<\/span>/);
-    expect(bell).toMatch(/Bells rung<\/span><span class="crowns">0 \/ 1/);
+    expect(bell).toMatch(/<span>Objective<\/span><span class="fit"><span class="">ring the bell<\/span>/);
+    expect(bell).toMatch(/Bells rung<\/span><span class="fit"><span class="crowns">0 \/ 1/);
     expect(hudHtml({ ...base, level: RL1, crownsDown: 1, crownsTotal: 1, heritageTotal: 0, chips: [] })).toMatch(/<span class="ok">ring the bell ✓<\/span>/);
     expect(hudHtml({ ...base, chips: [] })).not.toMatch(/Objective/);
     const marble = hudHtml({ ...base, chips: rackChips(L2.rack, L2.rack, 'marble') });
@@ -77,12 +77,14 @@ describe('formatting', () => {
     expect(html).not.toMatch(/Down </);
     expect(html).toMatch(/keep the crown up/);
   });
-  it('a pull chip is labelled Pull, has no power bar, and a refused pull says why instead of out of reach', () => {
+  it('a pull chip is labelled Pull, has no live power bar, and a refused pull says why instead of out of reach', () => {
     const base = { level: L2, strokes: 0, crownsDown: 0, crownsTotal: 6, heritageBroken: 0, heritageTotal: 36, power: 60, leverage: { round: 0, shot: 0 }, phase: 'aiming', reachable: null };
     const chips = rackChips(['pull', 'pull', 'marble'], ['pull', 'marble'], 'pull');
     const html = hudHtml({ ...base, chips });
     expect(html).toMatch(/Pull <b>1<\/b>\/2/);
-    expect(html).not.toMatch(/Power/);
+    // No power bar to use while the pull is selected; its place is held (hidden) because the rack's marble aims (PT30).
+    expect(html).toMatch(/<div class="row held"><span>Power/);
+    expect(hudHtml({ ...base, chips: rackChips(['pull'], ['pull'], 'pull') })).not.toMatch(/Power/);
     const refused = hudHtml({ ...base, chips, reachable: false, pullRefused: true });
     expect(refused).toMatch(/Crowns, heritage and fixed beams stay/);
     expect(refused).not.toMatch(/Out of reach/);
@@ -187,7 +189,7 @@ describe('formatting', () => {
     const def = { ...L1, scoring: 'outcome' as const };
     const score = outcomeScore({ met: true, collapse: 0.62, leverage: 1, comboMax: 4, hasCrowns: true, rackLeft: 3, heritageBroken: 0, outOfLot: 0, crownsDown: 4, skylineRatio: 0.3, pulled: 0 }, undefined);
     const html = resultHtml(def, score, 1, false);
-    expect(html).toMatch(/1 shot · 62% down · <span title="[^"]*">leverage/);
+    expect(html).toMatch(/<div class="sub" title="[^"]*">1 shot · 62% down · leverage/);
     expect(html).not.toMatch(/par/);
     expect(html).toMatch(/>62% DOWN</);
     expect(html).toMatch(/Rack left/);
@@ -240,7 +242,7 @@ describe('playtest polish (U5, U6)', () => {
   it('the result card offers Undo shot (key U) after a shot, before Retry', () => {
     const score = levelScore(L1, [{ ke: 1000, yield: 0, dPE_mJ: 2_000_000, leverage: 2, crownsDown: 4, crownsTotal: 4, heritageNew: 0, displaced: 30, outOfLot: 0, pe_mJ: 0, spawnStep: 0, settleStep: 100 }], true, 40);
     const html = resultHtml(L1, score, 1, true, false, '', true);
-    expect([...html.matchAll(/data-act="(\w+)"/g)].map((m) => m[1])).toEqual(['undo', 'retry', 'next']);
+    expect([...html.matchAll(/data-act="(\w+)"/g)].map((m) => m[1])).toEqual(['card', 'undo', 'retry', 'next']);
     expect(resultHtml(L1, score, 1, true)).not.toMatch(/undo/);
   });
   it('the hint line fits its budget and names undo, restart and where the rest are; ? shows every key', () => {
@@ -280,15 +282,25 @@ describe('scores and leverage add up (PT9, PT16)', () => {
       const html = resultHtml(d, score, s, false);
       // PT31: no card says Brute at all now; under the gold line it says how far the line is.
       expect(html).not.toContain('(Brute)');
-      expect(html).toMatch(/\((Clean|Elegant|Keystone)\)<\/span>| · gold at ×/);
+      expect(html).toMatch(/\((Clean|Elegant|Keystone)\)<\/div>| · gold at ×/);
       if (html.includes('class="gold got"')) expect(html).not.toContain('gold at');
     }
   });
   it('an outcome level without a gold line names no tier', () => {
     const score = outcomeScore({ met: true, collapse: 0.5, leverage: 0.13, comboMax: 0, hasCrowns: false, rackLeft: 0, heritageBroken: 0, outOfLot: 0, crownsDown: 0, skylineRatio: 1, pulled: 0 }, undefined);
     const html = resultHtml(B1, score, 2, false);
-    expect(html).toContain('leverage ×0.13</span>');
+    expect(html).toContain('leverage ×0.13</div>');
     expect(html).not.toMatch(/Brute|Clean/);
+  });
+  it('a hold level\'s card shows one metric, the share pulled: no "% down" beside the PULLED stamp (PT35)', () => {
+    // Agent playtest 2, U3: "4 shots · 4% down" sat beside "13% PULLED".
+    const facts = { met: true, collapse: 0.04, leverage: 0.2, comboMax: 0, hasCrowns: true, rackLeft: 20, heritageBroken: 0, outOfLot: 0, crownsDown: 0, skylineRatio: 1, pulled: 0.13, hold: true };
+    const held = resultHtml(U3, outcomeScore(facts, undefined), 4, false);
+    expect(held).toContain('13% PULLED');
+    expect(held).not.toMatch(/% down/i);
+    expect(held).toMatch(/<div class="sub"[^>]*>4 shots · leverage /);
+    // A collapse level keeps its share down on the sub line.
+    expect(resultHtml(B1, outcomeScore({ ...facts, hold: false, collapse: 0.5 }, undefined), 2, false)).toContain('2 shots · 50% down');
   });
   it('a Chorus card shows the worlds cleared, with no tier and no gold badge (M9, chorus.ts chorusScore)', () => {
     const def = { ...L1, rack: ['cannonball' as const], chorus: { worlds: 64 } }; // a par level: the badge would show but for the worlds
@@ -320,14 +332,15 @@ describe('scores and leverage add up (PT9, PT16)', () => {
     expect([at(9).stars, at(2, 1).stars, at(2, 1).heritageStarsLost, at(9, 1).stars]).toEqual([1, 2, 1, 1]);
     expect(levelScore(RL1, [shot({})], false, 40, 2)).toMatchObject({ stars: 0, stamp: 'INCOMPLETE' });
     const html = resultHtml(RL1, par, 1, false);
-    expect(html).toMatch(/<div class="sub">parts 2 \/ par 2 · <span title="[^"]*">leverage/);
+    expect(html).toMatch(/<div class="sub" title="[^"]*">parts 2 \/ par 2 · leverage/);
     expect(html).not.toContain('stroke');
     // Other par levels keep their strokes line and gold.
     expect(levelScore(L5, [shot({ dPE_mJ: 1e9 })], true, 40, 7).parts).toBeUndefined();
   });
   it('a Bullet Time card shows the freezes used', () => {
     const score = levelScore({ ...L5, freeze: 2 }, [shot({ cut: true }), shot({ dPE_mJ: 1e7 })], true, 40);
-    expect(resultHtml(L5, score, 2, false)).toContain(`2 strokes · par 1 · <span title="${esc(LEVERAGE_MEANS)}">leverage ×5.00 (Clean)</span> · freezes used 1/2`);
+    // The explanation is the sub line's tooltip (PT31), on any card whose line names leverage.
+    expect(resultHtml(L5, score, 2, false)).toContain(`<div class="sub" title="${esc(LEVERAGE_MEANS)}">2 strokes · par 1 · leverage ×5.00 (Clean) · freezes used 1/2</div>`);
     expect(score.stamp).toBe('PAR');
   });
   it('How to play says what leverage is (Chamber), and the card says a total never goes below 0', () => {

@@ -1,3 +1,4 @@
+// Nightly only (vitest.nightly.json, PHYSICS_GPU_SLOW=1): one case over the 300 s a CI file may take on SwiftShader.
 // The big levels at rest on the GPU solver (roadmap G5): each loads on the
 // game's cast page exactly as the game builds it, pre-settles, then stands
 // with nothing fired: no structure body moves 0.05 h, the top does not sink
