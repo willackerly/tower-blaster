@@ -33,8 +33,8 @@ The agent playtest (round 1, `docs/game/agent-playtest-1.md`, judge 3's promotio
 | T-B3B | Ten Thousand (B3b) | draft B3b | 10,000 | rework | keep this one variant; cast stars |
 | T-B4A | Domino Boulevard (B4a) | draft B4a | 1,680 | rework | the chain never propagated (3%) |
 | T-B5A, T-B5B, T-B5C | Kapla Spire | drafts B5a (one spire), B5b (five towers), B5c (B5a without GPU sleep) | 2,884; 3,106; 2,884 | new (G5, after the playtest) | planks 1.5 x 0.3 x 0.1 m; launcher 27 m up; judged in the next agent round |
-| T-I1 | Ice Tower | ice | 40 | rework | opener out of reach, crowns at the frame's edge (PT14) |
-| T-I2 | Ice Wall | ice | 48 | rework | one cannonball brings 85% down against a 30% objective |
+| T-I1 | Ice Tower | ice | 90 | rework done (PT38) | was a 2 x 2 column one cannonball cleared; now 3 x 3, 10 high, nine crowns, marbles first |
+| T-I2 | Ice Wall | ice | 96 | rework done (PT38) | was one wythe, 85-100% down from one cannonball against a 30% objective; now two deep, 65% to clear, marbles first |
 | T-I3 | Frozen Keep | ice | 72 | promote | the ice intro, par 1 |
 | T-W1 | Domino Workshop | workshop (placement.md): three crown dominoes a quarter circle apart, one marble, a 30-domino build brush | 3 + what you lay | new (C9, after the playtest) | crown line 0.6 h; played in the next agent round |
 
