@@ -147,6 +147,7 @@ export function objectiveText(o: Objective): string {
     case 'skyline': return `skyline under ${o.maxH} h`;
     case 'collapse': return `bring ${pct(o.min)} down`;
     case 'hold': return 'keep the crown up';
+    case 'fold': return `fold ${pct(o.min)} into its lot, neighbours untouched`;
     case 'bell': return 'ring the bell';
   }
 }
@@ -238,8 +239,9 @@ export function hudHtml(s: HudState, sheet = ''): string {
   const heritage = s.heritageTotal ? `<div class="row"><span>Heritage</span><span class="${s.heritageBroken ? 'bad' : 'ok'}">${s.heritageBroken ? `${s.heritageBroken} cracked` : 'intact'}</span></div>` : '';
   const sel = s.chips.find((c) => c.selected)?.ammo;
   // The power bar, with minus and plus buttons on a touch screen (keys Q and E).
-  const power = sel === 'drop' || sel === 'pull' ? '' : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
-  const height = sel === 'drop' || sel === 'pull' || s.launch === undefined ? '' : launchRow(s.launch);
+  // A plunger aims at nothing (the timeline sets it): no power, no launcher height.
+  const power = sel === 'drop' || sel === 'pull' || sel === 'plunger' ? '' : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
+  const height = sel === 'drop' || sel === 'pull' || sel === 'plunger' || s.launch === undefined ? '' : launchRow(s.launch);
   const reach = s.pullRefused ? `<div class="${s.pullRefused === 'tapped' ? 'bad' : 'hint'} small pull-hint">${PULL_HINT}</div>` : s.reachable === false ? '<div class="bad small reach">Out of reach at this power</div>' : '';
   const ctl = `<div class="ctl">${power}${height}</div>`;
   const pace = s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : '';

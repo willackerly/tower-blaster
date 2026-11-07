@@ -92,7 +92,7 @@ describe('bell', () => {
     const w = (x: number) => ({ idx: Int32Array.from([2]), pos: Float64Array.from([x, h, 0]), rot: Float64Array.from([0, 0, 0, 1]), linVel: new Float64Array(3), angVel: new Float64Array(3) });
     type Obs = Parameters<Session['observe']>[0];
     const red = (step: number, moving: boolean): Obs['red'] => ({
-      step, nAwake: moving ? 1 : 0, maxSpeed: moving ? 1 : 0, maxAngSpeed: 0, pe_mJ: 0, displaced: 0, outOfLot: 0, heightHist: new Uint32Array(8), impacts: new Uint32Array(48),
+      step, nAwake: moving ? 1 : 0, maxSpeed: moving ? 1 : 0, maxAngSpeed: 0, pe_mJ: 0, peHeritage_mJ: 0, displaced: 0, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(8), impacts: new Uint32Array(48),
       nMoving: moving ? 1 : 0, movingBox: new Float64Array(6), ammoSpeed: 0,
     });
     s.fire({ ammo: 'plunger', fuse: [[0, 0]] }, 300);
