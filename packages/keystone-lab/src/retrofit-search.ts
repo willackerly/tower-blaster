@@ -19,6 +19,7 @@
 import { BuildSession, compileLevel, type Hit, type Hold, type LevelDef, parseTower, type QuakeShot, quakeRulesOf, type QuakeSite, towerFootprint, towerHeight } from '@tb/keystone';
 import type { EngineSpec } from './engines.ts';
 import { playQuakeTasks, type QuakeTask } from './quake-search.ts';
+import type { BuildStep } from './rube.ts';
 
 export const NUDGES = 8, ROBUST = 7, BARE_MAX = 1;
 
@@ -59,11 +60,12 @@ function topHit(s: BuildSession, b: number, dx = 0, dz = 0): Hit {
   const body = s.compiled().scene.bodies[b]!, half = body.shape.kind === 'box' ? body.shape.half : [0, 0, 0] as const;
   return { body: b, point: [body.pos[0] + dx * half[0]!, body.pos[1] + half[1]!, body.pos[2] + dz * half[2]!], normal: [0, 1, 0], t: 0 };
 }
-const put = (s: BuildSession, hit: Hit, hold: Hold) => s.place(s.ghost(hit, hold));
+type Put = (s: BuildSession, hit: Hit, hold: Hold) => boolean;
+const put: Put = (s, hit, hold) => s.place(s.ghost(hit, hold));
 const lastBody = (s: BuildSession) => s.compiled().meta.n - 1;
 
 /** Applies one brace to the session; false when the tool refuses any step (overlap, ground, budget, not offered). */
-function applyBrace(s: BuildSession, site: QuakeSite, bodies: ReturnType<typeof towerBodies>, axis: 0 | 90, b: Brace): boolean {
+function applyBrace(s: BuildSession, site: QuakeSite, bodies: ReturnType<typeof towerBodies>, axis: 0 | 90, b: Brace, put: Put): boolean {
   const t = site.towers[b.tower]!, spec = parseTower(t.tower), [fx, fz] = towerFootprint(spec, t.yawed), p = s.pitch;
   if (b.kind === 'buttress') {
     // The cells either side of the tower's middle along the axis, on the ground.
@@ -84,8 +86,23 @@ function applyBrace(s: BuildSession, site: QuakeSite, bodies: ReturnType<typeof 
 /** The level braced with `braces` through the build tool, and what it cost; null when the tool refuses one. */
 export function bracedLevel(def: LevelDef, site: QuakeSite, braces: readonly Brace[]): { def: LevelDef; spent: number } | null {
   const s = new BuildSession(def), bodies = towerBodies(site), axis = axisOf(def);
-  for (const b of braces) if (!applyBrace(s, site, bodies, axis, b)) return null;
+  for (const b of braces) if (!applyBrace(s, site, bodies, axis, b, put)) return null;
   return { def: s.def(), spent: s.spent() };
+}
+
+/**
+ * The bracing as build-tool steps (a hit and what is held), in the order the build tool places them: what a player's
+ * clicks give (the agent playtest replays them on the game page, playtest agent/modes.ts); null when the tool refuses one.
+ */
+export function braceSteps(def: LevelDef, site: QuakeSite, braces: readonly Brace[]): BuildStep[] | null {
+  const s = new BuildSession(def), bodies = towerBodies(site), axis = axisOf(def), steps: BuildStep[] = [];
+  const record: Put = (s, hit, hold) => {
+    if (!put(s, hit, hold)) return false;
+    steps.push({ place: hold.item as Extract<BuildStep, { place: unknown }>['place'], hit, ...(hold.yaw ? { yaw: hold.yaw } : {}), ...(hold.tip ? { tip: hold.tip } : {}) });
+    return true;
+  };
+  for (const b of braces) if (!applyBrace(s, site, bodies, axis, b, record)) return null;
+  return steps;
 }
 
 /**

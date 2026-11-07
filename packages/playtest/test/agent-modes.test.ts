@@ -2,11 +2,12 @@
 // rays the harness sends the page, builds exactly the level the lab's build program gives when it goes through
 // the page's own edit controller (game edit.ts, DOM-free); Fuse & Fold's sweep points at each site's yard.
 import { describe, expect, it } from 'vitest';
-import { FUSE_LEVELS, RUBE_LEVELS } from '@tb/keystone';
+import { FUSE_LEVELS, RETROFIT_LEVELS, RUBE_LEVELS } from '@tb/keystone';
 import { EditController } from '../../game/src/edit.ts';
 import { build } from '../../keystone-lab/src/rube.ts';
+import { RETROFIT_SOLUTIONS, retrofitBuild, retrofitSteps } from '../../keystone-lab/src/retrofit-solutions.ts';
 import { RUBE_SOLUTIONS } from '../../keystone-lab/src/rube-solutions.ts';
-import { buildActions, fuseSweep, rubeLine, yawPresses } from '../src/agent/modes.ts';
+import { buildActions, buildLine, fuseSweep, retrofitLine, rubeLine, yawPresses } from '../src/agent/modes.ts';
 
 describe('Rube Lab builds as page actions', () => {
   it('turns the short way round in 15 deg presses', () => {
@@ -30,6 +31,23 @@ describe('Rube Lab builds as page actions', () => {
       expect(JSON.stringify(ed.play()), b.label).toBe(JSON.stringify(want!.def));
     }
     expect(rubeLine(def)?.label).toBe(RUBE_SOLUTIONS[def.id]![0]!.label);
+  });
+});
+
+describe('Aftershock retrofits\' bracings as page actions', () => {
+  it.each(RETROFIT_LEVELS.map((l) => [l.id, l] as const))('%s: every recorded bracing, sent as keys and rays through the edit controller, builds what the retrofit search builds', (_, def) => {
+    for (const b of RETROFIT_SOLUTIONS[def.id]!) {
+      const want = retrofitBuild(def, b), ed = new EditController(def);
+      for (const a of buildActions(def, retrofitSteps(def, b))) {
+        if ('key' in a) expect(ed.key(a.key, { shift: a.shift }), `${b.label}: key ${a.key}`).toBe(true);
+        else if (a.ray === 'move') ed.move(a.at);
+        else if (a.ray === 'down') ed.down(a.at);
+        else expect(ed.up(a.at), `${b.label}: ${ed.message}`).toBe(true);
+      }
+      expect(JSON.stringify(ed.play()), b.label).toBe(JSON.stringify(want.def));
+    }
+    expect(retrofitLine(def)?.label).toBe(RETROFIT_SOLUTIONS[def.id]![0]!.label);
+    expect(buildLine(def)?.label).toBe(RETROFIT_SOLUTIONS[def.id]![0]!.label);
   });
 });
 

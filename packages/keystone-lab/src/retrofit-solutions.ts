@@ -6,7 +6,8 @@
 // three-star line (the cheapest the search found); the second is the other family's cheapest, its two-star line.
 // Replayed on the reference (test/retrofit-ref-*.test.ts) and on the GPU (test/retrofit-gpu-*.test.ts).
 import { type LevelDef, RETROFIT_SITES } from '@tb/keystone';
-import { type Brace, bracedLevel, crossBraced, type Family } from './retrofit-search.ts';
+import { type Brace, braceSteps, bracedLevel, crossBraced, type Family } from './retrofit-search.ts';
+import type { BuildStep } from './rube.ts';
 
 export interface RetrofitBuild { label: string; family: Family | 'none' | 'across'; braces: Brace[] }
 
@@ -47,4 +48,12 @@ export function retrofitBuild(def: LevelDef, b: RetrofitBuild): { def: LevelDef;
   const r = b.family === 'across' ? crossBraced(def, site, b.braces) : bracedLevel(def, site, b.braces);
   if (!r) throw new Error(`${def.id}: the build tool refused "${b.label}"`);
   return r;
+}
+
+/** A recorded bracing as build-tool steps (retrofit-search braceSteps); throws when the build tool refuses a step. */
+export function retrofitSteps(def: LevelDef, b: RetrofitBuild): BuildStep[] {
+  if (b.family === 'across') throw new Error(`${def.id}: "${b.label}" is braced for a turned quake; it has no steps on the level as it is`);
+  const steps = braceSteps(def, RETROFIT_SITES[RETROFIT_SITE_OF[def.id]!]!, b.braces);
+  if (!steps) throw new Error(`${def.id}: the build tool refused "${b.label}"`);
+  return steps;
 }
