@@ -84,8 +84,15 @@ Casts on the reference engine (Node, f64; seed 1; short recipe, 210 plays each).
 | F2 | 0.24 | 0.85 | 0.875 | `plunger.0.0.6.0.3.6.7.42.4.48.1.54.5.96.2.102.8.102` | 0.858 / 0.859 | 0.858, inside |
 | F3 | 0.29 | 0.81 | 0.838 | `plunger.0.0.3.6.6.6.7.42.1.54.4.54.5.96.8.96.2.102` | 0.815 / 0.821 | 0.814, inside |
 | F4 | 0.28 | **0.69** (reference 0.72) | 0.805 | `plunger.0.6.1.6.2.6.3.54.4.54.5.54.8.114.6.120.7.120.9.120.10.120.11.120` | 0.721 / 0.740 | 0.696 over 32 builds, harder by 0.011 |
+| F5 | 0.33 | 0.74 | 0.794 | `plunger.0.0.1.0.2.6.4.36.3.48.5.48.8.78.6.90.7.90` | 0.743 / 0.750 | 0.726 over 16 builds, inside [0.703, 0.748] |
 
 On F1 to F3 the GPU lands on the reference's T3 to the third decimal.
+
+F5 needs two notes.
+- **Its T2 is above all at once** (0.33 against 0.26). Half its competent sweeps end at 0.34 or more, above the all-at-once 0.26: a sweep that misses the yard often still brings part of the tower down. On F1 to F4 the median competent sweep ends at the all-at-once value. Two stars still need a clear: stars require the objective.
+- **Its cast took 88 min here, over the 60 min budget gate.** The gate is judged on the M5 Max. Here the reference engine ran on this container's CPU at 36.7 ms a step over 144k steps. Every star gate passed (fair 0.84, skill 0.40, stable 0.017, no limits, complete), so the stars went into the file as cast. The alternative was recasting with `--budget-min 90`. That gives the same stars, because a cast is deterministic for its seed, and costs another 88 min. The budget is a property of the machine, and the Metal recast will measure it on the M5.
+
+On the GPU, F5's best line has a lower quartile of 0.726 over 16 builds. That is inside the reference's interval, so T3 stays at the reference's 0.74, unlike F4. F5 is the noisiest level (cloud P10 0.703), so it is first in line for the Metal recast.
 
 F4 is the exception. It is the wide frame with a two-sided window, and the noisiest level (cloud sd 0.03). On SwiftShader its best line's lower quartile is 0.696 over 32 builds, against the reference's 0.721; 29 of 32 still meet the objective. The game plays on the GPU, so F4's T3 is set from the GPU cloud (0.69, rounded toward easier, the easier of the two devices). The stars file records this in `castOn`. Alternatives weighed:
 - Keep the reference's 0.72. Rejected: on the GPU about a third of the bot's own best-line plays would miss three stars.
