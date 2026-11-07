@@ -1,18 +1,32 @@
-// Wavefront's Steer levels (M6, docs/game/wavefront.md) on Rapier, the fast CPU engine: the designed choices of
-// each level come out as designed. W3 Fall Line: the north-west tower pushed east fells the north row and nothing
-// else (clean clear); the south-east tower pushed north fells the east column (clears, breaks the heritage on the
-// way); the middle row pushed east misses the crown. The reference engine agrees (docs/game/wavefront.md); the GPU
-// plays the clean line in wave-gpu-W3.test.ts.
+// Wavefront's Steer levels (M6, docs/game/wavefront.md) on Rapier, the fast CPU engine: each level's design comes
+// out as designed, from anywhere on the upper two thirds of the starter a player hits (its corners too).
+// - W3 Fall Line: a street pushed from a starter falls to its first wide gap (8, 3 or 4 towers), in order along the
+//   push, the other streets standing; only the unbroken street clears in one stroke, and a push across the avenue
+//   fells one tower.
+// - W4 Avenue: bare, the wave dies at the avenue from either end; a relay slab built 3.5 to 6 h into it (of 9.7 h
+//   between the towers) carries it the length of the street, both ways.
+// The GPU plays W3's clean line and a W4 relay in wave-gpu-W*.test.ts.
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
-import { compileLevel, validateLevel, W3, WAVE_LEVELS } from '@tb/keystone';
-import { partGroups, pushShot, towerFace } from '../src/wave.ts';
+import { compileLevel, type LevelDef, type Shot, validateLevel, W3, W3_STREETS, W4, W4_TOWERS, WAVE_LEVELS, type WaveResult, wavePlay } from '@tb/keystone';
+import { build, ground } from '../src/rube.ts';
+import { pushShot, starterPart, starterShot, towerFace, towerGroups } from '../src/wave.ts';
 
-const c = compileLevel(W3), idx = (i: number, j: number) => i * 4 + j;
-const line = (part: number, dir: [number, number]) => pushShot(c, towerFace(c, W3, part, dir), dir);
+async function play(def: LevelDef, shot: (c: ReturnType<typeof compileLevel>) => Shot): Promise<WaveResult & { order: number[] }> {
+  const c = compileLevel(def), e = new RapierEngine();
+  try {
+    const r = await wavePlay(e, c, [shot(c)], { groups: towerGroups(c), maxSteps: 5000, fell: 1 });
+    return { ...r, order: r.fellAt.flatMap((t, k) => (t >= 0 ? [k] : [])).sort((a, b) => r.fellAt[a]! - r.fellAt[b]!) };
+  } finally { e.dispose(); }
+}
+
+/** Tower indices (towerGroups order) of street s of W3, south to north. */
+const w3Street = (s: number) => W3_STREETS[s]![1].map((_, k) => W3_STREETS.slice(0, s).reduce((a, [, zs]) => a + zs.length, 0) + k);
+/** Hits on a starter's outer face: across it (h off its middle, the slab is 2.02 wide) and up it (of its height), over its upper two thirds. */
+const HITS = [{ dx: 0, fy: 2 / 3 }, { dx: 0.9, fy: 0.95 }, { dx: -0.9, fy: 0.5 }];
 
 describe('Wavefront Steer levels on Rapier', () => {
-  it('every level compiles clean and plays in its window, asleep', () => {
+  it('every level compiles clean and plays asleep in its window', () => {
     for (const l of WAVE_LEVELS) {
       const k = compileLevel(l);
       expect(validateLevel(k).map((i) => i.code), l.id).toEqual([]);
@@ -20,24 +34,52 @@ describe('Wavefront Steer levels on Rapier', () => {
       expect(k.scene.bodies.every((b) => b.pinned || b.asleep), l.id).toBe(true);
     }
   });
-  it.for([
-    { name: 'north row east', part: idx(0, 3), dir: [1, 0] as [number, number], cleared: true, heritage: 0, fell: [0, 1, 2, 3].map((i) => idx(i, 3)) },
-    { name: 'east column north', part: idx(3, 0), dir: [0, 1] as [number, number], cleared: true, heritage: 4, fell: [0, 1, 2, 3].map((j) => idx(3, j)) },
-    { name: 'middle row east', part: idx(0, 1), dir: [1, 0] as [number, number], cleared: false, heritage: 0, fell: [0, 1, 2, 3].map((i) => idx(i, 1)) },
-  ])('W3 $name', { timeout: 120_000 }, async (t) => {
-    const { wavePlay } = await import('@tb/keystone');
-    const e = new RapierEngine();
-    try {
-      const r = await wavePlay(e, c, [line(t.part, t.dir)], { groups: partGroups(c), maxSteps: 4000, fell: 1 });
-      console.log(`W3 ${t.name}: ${r.cleared ? 'clear' : 'miss'}, crowns ${r.crownsDown}/${r.crowns}, heritage ${r.heritageBroken}, settled ${r.settledSeconds.toFixed(1)} s, awake max ${r.awakeMax} mean ${r.awakeMean.toFixed(0)}, fell ${r.fellAt.join(' ')}`);
+
+  // Street, the push, and the towers that fall (south to north indices along the street).
+  const W3_LINES = [
+    { name: 'west street north', s: 0, dir: 1 as const, falls: 8, cleared: true },
+    { name: 'west street south', s: 0, dir: -1 as const, falls: 8, cleared: true },
+    { name: 'middle street north', s: 1, dir: 1 as const, falls: 3, cleared: false },
+    { name: 'middle street south', s: 1, dir: -1 as const, falls: 3, cleared: false },
+    { name: 'east street north', s: 2, dir: 1 as const, falls: 2, cleared: false },
+    { name: 'east street south', s: 2, dir: -1 as const, falls: 4, cleared: false },
+  ];
+  it.for(W3_LINES)('W3 $name: $falls towers fall in order, the rest stand', { timeout: 120_000 }, async (t) => {
+    const x = W3_STREETS[t.s]![0], towers = w3Street(t.s), want = t.dir > 0 ? towers.slice(0, t.falls) : towers.slice(-t.falls).reverse();
+    for (const hit of HITS) {
+      const r = await play(W3, (c) => starterShot(c, starterPart(W3, x, t.dir), t.dir, hit.dx, hit.fy));
+      console.log(`W3 ${t.name} (${hit.dx}, ${hit.fy.toFixed(2)}): ${r.cleared ? 'clear' : 'miss'}, D ${r.collapse.toFixed(3)}, order ${r.order.join(' ')}, settled ${r.settledSeconds.toFixed(1)} s, awake max ${r.awakeMax}`);
+      expect(r.order, `${t.name} at ${hit.dx}, ${hit.fy}`).toEqual(want);
       expect(r.cleared).toBe(t.cleared);
-      expect(r.heritageBroken).toBe(t.heritage);
-      // The line falls end to end, in order along the push; every other tower stands.
-      const times = t.fell.map((k) => r.fellAt[k]!);
-      expect(times.every((x) => x >= 0), times.join(' ')).toBe(true);
-      expect([...times].sort((a, b) => a - b)).toEqual(times);
-      const others = r.fellAt.filter((_, k) => !t.fell.includes(k));
-      expect(others.filter((x) => x >= 0).length, others.join(' ')).toBe(0);
-    } finally { e.dispose(); }
+    }
+  });
+  it('W3: a push across an avenue fells one tower', { timeout: 60_000 }, async () => {
+    const r = await play(W3, (c) => pushShot(c, towerFace(c, W3, 0, [1, 0]), [1, 0]));
+    expect(r.order).toEqual([0]);
+    expect(r.cleared).toBe(false);
+  });
+
+  it('W4 bare: the wave dies at the avenue from either end', { timeout: 60_000 }, async () => {
+    for (const dir of [1, -1] as const) {
+      const r = await play(W4, (c) => starterShot(c, starterPart(W4, 0, dir), dir));
+      expect(r.order).toEqual(dir > 0 ? [0, 1, 2] : [6, 5, 4, 3]);
+      expect(r.cleared).toBe(false);
+    }
+  });
+  // The avenue's south edge (the south street's last tower's north face) and the relay slab's thickness, h.
+  const SOUTH = 9.5 * 1.02 + 0.5, RELAY = 1;
+  it.for([3.5, 4, 4.5, 5, 5.5, 6])('W4 with a relay slab %f h into the avenue: the whole street falls, both ways', { timeout: 120_000 }, async (a) => {
+    const b = build(W4, (s) => [{ place: 'relay', hit: ground(s, 1.02, SOUTH + a + RELAY / 2) }]);
+    expect(b, 'the relay is placed').not.toBeNull();
+    expect(b!.spent).toBe(16);
+    // Placed about where it was asked: ground placement snaps to the lattice (a few hundredths of an h per cell).
+    const relay = b!.def.parts.find((p) => p.kind === 'piece' && p.placed) as { at: number[] }, at = relay.at[2]! - RELAY / 2 - SOUTH;
+    expect(Math.abs(at - a)).toBeLessThan(0.2);
+    for (const dir of [1, -1] as const) {
+      const r = await play(b!.def, (c) => starterShot(c, starterPart(b!.def, 0, dir), dir));
+      console.log(`W4 relay at ${at.toFixed(2)} h ${dir > 0 ? 'north' : 'south'}: ${r.cleared ? 'clear' : 'miss'}, D ${r.collapse.toFixed(3)}, order ${r.order.join(' ')}`);
+      expect(r.order).toEqual(dir > 0 ? W4_TOWERS.map((_, k) => k) : W4_TOWERS.map((_, k) => 6 - k));
+      expect(r.cleared).toBe(true);
+    }
   });
 });

@@ -19,6 +19,8 @@ export interface WaveResult {
   crownsDown: number;
   crowns: number;
   heritageBroken: number;
+  /** Collapse fraction D at the last settle (outcome.ts collapseFraction): what a Steer level is judged on. */
+  collapse: number;
   /** Steps from the first shot to the session's end. */
   steps: number;
   /** Seconds from the first shot to its settle (the run the window bounds). */
@@ -83,7 +85,7 @@ export async function wavePlay(engine: PhysicsEngine, c: CompiledLevel, shots: S
   const health = engine.health ? await engine.health() : null;
   return {
     cleared: s.phase === 'cleared' || s.objectiveDone, phase: s.phase, crownsDown: s.crownDown.reduce((a, x) => a + x, 0), crowns: c.meta.crowns.length,
-    heritageBroken: s.heritageBroken.reduce((a, x) => a + x, 0), steps: r.steps - (firstShot < 0 ? start : firstShot),
+    heritageBroken: s.heritageBroken.reduce((a, x) => a + x, 0), collapse: s.outcomeFacts().collapse, steps: r.steps - (firstShot < 0 ? start : firstShot),
     settledSeconds: first ? (first.settleStep - first.spawnStep) * c.scene.dt : 0,
     awakeMax, awakeMean: samples ? awakeSum / samples : 0, displaced: moved.reduce((a, x) => a + x, 0), fellAt, hash: snapshotHash(r.snapshot), limits: limitProblems(health, engine.info.name),
   };

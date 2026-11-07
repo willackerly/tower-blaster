@@ -1,46 +1,100 @@
-// Wavefront's levels (M6, docs/game/wavefront.md): dominoes and towers as
-// dominoes. Three verbs (modes-roadmap.md M6): Lay (draw a run from the push to
-// the crowns), Steer (the skyline is the layout: pick the first tower, build a
-// relay across an avenue) and Cut (a wave is running; take dominoes out to stop it).
+// Wavefront's levels (M6, docs/game/wavefront.md): towers falling into towers. Three
+// verbs (modes-roadmap.md M6): Lay (draw a domino run from the push to the target),
+// Steer (the skyline is the layout: pick the street to push, build a relay across an
+// avenue) and Cut (a wave is running; take pieces out to save what is left).
 // Every level sleeps on the GPU with its structure asleep from the start (C22:
 // physics.sleep and physics.asleep), and runs in a window longer than the 30 s cap
 // (runWindow), so a long wave is never cut off.
 //
-// What the reference engine showed for the game's cube towers (2 x 2 columns of
-// cubes, 8 courses, plaster; wave-levels.test.ts and docs/game/wavefront.md):
-// - A running wave crosses a gap of up to 6 cells (3 m) between towers and dies at
-//   7; the first tower, pushed by a ball alone, carries only 2.
-// - It runs straight along the push: a row falls end to end and the rows beside
-//   it, 2 cells away, stand.
-// - A 2 x 2 x 6 relay tower in the middle of a 10-cell avenue carries it across;
-//   a 2 x 2 x 4 or a 1 x 2 x 6 does not.
+// What the engines showed for the game's cube towers (2 x 2 columns of loose plaster
+// cubes, 8 courses; wave-levels.test.ts and docs/game/wavefront.md):
+// - A falling tower fells the next one across a street of up to 6 cells (3 m) and
+//   dies at 7. It falls straight along the push: the streets beside it stand.
+// - A cannonball off the middle of a tower's face fells one of its two columns, and
+//   the wave dies a tower or two on. So every street ends in a starter slab: one rigid
+//   piece as wide and tall as the tower, which falls square onto it wherever the ball
+//   hits its upper two thirds.
+// - Crowns and heritage on single cubes are noise at this scale (the debris of a
+//   falling street lands on the next one), so Steer is judged on collapse (D), which
+//   reads the whole city: on Rapier 8 towers of W3's 20 give 0.19 to 0.22 from any hit
+//   on the starter's upper two thirds, 4 towers 0.12, 3 towers 0.10.
+// - A relay built in a 10-cell avenue carries the wave across it when it is rigid: a
+//   slab as wide and tall as a tower and 1 h thick, from 3.5 to 6 h past the near
+//   tower, both ways (at 2.5 to 3 h it is chaotic). A relay tower of loose cubes
+//   splits like any tower and carries from some cells and not their neighbours.
 import type { LevelDef, Part } from './level.ts';
 
 type V3 = [number, number, number];
 
-/** A tower: 2 x 2 columns of plaster cubes, `courses` high, at lattice cell (x, z); its top course in `top`'s role when given. */
-export function tower(x: number, z: number, courses = 8, top?: 'crown' | 'heritage'): Part {
-  return { kind: 'block', at: [x, 0, z] as V3, size: [2, courses, 2] as V3, material: 'plaster', ...(top ? { courses: [{ k: courses - 1, role: top }] } : {}) };
+/** The lattice pitch every Wavefront level is laid out on, in h (level.ts compileLevel: 1 + the 0.02 gap). */
+const PITCH = 1.02;
+
+/** A tower: 2 x 2 columns of plaster cubes, `courses` high, with its corner at lattice cell (x, z). */
+export function tower(x: number, z: number, courses = 8): Part {
+  return { kind: 'block', at: [x, 0, z] as V3, size: [2, courses, 2] as V3, material: 'plaster' };
 }
 
-/** Cells from one tower's corner to the next along a row: 2 for the tower, 2 for the street. */
-export const STREET = 4;
+/**
+ * The starter slab's size, h: as wide and tall as a tower, half an h thick, standing 1 h off the tower's face. A
+ * ball anywhere on its upper two thirds fells the street on Rapier; on the lowest third it shoves the slab's foot
+ * and fells one tower or none. A 6 h slab is safe only on its upper third (wave-levels.test.ts).
+ */
+export const STARTER = { tall: 8, thick: 0.25, gap: 1 } as const;
+
+/**
+ * A starter slab at one end of a north-south street: off the south face of the tower at cell (x, z) (side -1, so
+ * it falls north into it) or off its north face (side 1, falls south). One plaster piece as wide as the tower:
+ * a ball hits it anywhere and it lands square across both of the tower's columns.
+ */
+export function starter(x: number, z: number, side: 1 | -1): Part {
+  const cx = (x + 1) * PITCH, face = side < 0 ? (z + 0.5) * PITCH - 0.5 : (z + 1.5) * PITCH + 0.5;
+  return { kind: 'piece', at: [cx, STARTER.tall / 2, face + side * (STARTER.gap + STARTER.thick)], half: [PITCH / 2 + 0.5, STARTER.tall / 2, STARTER.thick], material: 'plaster' };
+}
+
+/** A north-south street of towers at column x, corners at the cells `zs` (south to north), a starter at each end. */
+export function street(x: number, zs: readonly number[]): Part[] {
+  return [...zs.map((z) => tower(x, z)), starter(x, zs[0]!, -1), starter(x, zs.at(-1)!, 1)];
+}
 
 /** Physics and window every Wavefront level plays at: GPU sleep, the structure asleep until reached, a 60 s run window. */
 export const WAVE_RULES = { physics: { sleep: true, asleep: true }, runWindow: 60 } as const satisfies Partial<LevelDef>;
 
+/** W3's streets: the column and its towers' cells. A is unbroken; B and C each have a gap of 9 the wave dies in. */
+export const W3_STREETS: readonly (readonly [number, readonly number[]])[] = [
+  [0, [0, 4, 8, 12, 16, 20, 24, 28]],
+  [12, [0, 4, 8, 21, 25, 29]],
+  [24, [0, 4, 15, 19, 23, 27]],
+];
+
 /**
- * W3 Fall Line (Steer): a 4 x 4 city of cube towers with 2-cell streets. The crown sits on the north-east tower,
- * a heritage top on the tower south of it. A tower pushed falls along the push and fells its row or column, never
- * the ones beside it, so two first towers reach the crown: the north-west one pushed east (the clean line) and the
- * south-east one pushed north, which brings the heritage down on the way.
+ * W3 Fall Line (Steer): three streets of towers with 10-cell avenues between them, so a tower pushed east or west
+ * fells itself alone. Pushed along a street from its starter, the wave fells the street to the first wide gap: all
+ * 8 towers of the west street, 3 of the middle one, 4 of the east one from its north end. One stroke clears only on
+ * the west street; two broken streets clear it in two.
  */
 export const W3: LevelDef = {
-  id: 'W3', name: 'Fall Line', version: 1, world: 3, scoring: 'par', par: 1, rack: ['cannonball', 'cannonball'],
-  parts: [0, 1, 2, 3].flatMap((i) => [0, 1, 2, 3].map((j) => tower(i * STREET, j * STREET, 8, i === 3 && j === 3 ? 'crown' : i === 3 && j === 2 ? 'heritage' : undefined))),
-  lot: { min: [-3, -3], max: [3 * STREET + 5, 3 * STREET + 5] }, crownLine: 4, objective: { kind: 'crowns' },
-  launcher: { radius: 20, y: 6, dropY: 12 },
+  id: 'W3', name: 'Fall Line', version: 2, world: 7, scoring: 'par', par: 1, rack: ['cannonball', 'cannonball'],
+  parts: W3_STREETS.flatMap(([x, zs]) => street(x, zs)),
+  lot: { min: [-4, -4], max: [29, 35] }, crownLine: 2, objective: { kind: 'collapse', min: 0.16 },
+  launcher: { radius: 30, y: 6, dropY: 12 },
   ...WAVE_RULES,
 };
 
-export const WAVE_LEVELS: readonly LevelDef[] = [W3];
+/** W4's street: three towers, a 10-cell avenue (cells 10 to 19), four towers. */
+export const W4_TOWERS: readonly number[] = [0, 4, 8, 20, 24, 28, 32];
+
+/**
+ * W4 Avenue (Steer, a build): one street broken by a 10-cell avenue, and a budget of one relay slab. Pushed from
+ * either starter the wave dies at the avenue (3 or 4 towers); a relay standing in the middle third of it carries
+ * the wave the length of the street in one stroke.
+ */
+export const W4: LevelDef = {
+  id: 'W4', name: 'Avenue', version: 1, world: 7, scoring: 'par', par: 1, rack: ['cannonball', 'cannonball'],
+  parts: street(0, W4_TOWERS),
+  lot: { min: [-6, -4], max: [8, 37] }, crownLine: 2, objective: { kind: 'collapse', min: 0.4 },
+  launcher: { radius: 26, y: 6, dropY: 12 },
+  build: { budget: 16, pieces: ['relay'], brush: false },
+  ...WAVE_RULES,
+};
+
+export const WAVE_LEVELS: readonly LevelDef[] = [W3, W4];

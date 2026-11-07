@@ -1,7 +1,7 @@
 // The phone HUD and the result card's place and buttons (docs/game/phone-hud.md; agent playtest PT3 and PT4):
 // the pure parts. The browser checks are in phone-hud-e2e.test.ts.
 import { describe, expect, it } from 'vitest';
-import { B1, B3, compileLevel, FUSE_LEVELS, L1, L5, levelScore, LEVELS, BIG_LEVELS, outcomeScore, RUBE_LEVELS, U1, UNDERCUT_LEVELS, TRIAL_LEVELS } from '@tb/keystone';
+import { B1, B3, compileLevel, FUSE_LEVELS, L1, L5, levelScore, LEVELS, BIG_LEVELS, outcomeScore, RUBE_LEVELS, U1, UNDERCUT_LEVELS, TRIAL_LEVELS, WAVE_LEVELS } from '@tb/keystone';
 import { cardActions, failedRound, hudHtml, meterTicks, rackChips, resultHtml, slotAction, tallyHtml } from '../src/hud.ts';
 import { CARD_DELAY_S, layoutFor, layoutOf, MAX_CARD_DELAY_S } from '../src/layout.ts';
 import { seriesForward } from '../src/door.ts';
@@ -105,7 +105,7 @@ describe('the result card (PT4)', () => {
     expect(acts(cardActions(cleared, 1, false, false, false))).toEqual(['retry']);
     expect(acts(cardActions(cleared, 1, null, false, false))).toEqual(['retry']);
   });
-  it('the game page\'s series lead on: Spectacle to Chamber to Undercut to Rube Lab to Fuse & Fold, then the trials are not offered (Levels instead)', () => {
+  it('the game page\'s series lead on: Spectacle to Chamber to Undercut to Rube Lab to Fuse & Fold to Wavefront, then the trials are not offered (Levels instead)', () => {
     const levels = GAME_SERIES.flat(), series = GAME_SERIES.flatMap((s, k) => s.map(() => k));
     const at = (id: string) => seriesForward(series, levels.findIndex((l) => l.id === id), levels);
     expect(at(B1.id)).toBeNull(); // not a series' end: Next
@@ -113,7 +113,8 @@ describe('the result card (PT4)', () => {
     expect(at(L5.id)).toEqual({ index: levels.findIndex((l) => l.id === UNDERCUT_LEVELS[0]!.id), label: 'Next: Undercut' });
     expect(at(UNDERCUT_LEVELS.at(-1)!.id)).toEqual({ index: levels.findIndex((l) => l.id === RUBE_LEVELS[0]!.id), label: 'Next: Rube Lab' });
     expect(at(RUBE_LEVELS.at(-1)!.id)).toEqual({ index: levels.findIndex((l) => l.id === FUSE_LEVELS[0]!.id), label: 'Next: Fuse & Fold' });
-    expect(at(FUSE_LEVELS.at(-1)!.id)).toBeNull();
+    expect(at(FUSE_LEVELS.at(-1)!.id)).toEqual({ index: levels.findIndex((l) => l.id === WAVE_LEVELS[0]!.id), label: 'Next: Wavefront' });
+    expect(at(WAVE_LEVELS.at(-1)!.id)).toBeNull();
     expect(at(TRIAL_LEVELS.at(-1)!.id)).toBeNull();
     expect(at(U1.id)).toBeNull();
     expect(BIG_LEVELS.at(-1)!.id).toBe(B3.id);

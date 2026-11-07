@@ -1,7 +1,7 @@
 // Wavefront (M6) helpers for the lab and its tests: aiming a push at a tower or a
 // domino from the launcher ring, and the body groups wavePlay times.
 import type { Vec3 } from '@tb/engine-api';
-import { aimAt, type CompiledLevel, type LaunchItem, type LaunchShot, type LevelDef } from '@tb/keystone';
+import { aimAt, type CompiledLevel, type LaunchItem, type LaunchShot, type LevelDef, STARTER } from '@tb/keystone';
 
 /**
  * The launch shot of `ammo` at `power` that hits `target` (metres) travelling along `dir` (a horizontal unit
@@ -41,4 +41,29 @@ export function towerFace(c: CompiledLevel, def: LevelDef, part: number, dir: [n
   const x0 = (p.at[0] + 0.5) * ph - 0.5 * h, x1 = (p.at[0] + p.size[0] - 0.5) * ph + 0.5 * h, z0 = (p.at[2] + 0.5) * ph - 0.5 * h, z1 = (p.at[2] + p.size[2] - 0.5) * ph + 0.5 * h;
   const mx = (x0 + x1) / 2, mz = (z0 + z1) / 2, y = (p.at[1] + frac * p.size[1]) * h;
   return [dir[0] > 0 ? x0 : dir[0] < 0 ? x1 : mx, y, dir[1] > 0 ? z0 : dir[1] < 0 ? z1 : mz];
+}
+
+/** The body groups of a level's towers (its block parts, in part order): what a Steer level's fall order is read from. */
+export function towerGroups(c: CompiledLevel): number[][] {
+  return partGroups(c).filter((_, k) => c.def.parts[k]!.kind === 'block');
+}
+
+/** The part index of the starter at the south end (dir 1, pushed north) or north end (dir -1, pushed south) of the street at column x. */
+export function starterPart(def: LevelDef, x: number, dir: 1 | -1): number {
+  const want = (x + 1) * 1.02;
+  const ks = def.parts.flatMap((p, k) => (p.kind === 'piece' && Math.abs(p.at[0] - want) < 1e-9 ? [k] : []));
+  const k = ks.sort((a, b) => (def.parts[a] as { at: number[] }).at[2]! - (def.parts[b] as { at: number[] }).at[2]!)[dir > 0 ? 0 : ks.length - 1];
+  if (k === undefined) throw new Error(`starterPart: no starter on column ${x}`);
+  return k;
+}
+
+/**
+ * The cannonball that pushes starter `part` along z (dir 1 north, -1 south): aimed at its outer face, `dx` h off
+ * its middle across the street and at `fy` of its height. Where on the face it lands is the player's aim; the
+ * slab falls square whatever it is (wave-levels.ts).
+ */
+export function starterShot(c: CompiledLevel, part: number, dir: 1 | -1, dx = 0, fy = 2 / 3): LaunchShot {
+  const p = c.def.parts[part]!, h = c.frame.unit;
+  if (p.kind !== 'piece') throw new Error(`starterShot: part ${part} is a ${p.kind}`);
+  return pushShot(c, [(p.at[0] + dx) * h, STARTER.tall * fy * h, (p.at[2] - dir * STARTER.thick) * h], [0, dir]);
 }

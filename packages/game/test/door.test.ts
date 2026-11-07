@@ -1,6 +1,6 @@
 // The front door's formatting (door.ts) and the settings it edits (settings.ts): pure.
 import { describe, expect, it } from 'vitest';
-import { B1, B2, B3, BIG_LEVELS, compileLevel, FUSE_LEVELS, L1, L3, type LevelDef, LEVELS, RUBE_LEVELS, SERIES, TRIAL_LEVELS, UNDERCUT_LEVELS } from '@tb/keystone';
+import { B1, B2, B3, BIG_LEVELS, compileLevel, FUSE_LEVELS, L1, L3, type LevelDef, LEVELS, RUBE_LEVELS, SERIES, TRIAL_LEVELS, UNDERCUT_LEVELS, WAVE_LEVELS } from '@tb/keystone';
 import { bestText, BULLET_TIME_HOW, doorHtml, doorLevels, doorMode, doorOnLoad, nextLevel, openerFor, preaimMode, rackText, seriesTitle, starTargets, thresholdText, TRIALS_BLURB } from '../src/door.ts';
 import { GAME_SERIES } from '../src/params.ts';
 import type { LevelRecord } from '../src/progress.ts';
@@ -97,16 +97,16 @@ describe('door levels', () => {
   });
   it('every series shows under its title, in the game\'s order; the trials behind a toggle, closed and uncompiled until opened', () => {
     expect(GAME_SERIES.flat().map((d) => d.id).sort()).toEqual(SERIES.flat().map((d) => d.id).sort());
-    expect([seriesTitle('b2'), seriesTitle('L1'), seriesTitle('U3'), seriesTitle('F1'), seriesTitle('t-s4'), seriesTitle('S4')]).toEqual(['Spectacle', 'Chamber', 'Undercut', 'Fuse & Fold', 'Trials · unrated', '']);
+    expect([seriesTitle('b2'), seriesTitle('L1'), seriesTitle('U3'), seriesTitle('F1'), seriesTitle('w4'), seriesTitle('t-s4'), seriesTitle('S4')]).toEqual(['Spectacle', 'Chamber', 'Undercut', 'Fuse & Fold', 'Wavefront', 'Trials · unrated', '']);
     const all = GAME_SERIES.flat(), compiled: string[] = [];
     const compile = (d: (typeof all)[number]) => { compiled.push(d.id); return compileLevel(d); };
     const closed = doorLevels(all, () => null, compile, (d) => d.id.startsWith('T-'));
-    expect(compiled).toEqual([...BIG_LEVELS, ...LEVELS, ...UNDERCUT_LEVELS, ...RUBE_LEVELS, ...FUSE_LEVELS].map((d) => d.id));
+    expect(compiled).toEqual([...BIG_LEVELS, ...LEVELS, ...UNDERCUT_LEVELS, ...RUBE_LEVELS, ...FUSE_LEVELS, ...WAVE_LEVELS].map((d) => d.id));
     // A card's data-arg is its index in the page's whole list, skipped trials or not.
     expect(closed.map((l) => l.index)).toEqual(compiled.map((_, i) => i));
     const shut = doorHtml({ levels: closed, current: 3, settings: DEFAULT_SETTINGS, howTo: false, advanced: false, trials: { count: TRIAL_LEVELS.length, open: false } });
-    expect([...shut.matchAll(/<h2 class="series-head">([^<]*)</g)].map((x) => x[1])).toEqual(['Spectacle', 'Chamber', 'Undercut', 'Rube Lab', 'Fuse &#38; Fold']);
-    expect(shut.match(/class="card[ "]/g)).toHaveLength(11 + RUBE_LEVELS.length + FUSE_LEVELS.length);
+    expect([...shut.matchAll(/<h2 class="series-head">([^<]*)</g)].map((x) => x[1])).toEqual(['Spectacle', 'Chamber', 'Undercut', 'Rube Lab', 'Fuse &#38; Fold', 'Wavefront']);
+    expect(shut.match(/class="card[ "]/g)).toHaveLength(11 + RUBE_LEVELS.length + FUSE_LEVELS.length + WAVE_LEVELS.length);
     expect(shut).toContain(`data-act="trials" class="series-head trials-head" aria-expanded="false">Trials · unrated (${TRIAL_LEVELS.length}) ▸</button>`);
     expect(shut).not.toContain(TRIALS_BLURB.slice(0, 20));
     expect(shut).toContain('class="card current" data-act="level" data-arg="3"');
