@@ -25,7 +25,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
-      # Fails on a stale vitest.durations.json or a shard estimated over 12 min (O5).
+      # Fails on a stale vitest.durations.json, a file recorded over 300 s, or a shard
+      # estimated over 7.5 min, which keeps a shard under 10 min on a slow runner (O5).
       - name: Shard plan guard
         run: pnpm ci:guard
       - name: Benchmark harness self-check (A/A and injected slowdown)
@@ -36,15 +37,16 @@ jobs:
   # on vitest.durations.json, in CI-runner seconds; merge a shard's logged times
   # with `pnpm durations --from-log` when files are added or get slower.
   test:
-    name: test ${{ matrix.shard }}/16
+    name: test ${{ matrix.shard }}/20
     runs-on: ubuntu-latest
-    # ~8 min estimated per shard (pnpm ci:guard); runners vary up to ~2x. 30 is the
-    # O5 stopgap, kept until three main runs show every shard under 10 min.
+    # ~6 min estimated per shard (pnpm ci:guard); a shard takes up to ~1.3x its
+    # estimate. 30 is the O5 stopgap, kept until three main runs show every shard
+    # under 10 min.
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     env:
       # GPU-correctness tests must run (on SwiftShader) rather than skip.
       REQUIRE_WEBGPU: '1'
@@ -62,7 +64,7 @@ jobs:
       # system libvulkan removed), and the runner image already has Chromium's
       # libraries, so a slow apt mirror can't stall the run.
       - run: pnpm exec playwright install chromium
-      - run: pnpm test --shard=${{ matrix.shard }}/16 --reporter=default --reporter=json --outputFile.json=.vitest-report.json
+      - run: pnpm test --shard=${{ matrix.shard }}/20 --reporter=default --reporter=json --outputFile.json=.vitest-report.json
       # This runner's per-file times, one line, for refreshing vitest.durations.json,
       # and a warning on each file that took far longer than recorded.
       - name: Shard file times
