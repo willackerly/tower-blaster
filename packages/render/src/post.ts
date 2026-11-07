@@ -1,6 +1,15 @@
 // HDR post: a bloom pyramid and the final composite (bloom mix, exposure,
-// grain, a tone map (AgX by default; tonemap.ts), vignette, dither) into the
-// display target.
+// grain, a tone map (AgX by default; tonemap.ts), the frozen grade, vignette,
+// dither) into the display target.
+//
+// Frozen grade (Bullet Time, playtest PT8): the game's frozen world must not
+// look like the running one. In display space after the tone map, by
+// `grade` (0 none, 1 full; the game eases it in and out): most of the colour
+// drained toward luma (FROZEN_DESAT), what is left cooled (FROZEN_TINT), and
+// a soft ice-blue frost at the frame's rounded edge (FROZEN_RIM). Alternatives: a CSS
+// filter on the canvas (no GPU work, but not in readback captures, so neither
+// tests nor the agent playtests would see it); a grade in the scene pass (it
+// would have to be in every look's shading, and miss the sky and bloom).
 //
 // Bloom (Jimenez 2014, as in CoD: AW): downsample from half resolution with
 // a 13-tap filter (optionally Karis-weighted on the first level, which tames
@@ -11,6 +20,15 @@
 import { AGX_WGSL, TONE_MAPS, type ToneMap } from './look.ts';
 import { PCG_WGSL } from './noise.ts';
 import { GRAIN_WGSL, grainPixels, TONE_GAIN, TONE_WGSL } from './tonemap.ts';
+
+/** The frozen grade: the share of colour drained, the tint left on it, and the rim's colour, width (uv) and strength. */
+export const FROZEN_DESAT = 0.85;
+export const FROZEN_TINT = [0.92, 0.97, 1.08] as const;
+export const FROZEN_RIM = [0.45, 0.72, 1.0] as const;
+export const FROZEN_RIM_WIDTH = 0.045;
+/** The frost's corner radius, as a share of the frame's short side. */
+export const FROZEN_RIM_ROUND = 0.08;
+export const FROZEN_RIM_MIX = 0.42;
 
 export const BLOOM_FORMAT: GPUTextureFormat = 'rgba16float';
 export const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
@@ -69,8 +87,8 @@ fn boxWeight(c: vec3f) -> f32 {
 
 export const COMPOSITE_WGSL = /* wgsl */ `
 ${FULLSCREEN}
-// tone: TONE_MAPS index (0: agx), its mid-grey gain; grain: amount (0: none), size (px), frame seed.
-struct Post { bloomMix: f32, exposure: f32, vignette: f32, levels: f32, tone: u32, toneGain: f32, grain: f32, grainSize: f32, seed: u32, pad0: u32, pad1: u32, pad2: u32 }
+// tone: TONE_MAPS index (0: agx), its mid-grey gain; grain: amount (0: none), size (px), frame seed; grade: the frozen grade (Bullet Time), 0 to 1.
+struct Post { bloomMix: f32, exposure: f32, vignette: f32, levels: f32, tone: u32, toneGain: f32, grain: f32, grainSize: f32, seed: u32, grade: f32, pad1: u32, pad2: u32 }
 @group(0) @binding(0) var hdr: texture_2d<f32>;
 @group(0) @binding(1) var bloom: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
@@ -79,6 +97,22 @@ ${AGX_WGSL}
 ${TONE_WGSL}
 ${PCG_WGSL}
 ${GRAIN_WGSL}
+
+// The frozen grade (FROZEN_* above): drained, cooled, an ice-blue rim. d: uv from the centre.
+fn frozenGrade(c: vec3f, d: vec2f, g: f32, size: vec2f) -> vec3f {
+  let l = dot(c, vec3f(0.2126, 0.7152, 0.0722));
+  var x = mix(c, vec3f(l), ${FROZEN_DESAT} * g);
+  x *= mix(vec3f(1.0), vec3f(${FROZEN_TINT.join(', ')}), g);
+  // A rounded rectangle inset from the frame's edge, in units of the short side so the frost is
+  // as wide on every side and its corners round (an uv-space shape looks lopsided off-square),
+  // faded in quadratically over FROZEN_RIM_WIDTH so it frosts in rather than drawing a hard border.
+  let s = size / min(size.x, size.y);
+  let r = ${FROZEN_RIM_ROUND};
+  let q = abs(d) * s - (0.5 * s - vec2f(r));
+  let sd = length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0) - r;
+  let t = smoothstep(${-FROZEN_RIM_WIDTH}, 0.0, sd);
+  return mix(x, vec3f(${FROZEN_RIM.join(', ')}), ${FROZEN_RIM_MIX} * g * t * t);
+}
 
 // Interleaved gradient noise (Jimenez 2014): cheap, well-spread dither.
 fn ign(p: vec2f) -> f32 {
@@ -96,14 +130,15 @@ fn ign(p: vec2f) -> f32 {
   var c: vec3f;
   if (post.tone == 0u) { c = agx(x); } else { c = toneMapAlt(post.tone, x * post.toneGain); }
   let d = i.uv - 0.5;
+  if (post.grade > 0.0) { c = frozenGrade(c, d, post.grade, vec2f(textureDimensions(hdr))); }
   c *= 1.0 - post.vignette * dot(d, d) * 2.0;
   c += (ign(i.clip.xy) - 0.5) / 255.0;
   return vec4f(c, 1.0);
 }
 `;
 
-/** toneMap: default agx; grain: film grain amount (0 or left out: none) and size in pixels (tonemap.ts). */
-export interface PostParams { bloomMix: number; exposure: number; vignette: number; toneMap?: ToneMap; grain?: { amount: number; size: number } }
+/** toneMap: default agx; grain: film grain amount (0 or left out: none) and size in pixels (tonemap.ts); grade: the frozen grade's amount, 0 (none, the default) to 1. */
+export interface PostParams { bloomMix: number; exposure: number; vignette: number; toneMap?: ToneMap; grain?: { amount: number; size: number }; grade?: number }
 
 /** The composite's uniform block (Post in COMPOSITE_WGSL): 48 bytes. seed: the grain's frame seed; height: the frame's, which scales the grain (grainPixels). */
 export function postUniforms(p: PostParams, levels: number, seed: number, height = 1080): ArrayBuffer {
@@ -115,6 +150,7 @@ export function postUniforms(p: PostParams, levels: number, seed: number, height
   f[6] = p.grain?.amount ?? 0;
   f[7] = grainPixels(p.grain?.size ?? 1, height);
   u[8] = seed >>> 0;
+  f[9] = Math.min(1, Math.max(0, p.grade ?? 0));
   return b;
 }
 

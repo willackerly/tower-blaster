@@ -12,9 +12,11 @@
 //     in their ink (arcBeads; PaceFeel.arcs, keystone.arcs=0 hides it);
 //   - the turn cue: while the view is outside that arc, which way to drag to reach
 //     it by the shorter way (turnCue), in the HUD and on a refused shot's banner.
-import { type CompiledLevel, type DuelSide, inArc, launcherPos } from '@tb/keystone';
-import type { Orbit } from '@tb/render/camera';
-import { rgbe } from './scene.ts';
+import type { Vec3 } from '@tb/engine-api';
+import { type CompiledLevel, type DuelDef, type DuelSide, inArc, launcherPos, type Player, selectGroup } from '@tb/keystone';
+import { type Orbit, viewProj } from '@tb/render/camera';
+import { MARK_HIT, MARK_SAVE } from '@tb/render';
+import { rgbe, structureMarks } from './scene.ts';
 import { viewOf } from './view.ts';
 
 /** The middle of an arc [from, to] of launcher azimuths (0.5 deg, wrapping through 0 when from > to), from 0 to below 720. */
@@ -26,16 +28,52 @@ export function arcMiddle([from, to]: [number, number]): number {
 export const yawOfAz = (az: number): number => ((90 - az / 2) * Math.PI) / 180;
 
 /**
- * The turn view's pitch, degrees: higher than the level framing's 12 so the far side shows over the near one. Seen
- * from the middle of a side the table lines up: on D1 your own keep and king stand in line with the other keep,
- * and at 12 deg they hide two thirds of it (the 2026-11-06 projection: 77% of it shows at 18, all of it from 24).
- * 26 keeps a margin; the alternative, looking from off the middle of the arc, is not the middle Will asked for.
+ * The turn view's pitch, degrees: higher than the level framing's 12 so the far side shows over the near one (the
+ * 2026-11-06 projection from the arc's middle on D1: at 12 deg your own keep hides two thirds of the other).
  */
 export const DUEL_PITCH = 26;
 
-/** A duel turn's view: the level's opening framing (view.ts viewOf) seen from the middle of the side's arc, from DUEL_PITCH. */
-export function duelView(c: CompiledLevel, side: Pick<DuelSide, 'arc'>, aspect = 1): Orbit {
-  return viewOf(c, aspect, { yaw: (yawOfAz(arcMiddle(side.arc)) * 180) / Math.PI, pitch: DUEL_PITCH });
+/**
+ * How far round from the middle of the side's arc the turn view looks, degrees: an over-the-shoulder three-quarter
+ * view. From the arc's exact middle (the first cut) D1's own keep and king stood dead centre in line with the
+ * rival's, so a click at the middle of the screen aimed at your own king and the novice bot lost by toppling it
+ * (agent playtest 1, PT5). 30 deg round puts your keep at the lower left and leaves the line from the launcher (which
+ * sits at the view's azimuth on the ring) to the rival keep about 7 cells clear of yours, still well inside the arc's
+ * 80 deg either side of its middle. The playtest's best duel frame was the swing passing about here.
+ */
+export const DUEL_YAW_OFFSET = 30;
+
+/** The box (home pose, half extents) around structure bodies `idx`. */
+function boxOf(c: CompiledLevel, idx: ArrayLike<number>): [Vec3, Vec3] {
+  const lo: Vec3 = [Infinity, Infinity, Infinity], hi: Vec3 = [-Infinity, -Infinity, -Infinity];
+  for (let j = 0; j < idx.length; j++) {
+    const i = idx[j]!;
+    for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k]!, c.meta.home[3 * i + k]! - c.meta.half[3 * i + k]!); hi[k] = Math.max(hi[k]!, c.meta.home[3 * i + k]! + c.meta.half[3 * i + k]!); }
+  }
+  return [lo, hi];
+}
+
+/** Where a duel turn's view looks: the middle of the rival's blocks, a little below half their height (as frame() aims at a box). */
+export function duelFocus(c: CompiledLevel, def: Pick<DuelDef, 'sides'>, player: Player): Vec3 {
+  const [lo, hi] = boxOf(c, selectGroup(c, def.sides[1 - player]!.owns));
+  return [(lo[0] + hi[0]) / 2, lo[1] + 0.45 * (hi[1] - lo[1]), (lo[2] + hi[2]) / 2];
+}
+
+/**
+ * A duel turn's view: over the player's shoulder at the rival. It looks at the rival's blocks (duelFocus: the middle of
+ * the screen, where a click lands on them) from DUEL_YAW_OFFSET round from the middle of the player's arc, at
+ * DUEL_PITCH, as far back as everything but the player's own blocks needs (view.ts viewOf): framing your own keep too
+ * would take the eye twice as far back, since it stands between you and the rival; it shows at the lower left, cut by
+ * the edge on a narrow screen. Of the two ways round, the one that puts the player's own blocks left of the middle
+ * (both alike on a shared tower: the first).
+ */
+export function duelView(c: CompiledLevel, def: Pick<DuelDef, 'sides'>, player: Player, aspect = 1): Orbit {
+  const side = def.sides[player]!, mid = (yawOfAz(arcMiddle(side.arc)) * 180) / Math.PI, focus = duelFocus(c, def, player);
+  const mine = selectGroup(c, side.owns), [lo, hi] = boxOf(c, mine), own: Vec3 = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
+  const isMine = new Set(mine), rest = Int32Array.from({ length: c.meta.n }, (_, i) => i).filter((i) => !isMine.has(i));
+  const views = [1, -1].map((sign) => viewOf(c, aspect, { yaw: mid + sign * DUEL_YAW_OFFSET, pitch: DUEL_PITCH }, focus, rest));
+  const x = (o: Orbit) => { const m = viewProj(o, aspect); return (m[0]! * own[0] + m[4]! * own[1] + m[8]! * own[2] + m[12]!) / (m[3]! * own[0] + m[7]! * own[1] + m[11]! * own[2] + m[15]!); };
+  return x(views[1]!) < x(views[0]!) - 1e-6 ? views[1]! : views[0]!;
 }
 
 /**
@@ -99,6 +137,19 @@ export class TurnSwing {
   }
 
   grab(): void { this.to = null; }
+}
+
+/**
+ * A duel's stone marks (Renderer.setMarks): the level's (scene.ts structureMarks: a crosshair on every crown), with the
+ * king of the player to fire carved with the shield instead (PT5, agent playtest 1: your own king wore the target's
+ * crosshair, and the aim preview ran through it). The rival's king keeps the crosshair; the marks change with the turn.
+ * All plain when marks are off.
+ */
+export function duelMarks(c: CompiledLevel, duel: { turn: Player; kings: readonly (Int32Array | null)[] }, on = true): Uint8Array {
+  const out = structureMarks(c, on);
+  if (!on) return out;
+  for (const k of [0, 1] as const) for (const i of duel.kings[k] ?? []) out[i] = k === duel.turn ? MARK_SAVE : MARK_HIT;
+  return out;
 }
 
 /** Arc beads: about this many cube edges apart along the ring, this big (in cube edges), glowing this much. */

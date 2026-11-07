@@ -272,7 +272,7 @@ export async function runRenderBench(opts: Partial<RenderBenchOptions> = {}): Pr
         gpuP50: totals.length ? quantile(totals, 0.5) : null, gpuP95: totals.length ? quantile(totals, 0.95) : null,
         gpuSumP50: sums.length ? quantile(sums, 0.5) : null,
         passes: Object.fromEntries(Object.entries(perPass).map(([name, v]) => [name, quantile(v, 0.5)])),
-        drawn: { boxes: args[1]!, farBoxes: args[17]!, shadowBoxes: args[9]!, iceBoxes: args[4 * SEG.boxIce + 1]! }, particles,
+        drawn: { boxes: args[1]!, farBoxes: args[17]!, shadowBoxes: args[9]! + args[4 * SEG.boxIceShadow + 1]!, iceBoxes: args[4 * SEG.boxIce + 1]! }, particles,
         batches: xs,
       });
     }

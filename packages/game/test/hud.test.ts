@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { B1, B2, compileLevel, levelGoldLine, L1, L2, L3, L4, L5, levelScore, outcomeScore, type ShotOutcome, U3 } from '@tb/keystone';
 import { HOW_TO_PLAY } from '../src/door.ts';
 import { GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, TOUCH_HELP } from '../src/ui.ts';
-import { BANK_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, LEVERAGE_MEANS, leverageRow, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, TOUCH_ACTS } from '../src/hud.ts';
+import { BANK_BUTTON, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs } from '../src/hud.ts';
 
 describe('rack', () => {
   it('groups by kind in first-seen order with counts and keys', () => {
@@ -77,6 +77,24 @@ describe('formatting', () => {
     const refused = hudHtml({ ...base, chips, reachable: false, pullRefused: true });
     expect(refused).toMatch(/Crowns and heritage stay/);
     expect(refused).not.toMatch(/Out of reach/);
+    // Hovered only: a neutral hint. Refused on a click or tap: red.
+    expect(refused).toMatch(/<div class="hint small pull-hint">/);
+    expect(refused).not.toMatch(/class="bad[^"]*pull-hint/);
+    expect(hudHtml({ ...base, chips, reachable: false, pullRefused: 'tapped' })).toMatch(/<div class="bad small pull-hint">/);
+  });
+  it('a hold level (keep the crown up) says whether its crown stands, with no crown counter', () => {
+    const base = { level: U3, strokes: 1, crownsDown: 0, crownsTotal: 1, heritageBroken: 0, heritageTotal: 0, power: 60, leverage: { round: 0, shot: 0 }, phase: 'aiming', reachable: null, chips: rackChips(U3.rack, U3.rack, 'pull') };
+    expect(U3.objective.kind).toBe('hold');
+    const up = hudHtml(base);
+    expect(up).toMatch(/<span>Crown<\/span><span class="keep ok">standing ✓<\/span>/);
+    expect(up).not.toMatch(/\d+ \/ 1/);
+    expect(up).not.toMatch(/class="crowns"/);
+    expect(hudHtml({ ...base, crownsDown: 1 })).toMatch(/class="keep bad">fallen</);
+    expect(keepRow(1, 3)).toMatch(/1 of 3 fallen/);
+    expect(keepRow(0, 2)).toMatch(/all standing/);
+    expect(keepRow(0, 0)).toBe('');
+    // A crowns level keeps its counter.
+    expect(hudHtml({ ...base, level: L2, crownsTotal: 6 })).toMatch(/class="crowns">0 \/ 6</);
   });
   it('the result card lists every score line in order, then the total, stamp and stars', () => {
     const shot = { ke: 1000, yield: 0, dPE_mJ: 2_000_000, leverage: 2, crownsDown: 4, crownsTotal: 4, heritageNew: 0, displaced: 30, outOfLot: 0, pe_mJ: 0, spawnStep: 0, settleStep: 100 };
@@ -125,6 +143,13 @@ describe('formatting', () => {
     expect(hudHtml({ ...base, level: L2, canBank: true })).not.toContain('data-act="bank"');
     expect(objectiveText({ kind: 'crowns' })).toBe('fell every crown');
     expect(objectiveText({ kind: 'skyline', maxH: 3 })).toBe('skyline under 3 h');
+  });
+  it('Skip (PT6): the button while a shot can be skipped, a note while it skips, nothing otherwise, on any level', () => {
+    const base = { level: L2, strokes: 1, crownsDown: 0, crownsTotal: 2, heritageBroken: 0, heritageTotal: 0, power: 60, leverage: { round: 0, shot: 0 }, phase: 'running', reachable: null, chips: [] };
+    expect(hudHtml({ ...base, canSkip: true })).toContain(SKIP_BUTTON);
+    expect(hudHtml({ ...base, canSkip: false, skipping: true })).toMatch(/skipping to the settle/);
+    expect(hudHtml({ ...base, canSkip: false, skipping: true })).not.toContain('data-act="skip"');
+    expect(hudHtml({ ...base, phase: 'aiming' })).not.toMatch(/data-act="skip"|skipping/);
   });
   it('Bullet Time: freezes left of the level\'s, Freeze while a shot can be frozen, Resume and FROZEN while it is', () => {
     const def = { ...L1, freeze: 2 };
@@ -176,15 +201,17 @@ describe('playtest polish (U5, U6)', () => {
     expect(hudHtml({ ...base, strokes: 1, ticks: [] })).not.toMatch(/class="meter"/);
     expect(hudHtml({ ...base, strokes: 1 })).toMatch(/Down <b class="down">55%<\/b>/);
   });
-  it('Leverage shows only once a shot is in', () => {
-    expect(hudHtml({ ...base, strokes: 0 })).not.toMatch(/Leverage/);
-    expect(hudHtml({ ...base, strokes: 1 })).toMatch(/Leverage<\/span><span>×2\.50/);
+  it('Leverage shows only once a shot is in; before, its row keeps its place hidden (lev pre)', () => {
+    expect(hudHtml({ ...base, strokes: 0 })).toMatch(/class="row lev pre" title="[^"]*"><span>Leverage<\/span><span>×0\.00/);
+    expect(hudHtml({ ...base, strokes: 1 })).toMatch(/class="row lev" title="[^"]*"><span>Leverage<\/span><span>×2\.50/);
   });
-  it('touch screens get Undo and Restart buttons once a shot is in', () => {
-    expect(hudHtml({ ...base, strokes: 0 })).not.toContain(TOUCH_ACTS);
+  it('touch screens get Undo and Restart icons, disabled until a shot is in', () => {
+    expect(hudHtml({ ...base, strokes: 0 })).toContain(touchActs(0));
+    expect(touchActs(0)).toMatch(/disabled.*disabled/);
     const html = hudHtml({ ...base, strokes: 1 });
-    expect(html).toContain(TOUCH_ACTS);
-    expect([...TOUCH_ACTS.matchAll(/<button data-act="(\w+)" class="kg-tch">/g)].map((m) => m[1])).toEqual(['undo', 'restart']);
+    expect(html).toContain(touchActs(1));
+    expect(touchActs(1)).not.toMatch(/disabled/);
+    expect([...touchActs(1).matchAll(/<button data-act="(\w+)" class="ico kg-tch" title="([^"]+)" aria-label="\2"/g)].map((m) => [m[1], m[2]])).toEqual([['undo', 'Undo shot'], ['restart', 'Restart']]);
   });
   it('the result card offers Undo shot (key U) after a shot, before Retry', () => {
     const score = levelScore(L1, [{ ke: 1000, yield: 0, dPE_mJ: 2_000_000, leverage: 2, crownsDown: 4, crownsTotal: 4, heritageNew: 0, displaced: 30, outOfLot: 0, pe_mJ: 0, spawnStep: 0, settleStep: 100 }], true, 40);
@@ -210,8 +237,9 @@ describe('playtest polish (U5, U6)', () => {
 describe('scores and leverage add up (PT9, PT16)', () => {
   const shot = (o: Partial<ShotOutcome>): ShotOutcome => ({ ke: 1000, yield: 0, dPE_mJ: 0, leverage: 0, crownsDown: 0, crownsTotal: 0, heritageNew: 0, displaced: 0, outOfLot: 0, pe_mJ: 0, spawnStep: 0, settleStep: 0, ...o });
   it('the HUD row shows the round\'s leverage (the card\'s figure), and this shot\'s beside it from the second shot', () => {
-    expect(leverageRow(1, { round: 6.24, shot: 6.24 })).toMatch(/<span>Leverage<\/span><span>×6\.24<\/span>/);
-    expect(leverageRow(1, { round: 6.24, shot: 6.24 })).not.toMatch(/this shot/);
+    expect(leverageRow(1, { round: 6.24, shot: 6.24 })).toMatch(/<span>Leverage<\/span><span>×6\.24 <span class="small shot held">/);
+    // At one shot the two figures are the same, so the shot's is held (hidden, keeping the row's width for the docked HUD).
+    expect(leverageRow(1, { round: 6.24, shot: 6.24 })).toMatch(/<span class="small shot held">this shot ×0\.00<\/span>/);
     const two = leverageRow(2, { round: 3.12, shot: 6.24 });
     expect(two).toMatch(/<span>×3\.12 <span class="small shot">this shot ×6\.24<\/span><\/span>/);
     expect(two).toContain(`title="${esc(LEVERAGE_MEANS)}`);

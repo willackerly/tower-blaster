@@ -1,8 +1,8 @@
 // GPU per-body sleep in the viewer (roadmap E2.5): sleep=1 turns the GPU engine's own sleep on for the
-// sandbox's scenes, and the sleep tint (keystone.sleeptint, the Scene panel) works under both rules.
+// sandbox's scenes, and the sleep tint (keystone.sleeptint, the Scene panel) works under Keystone's rules.
 import { describe, expect, it } from 'vitest';
 import { makeEngine, parseSpec } from '@tb/bench';
-import { DEFAULT_CONFIG, engineSpec, parseViewerConfig, proposeScene, scenarioEngineSpec, sleepEngineSpec, toSearch, worldEngineSpec } from '../src/index.ts';
+import { DEFAULT_CONFIG, engineSpec, levelChoice, parseSceneFile, parseViewerConfig, proposeScene, sceneFile, scenarioEngineSpec, sleepEngineSpec, toSearch, worldEngineSpec } from '../src/index.ts';
 
 describe('the viewer\'s sleep switch reaches the GPU engine', () => {
   it('sleep=1 adds sleep=true to an avbd-gpu spec that leaves it unsaid; nothing else changes', () => {
@@ -27,19 +27,20 @@ describe('the viewer\'s sleep switch reaches the GPU engine', () => {
 });
 
 describe('the sleep tint in the viewer', () => {
-  it('keystone.sleeptint=1 reads and round-trips in the sandbox as under the rules, and is off by default', () => {
+  it('keystone.sleeptint=1 reads and round-trips under the rules (a scene file too), is off by default, and is the rules\' only', () => {
     expect(DEFAULT_CONFIG.feel.sleepTint).toBe(false);
-    const sandbox = parseViewerConfig('?scenario=S4&keystone.sleeptint=1');
-    expect(sandbox.rules).toBe('sandbox');
-    expect(sandbox.feel.sleepTint).toBe(true);
-    expect(toSearch(sandbox)).toMatch(/keystone\.sleeptint=1/);
-    expect(parseViewerConfig(toSearch(sandbox))).toEqual(sandbox);
-    expect(parseViewerConfig('?level=L1&rules=keystone&keystone.sleeptint=1').feel.sleepTint).toBe(true);
+    const c = parseViewerConfig('?level=L1&rules=keystone&keystone.sleeptint=1');
+    expect(c.feel.sleepTint).toBe(true);
+    expect(toSearch(c)).toMatch(/keystone\.sleeptint=1/);
+    expect(parseViewerConfig(toSearch(c))).toEqual(c);
+    expect(sceneFile(c, '', null).rules).toMatchObject({ sleeptint: true });
+    expect(parseSceneFile(JSON.stringify(sceneFile(c, '', null))).config).toEqual(c);
+    expect(() => parseViewerConfig('?scenario=S4&keystone.sleeptint=1')).toThrow(/keystone.sleeptint applies to rules=keystone/);
   });
-  it('the Scene panel keeps the tint when it applies a sandbox scene (whose pace juice it resets)', () => {
-    const c = parseViewerConfig('?scenario=S4');
-    const p = proposeScene(c, 'S3', {}, 1, c.scale, c.substeps, undefined, undefined, { rules: 'sandbox', feel: { ...c.feel, sleepTint: true, hitStop: true } });
+  it('the Scene panel reads it like the other feel switches', () => {
+    const c = parseViewerConfig('?level=L1&rules=keystone');
+    const p = proposeScene(c, levelChoice('L1'), {}, 1, c.scale, c.substeps, undefined, undefined, { rules: 'keystone', feel: { ...c.feel, sleepTint: true } });
     expect(p.ok).toBe(true);
-    if (p.ok) expect(p.config.feel).toEqual({ ...DEFAULT_CONFIG.feel, sleepTint: true });
+    if (p.ok) expect(p.config.feel.sleepTint).toBe(true);
   });
 });

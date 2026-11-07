@@ -8,13 +8,15 @@
 //           bit 18 matte: on a sphere, a satin finish with no clear coat and no ball glow (a bomb's iron)
 //           bit 19 band: on a sphere, a white band round its body-space equator (a fired ball, so it reads as
 //           a ball and never as a bomb, and its spin shows)
-//           bits 20-21 mark: on a box, an engraved glyph (marks.ts: 1 hit, 2 save); kept by setFx until clearFx
+//           bits 20-21 mark: on a box, an engraved glyph (marks.ts: 1 hit, 2 save, 3 keep); kept by setFx until clearFx
+//           bits 22-23 coat: on a box, its own colour instead of the look's (coats.ts: 1 gilt, 2 glaze); kept likewise
 //   word 2  f32 flash start (frame time, seconds)
 //   word 3  f32 flash duration (seconds); 0 = emissive is steady
 //
 // The cull pass applies the scale (so culling and shadows see it, and
 // scale 0 hides the body); the scene pass applies tint and emissive.
 import type { V3 } from './math.ts';
+import { COAT_MASK, COAT_SHIFT, type CoatId } from './coats.ts';
 import { MARK_MASK, MARK_SHIFT, type MarkId } from './marks.ts';
 
 export const FX_WORDS = 4;
@@ -43,10 +45,15 @@ export interface FxOptions {
   /** Spheres: a white band round the body-space equator, which turns with the ball (a fired ball's stripe). */
   band?: boolean;
   /**
-   * Boxes: an engraved glyph (marks.ts MARK_HIT, MARK_SAVE; MARK_NONE clears it). Absent, Renderer.setFx keeps
+   * Boxes: an engraved glyph (marks.ts MARK_HIT, MARK_SAVE, MARK_KEEP; MARK_NONE clears it). Absent, Renderer.setFx keeps
    * the slot's mark as it was (Renderer.setMarks sets marks in bulk).
    */
   mark?: MarkId;
+  /**
+   * Boxes: a coat, the block's own colour in every look (coats.ts COAT_GILT, COAT_GLAZE; COAT_NONE clears it).
+   * Absent, Renderer.setFx keeps the slot's coat as it was (Renderer.setCoats sets coats in bulk).
+   */
+  coat?: CoatId;
   /** Fade the emissive out over this many seconds from `flashAt`. */
   flash?: number;
   /** Flash start, frame time in seconds (default: the last rendered frame). */
@@ -79,12 +86,12 @@ export function fromHalf(h: number): number {
 export function packFx(fx: FxOptions, out: Uint32Array, o = 0, now = 0): void {
   const t = fx.tint ?? [1, 1, 1];
   out[o] = ((255 - byte(t[0])) | ((255 - byte(t[1])) << 8) | ((255 - byte(t[2])) << 16) | (byte(fx.emissive ?? 0) << 24)) >>> 0;
-  out[o + 1] = (toHalf(1 - Math.min(1, Math.max(0, fx.scale ?? 1))) | (fx.anchor ? FX_ANCHOR : 0) | (fx.paint ? FX_PAINT : 0) | (fx.matte ? FX_MATTE : 0) | (fx.band ? FX_BAND : 0) | (((fx.mark ?? 0) & 3) << MARK_SHIFT)) >>> 0;
+  out[o + 1] = (toHalf(1 - Math.min(1, Math.max(0, fx.scale ?? 1))) | (fx.anchor ? FX_ANCHOR : 0) | (fx.paint ? FX_PAINT : 0) | (fx.matte ? FX_MATTE : 0) | (fx.band ? FX_BAND : 0) | (((fx.mark ?? 0) & 3) << MARK_SHIFT) | (((fx.coat ?? 0) & 3) << COAT_SHIFT)) >>> 0;
   out[o + 2] = fx.flash ? bits(fx.flashAt ?? now) : 0;
   out[o + 3] = fx.flash ? bits(fx.flash) : 0;
 }
 
-export interface Fx { tint: V3; emissive: number; scale: number; anchor: boolean; paint: boolean; matte: boolean; band: boolean; mark: MarkId; flashAt: number; flash: number }
+export interface Fx { tint: V3; emissive: number; scale: number; anchor: boolean; paint: boolean; matte: boolean; band: boolean; mark: MarkId; coat: CoatId; flashAt: number; flash: number }
 
 export function unpackFx(w: Uint32Array, o = 0): Fx {
   const w0 = w[o]!, w1 = w[o + 1]!;
@@ -97,6 +104,7 @@ export function unpackFx(w: Uint32Array, o = 0): Fx {
     matte: (w1 & FX_MATTE) !== 0,
     band: (w1 & FX_BAND) !== 0,
     mark: ((w1 & MARK_MASK) >>> MARK_SHIFT) as MarkId,
+    coat: ((w1 & COAT_MASK) >>> COAT_SHIFT) as CoatId,
     flashAt: float(w[o + 2]!),
     flash: float(w[o + 3]!),
   };

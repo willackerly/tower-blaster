@@ -1,7 +1,7 @@
 // The front door's formatting (door.ts) and the settings it edits (settings.ts): pure.
 import { describe, expect, it } from 'vitest';
 import { B1, B2, B3, BIG_LEVELS, compileLevel, L1, L3, type LevelDef, LEVELS, SERIES, TRIAL_LEVELS, UNDERCUT_LEVELS } from '@tb/keystone';
-import { bestText, doorHtml, doorLevels, doorMode, doorOnLoad, nextLevel, openerFor, preaimMode, rackText, seriesTitle, starTargets, thresholdText, TRIALS_BLURB } from '../src/door.ts';
+import { bestText, BULLET_TIME_HOW, doorHtml, doorLevels, doorMode, doorOnLoad, nextLevel, openerFor, preaimMode, rackText, seriesTitle, starTargets, thresholdText, TRIALS_BLURB } from '../src/door.ts';
 import { GAME_SERIES } from '../src/params.ts';
 import type { LevelRecord } from '../src/progress.ts';
 import { cameraFeel, DEFAULT_SETTINGS, launchFeel, marksFeel, parseSettings, rapidFeel, SETTINGS_KEY, SettingsStore, turnViewFeel, urlSettings } from '../src/settings.ts';
@@ -135,6 +135,9 @@ describe('door levels', () => {
     expect(html).toContain('<span class="earned">★★</span><span class="unearned">☆</span>');
     for (const act of ['how', 'advanced', 'sound', 'look', 'sharp', 'camera', 'rapid', 'duelview', 'launch', 'marks', 'reset', 'close']) expect(html).toContain(`data-act="${act}"`);
     expect(html).toContain('class="how"');
+    // PT8: How to play names Bullet Time and its key (desktop T, touch the Freeze button), and says resuming keeps the freeze.
+    expect(html).toContain(`<li>${BULLET_TIME_HOW}</li>`);
+    expect(BULLET_TIME_HOW).toMatch(/Bullet Time.*<kbd>T<\/kbd>.*Freeze.*keeps the freeze/);
     expect(html).toContain('data-act="advanced" class="howlink advlink on" aria-expanded="true"');
     expect(doorHtml({ levels, current: -1, settings: DEFAULT_SETTINGS, howTo: false, advanced: false })).not.toContain('data-act="close"');
     // Back to the level is the Play button already when the next level is the loaded one.
@@ -165,7 +168,7 @@ describe('settings', () => {
     expect(parseSettings(null)).toEqual(DEFAULT_SETTINGS);
     expect(parseSettings('nope')).toEqual(DEFAULT_SETTINGS);
     expect(parseSettings('{"sound":false,"look":"nope","sharp":3}')).toEqual({ ...DEFAULT_SETTINGS, sound: false });
-    expect(parseSettings('{"look":"real","sharp":1}')).toEqual({ sound: true, look: 'real', sharp: 1, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, quality: 'auto' });
+    expect(parseSettings('{"look":"real","sharp":1}')).toEqual({ ...DEFAULT_SETTINGS, look: 'real', sharp: 1 });
     // Settings stored before the Camera setting open still, as does anything but its two values.
     expect(DEFAULT_SETTINGS.camera).toBe('still');
     expect(parseSettings('{"camera":"dynamic"}')).toEqual({ ...DEFAULT_SETTINGS, camera: 'dynamic' });
@@ -233,6 +236,13 @@ describe('settings', () => {
     expect(parseSettings('{"rapid":false}').duelView).toBe(true);
     expect(parseSettings('{"duelView":false}')).toEqual({ ...DEFAULT_SETTINGS, duelView: false });
     expect(parseSettings('{"duelView":0}')).toEqual(DEFAULT_SETTINGS);
+    // The hand-over card (PT5): on by default, stored as a boolean, anything else its default.
+    expect(DEFAULT_SETTINGS.handoff).toBe(true);
+    expect(parseSettings('{"handoff":false}')).toEqual({ ...DEFAULT_SETTINGS, handoff: false });
+    expect(parseSettings('{"handoff":"no"}')).toEqual(DEFAULT_SETTINGS);
+    const door = (handoff: boolean) => doorHtml({ levels: [], current: -1, settings: { ...DEFAULT_SETTINGS, handoff }, howTo: false, advanced: true });
+    expect(door(true)).toMatch(/data-act="handoff" data-arg="on" class="on"/);
+    expect(door(false)).toMatch(/data-act="handoff" data-arg="off" class="on"/);
     const at = (search: string, on: boolean) => { const u = q(search); return turnViewFeel(paceFeel(u), u, on); };
     expect(at('', true)).toEqual({ turnView: true });
     expect(at('', false)).toEqual({ turnView: false });
@@ -251,10 +261,10 @@ describe('settings', () => {
   it('the URL wins for the visit; a change is stored and replaces the URL\'s say on that field', () => {
     const kv = memoryKeyValue({ [SETTINGS_KEY]: '{"look":"real"}' });
     const s = new SettingsStore(kv, q('look=candy&sound=off'));
-    expect(s.current).toEqual({ sound: false, look: 'candy', sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, quality: 'auto' });
-    expect(s.set({ look: 'hazy' })).toEqual({ sound: false, look: 'hazy', sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, quality: 'auto' });
-    expect(JSON.parse(kv.getItem(SETTINGS_KEY)!)).toEqual({ sound: true, look: 'hazy', sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, quality: 'auto' });
-    expect(new SettingsStore(kv).current).toEqual({ sound: true, look: 'hazy', sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, quality: 'auto' });
+    expect(s.current).toEqual({ ...DEFAULT_SETTINGS, sound: false, look: 'candy' });
+    expect(s.set({ look: 'hazy' })).toEqual({ ...DEFAULT_SETTINGS, sound: false, look: 'hazy' });
+    expect(JSON.parse(kv.getItem(SETTINGS_KEY)!)).toEqual({ ...DEFAULT_SETTINGS, look: 'hazy' });
+    expect(new SettingsStore(kv).current).toEqual({ ...DEFAULT_SETTINGS, look: 'hazy' });
   });
   it('storage that throws keeps settings in memory', () => {
     const bad = { getItem: () => { throw new Error('x'); }, setItem: () => { throw new Error('x'); }, removeItem: () => {} };

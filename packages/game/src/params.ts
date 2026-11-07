@@ -10,14 +10,15 @@ import { isWeaponTier, WEAPON_TIERS, type WeaponTier } from '@tb/weapons';
 import { type EngineKind, engineKind } from './engines.ts';
 import { paceFeel, type PaceFeel } from './pacing.ts';
 import { GAME_SOUND_MODES, type GameSoundMode } from './sound-map.ts';
+import { GAME_LOOK } from './options/look.ts';
 
-/** The game's look when ?look= is absent: the maquette, whose pale albedo shows the role tints true. */
-export const GAME_LOOK = 'hazy';
+/** The game's look when ?look= is absent (options/look.ts): the maquette, whose pale albedo shows the role tints true. */
+export { GAME_LOOK } from './options/look.ts';
 
 /**
  * Rule overrides from the URL (docs/game/spectacle-mode.md, section 10): ?keystone.scoring=par|outcome
  * scores any level either way, ?keystone.autobank=1|0 ends an outcome level at its first clear (or not),
- * ?keystone.settle=v1|v2|v3 picks how a shot settles (default: v1 for par levels, v3 for outcome levels),
+ * ?keystone.settle=v1|v2|v3|v4 picks how a shot settles (default: v1 for par levels, v3 for outcome levels),
  * ?keystone.iterations, ?keystone.gapSlop, ?keystone.bounce (e, or off), ?keystone.presettle and
  * ?keystone.pairsPerBody (the GPU pair room per body, in place of every pair) and ?keystone.sleep=1|0 (GPU
  * per-body sleep, PhysicsBlock.sleep) change its physics block,
@@ -271,4 +272,15 @@ export function loadOptions(q: URLSearchParams): LoadOptions {
     out.retry = r;
   }
   return out;
+}
+
+/**
+ * keystone.build (0 or 1): whether a level with a build block opens in its build phase and shows the Build
+ * panel (C9, docs/game/placement.md; default on). Off plays such a level as authored.
+ */
+export function buildOption(q: URLSearchParams): { build?: boolean } {
+  const b = q.get('keystone.build');
+  if (b === null) return {};
+  if (b !== '0' && b !== '1') throw new Error(`keystone.build must be 0 or 1: ${b}`);
+  return { build: b === '1' };
 }

@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { B1, BIG_LEVELS, L1, L2, L3, seriesOf, type Shot, writeShots } from '@tb/keystone';
 import { compileLevel } from '@tb/keystone';
-import { DEFAULT_LEVEL, GAME_LOOK, levelRules, loadOptions, offscreenOf, onEngine, parseGameParams, weaponTierOf, withRules, writeLevelRules } from '../src/params.ts';
+import { buildOption, DEFAULT_LEVEL, GAME_LOOK, levelRules, loadOptions, offscreenOf, onEngine, parseGameParams, weaponTierOf, withRules, writeLevelRules } from '../src/params.ts';
 import { DEFAULT_FEEL } from '../src/pacing.ts';
 
 const parse = (search: string) => parseGameParams(new URLSearchParams(search));
@@ -124,7 +124,8 @@ describe('rule overrides', () => {
     writeLevelRules({ settle: 'v1' }, q);
     expect(levelRules(q)).toEqual({ settle: 'v1' });
     expect(parse('?level=L1&keystone.settle=v3').rules).toEqual({ settle: 'v3' });
-    expect(() => parse('?keystone.settle=v9')).toThrow(/keystone.settle must be v1 or v2 or v3: v9/);
+    expect(() => parse('?keystone.settle=v9')).toThrow(/keystone.settle must be v1 or v2 or v3 or v4: v9/);
+    expect(parse('?level=L1&keystone.settle=v4').rules).toEqual({ settle: 'v4' });
   });
   it('keystone.freeze gives the player a freeze budget: a custom level with its own hash; refuses a bad one', () => {
     const p = parse('?level=L1&keystone.freeze=3');
@@ -173,6 +174,16 @@ describe('rule overrides', () => {
   it('refuses bad values, naming the key', () => {
     expect(() => parse('?keystone.scoring=golf')).toThrow(/keystone.scoring must be par or outcome: golf/);
     expect(() => parse('?keystone.autobank=yes')).toThrow(/keystone.autobank must be 0 or 1: yes/);
+  });
+});
+
+describe('the build phase key (buildOption)', () => {
+  const bo = (search: string) => buildOption(new URLSearchParams(search));
+  it('leaves the default (on) to playKeystone when absent, reads 0 or 1, and refuses anything else', () => {
+    expect(bo('')).toEqual({});
+    expect(bo('?keystone.build=0')).toEqual({ build: false });
+    expect(bo('?keystone.build=1')).toEqual({ build: true });
+    expect(() => bo('?keystone.build=yes')).toThrow(/keystone.build must be 0 or 1/);
   });
 });
 

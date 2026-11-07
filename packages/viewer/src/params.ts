@@ -15,7 +15,7 @@
 import { DEFAULT_SOUND, parseSoundOptions, type SoundOptions, writeSoundOptions } from '@tb/audio';
 import { parseSpec } from '@tb/bench';
 import { type BodyDesc, DEFAULT_BLAST_MAX_SPEED, type SceneDesc, type Vec3 } from '@tb/engine-api';
-import { checkLine, type EngineKind, GAME_LOOK, gameLevel, LEVEL_RULE_KEYS, type LevelRules, levelRules, lineOf, lookName, DEFAULT_FEEL, paceFeel, type PaceFeel, rackOf, withRules, writeLevelRules, writePaceFeel } from '@tb/game';
+import { checkLine, type EngineKind, GAME_LOOK, gameLevel, LEVEL_RULE_KEYS, type LevelRules, levelRules, lineOf, lookName, DEFAULT_FEEL, FEEL_OPTIONS, paceFeel, type PaceFeel, rackOf, withRules, writeLevelRules, writePaceFeel } from '@tb/game';
 import { boundingRadius } from '@tb/geom';
 import { AVBD_ITERATIONS, compileLevel, findLevel, type LevelDef, PRESETTLE_STEPS, type RackItem, scenarioLevel, seriesOf, type Shot, writeShots } from '@tb/keystone';
 import { type AvbdParams, froudeParams } from '@tb/physics-ref';
@@ -114,7 +114,7 @@ export interface ViewerConfig {
    * withRules(level, keystone), a custom run. {} otherwise.
    */
   keystone: LevelRules;
-  /** Keystone's pace (URL keys keystone.hitstop, keystone.slowmo, keystone.tailskip, keystone.follow, keystone.shake, keystone.rapid: 0 or 1, keystone.budget: ms, keystone.undo: MB, keystone.frames: all, half or auto, keystone.launch: high or level, keystone.balls: painted or plain, keystone.marks: 0 or 1, keystone.fx: damage or classic, keystone.spent: 0 or 1; rules=keystone only; @tb/game DEFAULT_FEEL by default, as in the game). */
+  /** Keystone's pace and feel: one field per @tb/game feel option (FEEL_OPTIONS, packages/game/src/options), read from its keystone.* URL key; rules=keystone only; @tb/game DEFAULT_FEEL by default, as in the game. */
   feel: PaceFeel;
   /**
    * A line of shots to play once the level has loaded (URL key keystone.shots, @tb/keystone
@@ -156,8 +156,8 @@ export interface ViewerConfig {
 export const DEFAULT_BOUNCE = 0.5;
 
 export const RULES = ['sandbox', 'keystone'] as const;
-/** Keys that only mean something under rules=keystone (the game page's). */
-export const KEYSTONE_KEYS = ['keystone.hitstop', 'keystone.slowmo', 'keystone.budget', 'keystone.tailskip', 'keystone.follow', 'keystone.shake', 'keystone.frames', 'keystone.rapid', 'keystone.undo', 'keystone.launch', 'keystone.balls', 'keystone.marks', 'keystone.fx', 'keystone.spent', 'keystone.shots', 'keystone.rack', ...LEVEL_RULE_KEYS] as const;
+/** Keys that only mean something under rules=keystone (the game page's): the feel options a scene file carries (@tb/game FEEL_OPTIONS with a scene key), the line, the rack and the level rules. */
+export const KEYSTONE_KEYS: readonly string[] = [...FEEL_OPTIONS.filter((o) => o.scene).map((o) => o.url), 'keystone.shots', 'keystone.rack', ...LEVEL_RULE_KEYS];
 /** The look when ?look= is absent: the sandbox's candy, or the game's own under its rules. */
 export const defaultLook = (rules: Rules) => (rules === 'keystone' ? GAME_LOOK : DEFAULT_CONFIG.look);
 export type Rules = (typeof RULES)[number];

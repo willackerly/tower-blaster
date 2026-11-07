@@ -4,8 +4,8 @@
 // only proposes configs; main.ts decides how to apply them (live, or by reset).
 import { checkSound, SOUND_KNOBS, SOUND_MATERIAL_NAMES, SOUND_SETS, type SoundKnob, type SoundOptions } from '@tb/audio';
 import { parseSpec } from '@tb/bench';
-import { type EffectStyle, type Env, ENVS, type Ground, GROUNDS, TONE_MAPS, type ToneMap, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
-import { type BallStyle, checkPaceFeel, DEFAULT_BUDGET_MS, DEFAULT_FEEL, DEFAULT_UNDO_MB, MAX_UNDO_MB, type FrameMode, type LaunchMode, objectiveText, type PaceFeel } from '@tb/game';
+import { type Env, ENVS, type Ground, GROUNDS, TONE_MAPS, type ToneMap, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
+import { checkPaceFeel, DEFAULT_FEEL, FEEL_OPTIONS, type FeelOption, objectiveText, type PaceFeel } from '@tb/game';
 import { AUTO_LEVEL, AVBD_ITERATIONS, BIG_LEVELS, compileLevel, freezeProblem, LEVELS, MAX_FREEZE, PRESETTLE_STEPS, scenarioLevel, TRIAL_LEVELS, UNDERCUT_LEVELS } from '@tb/keystone';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
@@ -203,8 +203,7 @@ export function proposeScene(c: ViewerConfig, scenario: string, params: Record<s
       return { ok: true, config: next, bodies: compileLevel(def).scene.bodies.length };
     }
     // Anything else is the sandbox.
-    // The sandbox has no pace juice; the sleep tint (a debug view, the panel's under both rules) carries over.
-    c = { ...c, rules: 'sandbox', feel: { ...DEFAULT_FEEL, sleepTint: rules.feel.sleepTint }, shots: null, look: lookFor(c, 'sandbox') };
+    c = { ...c, rules: 'sandbox', feel: { ...DEFAULT_FEEL }, shots: null, look: lookFor(c, 'sandbox') };
     const settle = presettle ?? defaultPresettle(level);
     if (!Number.isInteger(settle) || settle < 0 || settle > MAX_PRESETTLE) throw new Error(`settle steps must be a whole number from 0 to ${MAX_PRESETTLE}`);
     if (picked) {
@@ -285,6 +284,37 @@ const field = (name: string, label: string, value: number | boolean | string, at
     ? `<label class="f"><span>${escapeHtml(label)}</span><input type="checkbox" name="${name}"${value ? ' checked' : ''}></label>`
     : `<label class="f"><span>${escapeHtml(label)}</span><input type="number" name="${name}" value="${escapeHtml(String(value))}" ${attrs}></label>`;
 
+/**
+ * A feel option's control in the Scene panel (its panel spec, named by its scene key): a checkbox for a boolean,
+ * a number field for a number, a select for a choice. Options without a panel ride along as the URL says.
+ */
+function panelField(o: FeelOption): string {
+  const p = o.panel!, name = o.scene!.key;
+  if (p.choices) return `<label class="f"><span>${p.label}</span><select name="${name}">${p.choices.map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select></label>`;
+  return field(name, p.label, o.default as number | boolean, p.attrs);
+}
+
+/** The feel the Scene panel says: each panel control's value, the rest as `base` has them. */
+export function panelFeel(form: ParentNode, base: PaceFeel): PaceFeel {
+  const out: Record<string, unknown> = { ...base };
+  for (const o of FEEL_OPTIONS) {
+    if (!o.panel) continue;
+    const el = form.querySelector(`[name="${o.scene!.key}"]`) as HTMLInputElement;
+    out[o.field] = o.panel.choices ? el.value : typeof o.default === 'boolean' ? el.checked : el.value === '' ? NaN : Number(el.value);
+  }
+  return out as PaceFeel;
+}
+
+/** Shows a feel in the Scene panel's controls. */
+export function showPanelFeel(form: ParentNode, f: PaceFeel): void {
+  for (const o of FEEL_OPTIONS) {
+    if (!o.panel) continue;
+    const el = form.querySelector(`[name="${o.scene!.key}"]`) as HTMLInputElement, v = (f as Record<string, unknown>)[o.field];
+    if (typeof o.default === 'boolean' && !o.panel.choices) el.checked = v as boolean;
+    else el.value = String(v);
+  }
+}
+
 export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refresh(): void } {
   root.innerHTML = `
     <summary>Scene and projectile</summary>
@@ -294,8 +324,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       <div class="params"></div>
       <div class="rules">
         <label class="f"><span>rules</span><select name="rules"><option value="sandbox">sandbox</option><option value="keystone">Keystone (the game)</option></select></label>
-        <div class="feel">${field('hitstop', 'hit-stop on contact', false)}${field('slowmo', 'slow motion as crowns fall', false)}${field('budget', 'physics budget, ms per 1/60 s (0: no valve)', DEFAULT_BUDGET_MS, 'step="any" min="0" max="1000"')}${field('tailskip', 'fast-forward the tail of a shot', true)}${field('follow', 'camera follows the collapse', false)}${field('shake', 'camera shakes on hits', false)}${field('rapid', 'rapid fire: shoot before the last shot settles', true)}${field('undo', 'undo memory, MB (0: undo replays the shots)', DEFAULT_UNDO_MB, `step="1" min="0" max="${MAX_UNDO_MB}"`)}${field('freeze', 'freezes, Bullet Time (empty: the level\'s own)', '', `step="1" min="0" max="${MAX_FREEZE}" placeholder="level's"`)}<label class="f"><span>frames drawn</span><select name="frames"><option value="all">every frame</option><option value="half">half on a fast display</option><option value="auto">half while physics is behind</option></select></label><label class="f"><span>launch height (keys W, S move it)</span><select name="launch"><option value="high">high: over the structure's top</option><option value="level">the level's own launcher</option></select></label><label class="f"><span>fired balls</span><select name="balls"><option value="painted">painted, banded</option><option value="plain">plain: the look's</option></select></label>${field('marks', 'stone marks: crosshair on crowns, shield on what to keep', true)}<label class="f"><span>impact effects</span><select name="fx"><option value="damage">follow the damage: a miss gets a puff</option><option value="classic">classic: every hit sparks in full</option></select></label>${field('spent', 'spent ammo fades once its shot settles', true)}</div>
-        ${field('sleeptint', 'debug: sleeping blocks in blue (both rules)', false)}
+        <div class="feel">${FEEL_OPTIONS.filter((o) => o.panel).map(panelField).join('')}${field('freeze', 'freezes, Bullet Time (empty: the level\'s own)', '', `step="1" min="0" max="${MAX_FREEZE}" placeholder="level's"`)}</div>
       </div>
       <div class="seed">${field('seed', 'seed', 1, 'step="1"')}</div>
       <div class="world">
@@ -426,19 +455,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     }
     const bounce = { on: bounceBox.checked, e: input(sceneForm, 'bounceE').value === '' ? NaN : Number(input(sceneForm, 'bounceE').value) };
     const presettle = input(sceneForm, 'presettle').value === '' ? NaN : Number(input(sceneForm, 'presettle').value);
-    const rules: RulesChoice = { rules: input(sceneForm, 'rules').value as Rules, feel: {
-      hitStop: (input(sceneForm, 'hitstop') as HTMLInputElement).checked, slowMo: (input(sceneForm, 'slowmo') as HTMLInputElement).checked,
-      budgetMs: input(sceneForm, 'budget').value === '' ? NaN : Number(input(sceneForm, 'budget').value), tailSkip: (input(sceneForm, 'tailskip') as HTMLInputElement).checked,
-      follow: (input(sceneForm, 'follow') as HTMLInputElement).checked, shake: (input(sceneForm, 'shake') as HTMLInputElement).checked, frames: input(sceneForm, 'frames').value as FrameMode,
-      rapid: (input(sceneForm, 'rapid') as HTMLInputElement).checked,
-      // A duel's aids (the game page's Siege Table): the viewer plays no duels, so they ride along as the URL says.
-      turnView: hooks.config().feel.turnView, arcs: hooks.config().feel.arcs,
-      undoMB: input(sceneForm, 'undo').value === '' ? NaN : Number(input(sceneForm, 'undo').value),
-      launch: input(sceneForm, 'launch').value as LaunchMode, balls: input(sceneForm, 'balls').value as BallStyle,
-      marks: (input(sceneForm, 'marks') as HTMLInputElement).checked,
-      fx: input(sceneForm, 'fx').value as EffectStyle, spent: (input(sceneForm, 'spent') as HTMLInputElement).checked,
-      sleepTint: (input(sceneForm, 'sleeptint') as HTMLInputElement).checked,
-    }, freeze: input(sceneForm, 'freeze').value === '' ? NaN : Number(input(sceneForm, 'freeze').value) };
+    const rules: RulesChoice = { rules: input(sceneForm, 'rules').value as Rules, feel: panelFeel(sceneForm, hooks.config().feel), freeze: input(sceneForm, 'freeze').value === '' ? NaN : Number(input(sceneForm, 'freeze').value) };
     return proposeScene(hooks.config(), scenario, params, Number(input(sceneForm, 'seed').value), Number(input(sceneForm, 'scale').value), Number(input(sceneForm, 'substeps').value), bounce, presettle, rules);
   }
 
@@ -713,22 +730,8 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     customGroup.firstElementChild!.textContent = c.customLevel ? `${c.customLevel.id} ${c.customLevel.name} (yours)` : '';
     input(sceneForm, 'scenario').value = sceneChoice(c);
     input(sceneForm, 'rules').value = c.rules;
-    (input(sceneForm, 'hitstop') as HTMLInputElement).checked = c.feel.hitStop;
-    (input(sceneForm, 'slowmo') as HTMLInputElement).checked = c.feel.slowMo;
-    input(sceneForm, 'budget').value = String(c.feel.budgetMs);
-    (input(sceneForm, 'tailskip') as HTMLInputElement).checked = c.feel.tailSkip;
-    (input(sceneForm, 'follow') as HTMLInputElement).checked = c.feel.follow;
-    (input(sceneForm, 'shake') as HTMLInputElement).checked = c.feel.shake;
-    (input(sceneForm, 'rapid') as HTMLInputElement).checked = c.feel.rapid;
-    input(sceneForm, 'undo').value = String(c.feel.undoMB);
+    showPanelFeel(sceneForm, c.feel);
     input(sceneForm, 'freeze').value = c.keystone.freeze === undefined ? '' : String(c.keystone.freeze);
-    input(sceneForm, 'frames').value = c.feel.frames;
-    input(sceneForm, 'launch').value = c.feel.launch;
-    input(sceneForm, 'balls').value = c.feel.balls;
-    (input(sceneForm, 'marks') as HTMLInputElement).checked = c.feel.marks;
-    input(sceneForm, 'fx').value = c.feel.fx;
-    (input(sceneForm, 'spent') as HTMLInputElement).checked = c.feel.spent;
-    (input(sceneForm, 'sleeptint') as HTMLInputElement).checked = c.feel.sleepTint;
     input(sceneForm, 'seed').value = String(c.seed);
     input(sceneForm, 'presettle').value = String(c.presettle);
     input(sceneForm, 'scale').value = String(c.scale);

@@ -6,7 +6,7 @@
 // shot's sim time to settle, collapse, the result card, undo and retry times,
 // HUD and card text, page errors.
 //
-//   pnpm playtest:agent [--only <regex>] [--viewport desktop|phone|phone-landscape] [--out dir] [--workers n] [--engine rapier|gpu: every scenario on it]
+//   pnpm playtest:agent [--only <regex>] [--viewport desktop|phone|phone-landscape] [--out dir] [--workers n] [--engine rapier|gpu: every scenario on it] [--look hazy|real|candy: every scenario in it]
 //
 // Headless Chromium here cannot present WebGPU to a canvas (no shared-image
 // backing for the swap chain on SwiftShader: the device is lost on the first
@@ -26,7 +26,7 @@ import { chromium, type Browser, type Page } from 'playwright';
 import { createServer } from 'vite';
 import { levelById, type Shot } from '@tb/keystone';
 import { WEBGPU_ARGS } from '@tb/testkit';
-import { agentPlan, frameName, lineOf, noviceAim, type Scenario, sheetGrid, spiral, VIEWPORTS, type ViewportName } from './plan.ts';
+import { agentPlan, frameName, lineOf, noviceAim, type Scenario, sheetGrid, spiral, VIEWPORTS, type ViewportName, withLook } from './plan.ts';
 
 const MIN = 60_000;
 const STEP_HZ = 60;
@@ -48,10 +48,10 @@ export interface RunRecord {
 }
 
 function args(argv: string[]) {
-  const o: { only: RegExp | null; viewport: ViewportName | null; out: string; workers: number; engine: string | null } = { only: null, viewport: null, out: 'agent-playtest-out', workers: 2, engine: null };
+  const o: { only: RegExp | null; viewport: ViewportName | null; out: string; workers: number; engine: string | null; look: string | null } = { only: null, viewport: null, out: 'agent-playtest-out', workers: 2, engine: null, look: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i], v = argv[i + 1];
-    if (a === '--only') { o.only = new RegExp(v!); i++; } else if (a === '--viewport') { o.viewport = v as ViewportName; i++; } else if (a === '--out') { o.out = v!; i++; } else if (a === '--workers') { o.workers = Number(v); i++; } else if (a === '--engine') { o.engine = v!; i++; } else throw new Error(`unknown argument ${a}`);
+    if (a === '--only') { o.only = new RegExp(v!); i++; } else if (a === '--viewport') { o.viewport = v as ViewportName; i++; } else if (a === '--out') { o.out = v!; i++; } else if (a === '--workers') { o.workers = Number(v); i++; } else if (a === '--engine') { o.engine = v!; i++; } else if (a === '--look') { o.look = v!; i++; } else throw new Error(`unknown argument ${a}`);
   }
   return o;
 }
@@ -98,12 +98,22 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
   page.on('pageerror', (e) => rec.errors.push(`pageerror: ${e.message}`));
   page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') rec.errors.push(`${m.type()}: ${m.text()}`); });
   let n = 0;
-  const shoot = async (what: string, settleMs = 0) => {
+  /**
+   * Capture a frame. Physics holds (GameHandle.hold) from before the picture until after the screenshot, so the
+   * scene and the HUD show the same step (PT12: on Rapier the sim ran on while SwiftShader rendered). `what` may
+   * be a function of the step held at, for the frame's name.
+   */
+  const shoot = async (what: string | ((step: number) => string), settleMs = 0) => {
     if (settleMs) await page.waitForTimeout(settleMs);
-    await mirror(page);
-    const file = frameName(sc.id, vp, n++, what);
-    await page.screenshot({ path: join(out, file) });
-    rec.frames.push(file);
+    const step = await page.evaluate(() => { window.__game.hold = true; return window.__game.stepIndex; });
+    try {
+      await mirror(page);
+      const file = frameName(sc.id, vp, n++, typeof what === 'string' ? what : what(step));
+      await page.screenshot({ path: join(out, file) });
+      rec.frames.push(file);
+    } finally {
+      await page.evaluate(() => { window.__game.hold = false; });
+    }
   };
   const tap = async (sel: string) => { const l = page.locator(sel).first(); if (v.touch) await l.tap(); else await l.click(); };
   try {
@@ -138,8 +148,7 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
         for (const ds of SEQUENCE_STEPS) {
           await page.waitForFunction((t) => window.__game.stepIndex >= t || window.__game.phase !== 'running', firedAt + ds, { timeout: 10 * MIN, polling: 50 });
           if ((await gameState(page)).phase !== 'running') break;
-          const at = (await gameState(page)).step - firedAt;
-          await shoot(`shot ${k + 1} +${at} steps`);
+          await shoot((step) => `shot ${k + 1} +${step - firedAt} steps`);
         }
       }
       await settled(page, before.strokes + 1, 15 * MIN);
@@ -268,7 +277,7 @@ async function contactSheet(browser: Browser, out: string, rec: RunRecord): Prom
 async function main() {
   const o = args(process.argv.slice(2));
   mkdirSync(o.out, { recursive: true });
-  const jobs = agentPlan().flatMap((sc) => sc.viewports.filter((vp) => !o.viewport || vp === o.viewport).map((vp) => ({ sc, vp }))).filter((j) => !o.only || o.only.test(`${j.sc.id}-${j.vp}`));
+  const jobs = agentPlan().map((sc) => (o.look ? { ...sc, search: withLook(sc.search, o.look) } : sc)).flatMap((sc) => sc.viewports.filter((vp) => !o.viewport || vp === o.viewport).map((vp) => ({ sc, vp }))).filter((j) => !o.only || o.only.test(`${j.sc.id}-${j.vp}`));
   const server = await createServer({ configFile: fileURLToPath(new URL('../../../game/vite.config.ts', import.meta.url)), server: { port: 0, host: '127.0.0.1' }, logLevel: 'silent' });
   await server.listen();
   const origin = server.resolvedUrls!.local[0]!.replace('127.0.0.1', 'localhost');
