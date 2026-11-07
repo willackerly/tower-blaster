@@ -4,7 +4,7 @@
 // - The wrong builds fail: a run straight into the wall, nothing built, one branch of W2's fork.
 // - The parts par each level carries (build.par) is what the Lay bot finds: the cheapest of 24 perturbations of every
 //   authored solution (control points moved up to 0.8 h, the ends held) that clears and holds on 4 nudges.
-// W6 Orchard (the 1k field) is lay-W6.test.ts; the GPU plays them in wave-gpu-lay.test.ts and wave-gpu-W6.test.ts.
+// W6 Orchard (the 1k field) is lay-W6.test.ts; the GPU plays them in wave-gpu-W1, W2 and W6.test.ts.
 import { describe, expect, it } from 'vitest';
 import { compileLevel, LAY_LEVELS, validateLevel, W1, W2 } from '@tb/keystone';
 import { build } from '../src/rube.ts';

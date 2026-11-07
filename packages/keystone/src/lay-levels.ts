@@ -46,6 +46,15 @@ const run = (pts: P2[]): Part & { kind: 'run' } => ({ kind: 'run', path: smoothS
 /** The last domino's centre of a run. */
 const lastOf = (p: { path: P2[] }): P2 => runCentres(p.path, DOMINO_PITCH).at(-1)!;
 
+/**
+ * The Orchard's bells: plaster slabs 1.6 h wide and 3 h tall (half-extents, h), facing their leaf (thin along the
+ * run, yawed 90). A bell the size of a domino, turned edge-on as W1's and W2's, hid behind its own leaf from the
+ * opening view on an upright phone (9 of 16 in sight, view.test.ts); faced and this size, all 16 are in sight wide
+ * and upright, and the leaf's last domino still rings it on every nudge.
+ */
+export const ORCHARD_BELL: [number, number, number] = [0.8, 1.5, 0.2];
+const orchardBell = ([x, z]: P2): Part => ({ kind: 'piece', at: [x, ORCHARD_BELL[1], z], half: [...ORCHARD_BELL], yaw: 90, material: 'plaster', role: 'crown' });
+
 /** The Orchard's shape: a fork's gap past the parent's last domino and its side offset; its branches' straight runs before the next fork, and the leaves' length (h). */
 export const ORCHARD = { gap: 1.1, side: 0.6, straight: 12, leaf: 48, spread: 12, depth: 4 } as const;
 
@@ -64,7 +73,7 @@ export function orchardField(trunkFrom: P2 = [24, 0], trunkTo: P2 = [36, 0]): { 
       const r = run([[x, pz + s * o.side], [x + 1.2, pz + s * (o.side + 0.3)], [x + L * 0.5, pz + s * d * 0.7], [x + L, pz + s * d], [x + L + (depth === 1 ? o.leaf : o.straight), pz + s * d]]);
       runs.push(r);
       const end = lastOf(r);
-      if (depth === 1) bells.push(bellDomino([Math.round((end[0] + DOMINO_PITCH) * 1e3) / 1e3, 1, Math.round(end[1] * 1e3) / 1e3]));
+      if (depth === 1) bells.push(orchardBell([Math.round((end[0] + DOMINO_PITCH + ORCHARD_BELL[2] - DOMINO_HALF[2]) * 1e3) / 1e3, Math.round(end[1] * 1e3) / 1e3]));
       else grow(end, d / 2, depth - 1);
     }
   };

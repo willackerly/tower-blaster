@@ -1,6 +1,6 @@
 // The authored solutions of Wavefront's Lay levels (keystone lay-levels.ts): the strokes a designer drew,
 // in h, as a player draws them on the ground with the brush. The Lay bot (lay.ts) perturbs these to find
-// each level's parts par; the tests (lay-levels.test.ts, lay-W6.test.ts, wave-gpu-lay.test.ts) play them.
+// each level's parts par; the tests (lay-levels.test.ts, lay-W6.test.ts, wave-gpu-W1, W2 and W6.test.ts) play them.
 import type { LaySolution } from './lay.ts';
 
 export const LAY_SOLUTIONS: Record<string, readonly LaySolution[]> = {
