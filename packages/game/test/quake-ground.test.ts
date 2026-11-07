@@ -2,8 +2,9 @@
 // turned around (the ground moves against the load its towers feel), along the quake's axis only, at rest at home
 // at both ends, and about A g / (2 pi f)^2 at its peak for a quake long enough to reach full strength.
 import { describe, expect, it } from 'vitest';
-import { A1, compileLevel, quakeCandidate, type QuakeShot } from '@tb/keystone';
-import { dustBeats, groundAt, groundMotion, groundPeak } from '../src/quake-ground.ts';
+import { type FieldEvent, joltEvent, tiltEvent } from '@tb/engine-api';
+import { A1, compileLevel, quakeCandidate, quakeInputs, type QuakeShot } from '@tb/keystone';
+import { dustBeats, fieldQuake, groundAt, groundMotion, groundMotionOf, groundPeak } from '../src/quake-ground.ts';
 import { seismogram } from '../src/quake-panel.ts';
 
 const q = (peak: number, hz: number, sec: number, axis = 0): QuakeShot => ({ ammo: 'quake', peak, hz, sec, axis });
@@ -59,5 +60,28 @@ describe('the ground\'s motion under a quake', () => {
     const mid = all[1]! + 0.4;
     expect([...dustBeats(m, -10, mid), ...dustBeats(m, mid, m.steps + 10)]).toEqual(all);
     expect(dustBeats(groundMotion(c, q(3, 10, 30)), -10, 1e9)).toEqual([]);
+  });
+});
+
+describe('a quake pushed with no shot (a Mason test\'s world 0: field events only)', () => {
+  const g = c.scene.gravity, at = 300, others: FieldEvent[] = [];
+  it('is found among the pushed events, its axis read off the keys, and draws as the same quake shot would', () => {
+    for (const axis of [0, 90]) {
+      const shot = q(30, 10, 10, axis), keys = quakeInputs(c, shot, at), f = fieldQuake(g, [...others, ...keys])!;
+      expect(f.axis).toBe(axis);
+      expect(f.step).toBe(keys[0]!.step);
+      expect(f.step - at).toBeLessThanOrEqual(1);
+      // From the same origin the field quake's motion is the shot's, sample for sample.
+      const m = groundMotionOf(g, c.scene.dt, f.keys, at), s = groundMotion(c, shot);
+      expect(m.steps).toBe(s.steps);
+      expect([...m.x, ...m.z]).toEqual([...s.x, ...s.z]);
+    }
+  });
+
+  it('a tilt, a jolt or nothing is no quake (the ground would drift away under a tilt)', () => {
+    expect(fieldQuake(g, [])).toBeNull();
+    expect(fieldQuake(g, [tiltEvent(at, 10, g)])).toBeNull();
+    expect(fieldQuake(g, [joltEvent(at, [1, 0, 0])])).toBeNull();
+    expect(fieldQuake(g, [tiltEvent(at, 10, g), tiltEvent(at + 60, 0, g), tiltEvent(at + 120, 5, g)])).toBeNull();
   });
 });

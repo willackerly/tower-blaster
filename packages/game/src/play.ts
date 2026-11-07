@@ -9,7 +9,7 @@
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
 import { armRefusal, type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, RUBE_GO, runSession, selectFootprints, selectGroups, type Shot, isIcePiece, QUAKE, type QuakeShot, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { DIAL_KEYS, type DialField, dialShot, dialStart, dialStep, type QuakeDial, quakePanelHtml, quakeRunHtml, seismogram } from './quake-panel.ts';
-import { dustBeats, groundAt, type GroundMotion, groundMotion } from './quake-ground.ts';
+import { dustBeats, fieldQuake, groundAt, type GroundMotion, groundMotion, groundMotionOf } from './quake-ground.ts';
 import { columnUnder, towerTicks } from './quake-ticks.ts';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
 import { multiply } from '@tb/render/math';
@@ -672,18 +672,26 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   // and its seismogram, recomputed only when the dial moves.
   let dial: QuakeDial | null = null, traceFor = '', trace: number[] = [];
   /** The quake fired this attempt (PT25): its fire step, the ground's motion and its seismogram, for the picture and the running panel. */
-  let quakeRun: { shot: QuakeShot; step: number; motion: GroundMotion; trace: number[]; bases: [number, number, number][]; dustAt: number } | null = null;
+  let quakeRun: { shot: QuakeShot | null; step: number; motion: GroundMotion; trace: number[]; bases: [number, number, number][]; dustAt: number } | null = null;
   /** The engine step of the snapshot last given to the renderer (the ground's motion is drawn at it). */
   let uploadedStep = 0;
-  /** The quake among the attempt's shots (one at most: a rack holds one), as quakeRun. */
+  /**
+   * The attempt's quake as quakeRun: its quake shot (one at most: a rack holds one), or else a quake pushed as field
+   * events with no shot (a Mason test's world 0, keystone mason-trial.ts; quake-ground.ts fieldQuake), drawn the same.
+   */
   const quakeRunOf = (): typeof quakeRun => {
-    const i = driver.session.inputs.find((x) => x.shot.ammo === 'quake');
-    if (!i) return null;
-    const shot = i.shot as QuakeShot;
     // The feet of the towers that count (condemned and protected), where each swing kicks up dust.
-    const bases = towerTicks(c, shot.axis).map((t) => { const b = columnUnder(c, t.body)[0] ?? t.body, m = c.meta; return [m.home[3 * b]!, m.home[3 * b + 1]! - m.half[3 * b + 1]!, m.home[3 * b + 2]!] as [number, number, number]; });
-    return { shot, step: i.step, motion: groundMotion(c, shot), trace: seismogram(c, shot), bases, dustAt: -Infinity };
+    const basesOf = (axis: number) => towerTicks(c, axis).map((t) => { const b = columnUnder(c, t.body)[0] ?? t.body, m = c.meta; return [m.home[3 * b]!, m.home[3 * b + 1]! - m.half[3 * b + 1]!, m.home[3 * b + 2]!] as [number, number, number]; });
+    const i = driver.session.inputs.find((x) => x.shot.ammo === 'quake');
+    if (i) {
+      const shot = i.shot as QuakeShot;
+      return { shot, step: i.step, motion: groundMotion(c, shot), trace: seismogram(c, shot), bases: basesOf(shot.axis), dustAt: -Infinity };
+    }
+    const f = fieldQuake(c.scene.gravity, driver.pushed);
+    return f ? { shot: null, step: f.step, motion: groundMotionOf(c.scene.gravity, c.scene.dt, f.keys), trace: [], bases: basesOf(f.axis), dustAt: -Infinity } : null;
   };
+  /** driver.pushed's length when quakeRunOf last looked for a field quake (a frame looks again only when it grows). */
+  let quakeSeen = -1;
   /** Steps since the quake went in at the drawn frame (between the last two snapshots by alpha); NaN without one. */
   const quakeAt = (alpha: number) => (quakeRun ? uploadedStep - 1 + alpha - quakeRun.step : NaN);
   /**
@@ -1004,7 +1012,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { ...roles.heritageKept, tint: ownTint(c.meta.heritage[k]!) }); });
     // No spark, heat, flash, blast or lit fuse of the undone shot carries over (PT2); the kept shots' fuses are lit again below.
     renderer.resetEffects();
-    quakeRun = quakeRunOf();
+    quakeRun = quakeRunOf(); quakeSeen = -1;
     fading = [];
     firedLooks = [...mark.looks];
     for (let i = c.meta.n; i < descs.length; i++) paintFired(i, firedLooks[i - c.meta.n] ?? null);
@@ -1244,7 +1252,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // drawn in the effect style the feel asks for; the kept shots' fuses are lit again below.
     renderer.setEffectStyle(feel.fx);
     renderer.resetEffects();
-    quakeRun = quakeRunOf();
+    quakeRun = quakeRunOf(); quakeSeen = -1;
     fading = [];
     // After an undo the kept shots' bodies are back in their slots: drawn as they were (bombs, painted balls). A fresh attempt starts with none.
     if (line) {
@@ -2142,7 +2150,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       opener: !stepping && regrowT === null && s.phase === 'aiming' && openerNow() !== null, ticks,
       // While the turn view swings or the hand-over card shows, the aim is the old side's: no refusal, cue or warning (PT5's red line mid-swing).
       ...(duel ? { duel: swing.active || handle.handoff ? duelHudHtml(duel) : duelHudHtml(duel, s.phase === 'aiming' && aimed ? duel.refuse(aimed.shot) : null, azFromYaw(orbit.yaw), s.phase === 'aiming' && aimHit !== null && duel.owned[duel.turn].includes(aimHit.body)) } : {}),
-      ...(quakeRun ? { quake: quakeRunHtml(c, quakeRun.shot, orbit.yaw, quakeRun.trace, quakeAt(1) / Math.max(1, quakeRun.motion.steps)) } : selected === QUAKE && dial ? { quake: quakeHud(dial) } : {}),
+      ...(quakeRun?.shot ? { quake: quakeRunHtml(c, quakeRun.shot, orbit.yaw, quakeRun.trace, quakeAt(1) / Math.max(1, quakeRun.motion.steps)) } : selected === QUAKE && dial ? { quake: quakeHud(dial) } : {}),
       ...(c.def.freeze !== undefined ? { freezes: { left: s.freezesLeft, total: c.def.freeze, frozen, can: canFreeze() } } : {}),
     }, goalsHudHtml(handle.goals, sheetOpen));
     showPanel();
@@ -2245,6 +2253,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     handle.frozenGrade = frozenGrade;
     frozenLabel.classList.toggle('on', frozenLook);
     // A quake moves the ground (PT25, quake-ground.ts): the site is drawn displaced by the ground's motion, the eye where the player put it.
+    // A quake pushed with no shot (a Mason test) shows up in driver.pushed: look again whenever that grows.
+    if (!quakeRun && driver.pushed.length !== quakeSeen) { quakeSeen = driver.pushed.length; quakeRun = quakeRunOf(); }
     const alpha = running ? alphaAt(arrivals, now, 1000 * c.scene.dt) : 1, ground = feel.quakeGround && quakeRun ? groundAt(quakeRun.motion, quakeAt(alpha)) : null;
     handle.ground = ground ? [ground[0], ground[1]] : [0, 0];
     // Each swing's strongest push kicks up dust at the towers' feet, harder the stronger the push (dustBeats).

@@ -164,6 +164,12 @@ snapshots by the same alpha as the bodies. The camera's own state never changes,
 reads the shaking against the frame of the screen. True scale: 0.3 g at 1 Hz moves the ground about 7 cm (a seventh
 of a cube), A1's ace 5.4 cm, A4's 21.7 cm, the retrofits' 6.5 cm.
 
+The motion comes from the field events, not from the quake shot: a quake pushed with no shot (a Mason test's world 0,
+keystone `mason-trial.ts`, pushed into the page's driver) is found among `Driver.pushed` (`fieldQuake`: gravity keys
+that swing the side load both ways and end back at the level's gravity; a tilt or a jolt is no quake) and drawn the
+same way, without the running panel (that is the designer's). The test checks that a shot's keys pushed as plain field
+events draw sample for sample as the shot does, along x and z.
+
 **Dust at the towers' feet** (`dustBeats`, `Renderer.dust`): each swing's strongest push (the side load's peaks,
 twice a cycle, above 0.05 g) puffs dust in a ring round the foot of every condemned and protected tower, harder for a
 stronger swing, capped at the chips' threshold so a swing throws no stone. It is the real look's dust (its debris

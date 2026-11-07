@@ -11,6 +11,7 @@
 // carries the ground away), which no watcher of a real quake sees; so the motion has the straight line from its first
 // to its last point taken off, and starts and ends at rest at home. It is drawn at true scale: 0.3 g at 1 Hz moves the
 // ground about 7 cm (a seventh of a cube), at 3 Hz under 1 cm.
+import { type FieldEvent, type InputEvent, quantiseVec3, type Vec3 } from '@tb/engine-api';
 import { type CompiledLevel, quakeInputs, type QuakeShot } from '@tb/keystone';
 
 /**
@@ -21,11 +22,19 @@ export interface GroundMotion { x: Float64Array; z: Float64Array; load: Float64A
 
 /** The ground's motion under `shot` on level `c` (the very field events the engine gets), one sample per step from the fire step. */
 export function groundMotion(c: CompiledLevel, shot: QuakeShot): GroundMotion {
-  const ev = quakeInputs(c, shot, 0), g = c.scene.gravity, dt = c.scene.dt;
-  const steps = ev.at(-1)?.step ?? 0, x = new Float64Array(steps + 1), z = new Float64Array(steps + 1), load = new Float64Array(steps + 1), gn = Math.hypot(...g);
+  return groundMotionOf(c.scene.gravity, c.scene.dt, quakeInputs(c, shot, 0), 0);
+}
+
+/**
+ * The ground's motion under a quake's gravity keys `ev` (sorted by step, ending back at `g`), one sample per step from
+ * step `from` (the fire step; default the first key's): a quake shot's (groundMotion) or a level's own (fieldQuake: a Mason test's, pushed as field
+ * events with no shot).
+ */
+export function groundMotionOf(g: Vec3, dt: number, ev: readonly FieldEvent[], from = ev[0]?.step ?? 0): GroundMotion {
+  const steps = (ev.at(-1)?.step ?? from) - from, x = new Float64Array(steps + 1), z = new Float64Array(steps + 1), load = new Float64Array(steps + 1), gn = Math.hypot(...g);
   let k = 0, ax = 0, az = 0, vx = 0, vz = 0;
   for (let s = 0; s < steps; s++) {
-    while (k < ev.length && ev[k]!.step <= s) { const v = ev[k]!.gravity!; ax = -(v[0] - g[0]); az = -(v[2] - g[2]); k++; }
+    while (k < ev.length && ev[k]!.step - from <= s) { const v = ev[k]!.gravity!; ax = -(v[0] - g[0]); az = -(v[2] - g[2]); k++; }
     load[s] = Math.hypot(ax, az) / gn;
     // Semi-implicit Euler at the engine's step, as a body on the ground would move with it.
     vx += ax * dt; vz += az * dt;
@@ -34,6 +43,27 @@ export function groundMotion(c: CompiledLevel, shot: QuakeShot): GroundMotion {
   // Take off the drift: the straight line from the first sample to the last.
   for (let s = 0; s <= steps; s++) { const t = steps ? s / steps : 0; x[s] = x[s]! - t * x[steps]!; z[s] = z[s]! - t * z[steps]!; }
   return { x, z, load, steps };
+}
+
+/**
+ * A quake among events pushed with no quake shot (a Mason test's world 0, keystone mason-trial.ts): the run of gravity
+ * keys that swings the side load both ways (a change of sign: the shortest quake, one cycle at 1 Hz for 1 s, has one)
+ * and ends back at the level's gravity `g` (on the field grid). Its first step, keys and axis (0 along x, 90 along z,
+ * the larger swing). A tilt (one key, never back) or a jolt (a kick, no gravity) is no quake: the ground would drift
+ * away under it. Null when there is none.
+ */
+export function fieldQuake(g: Vec3, events: readonly InputEvent[]): { step: number; keys: FieldEvent[]; axis: number } | null {
+  const keys = events.filter((e): e is FieldEvent => e.kind === 'field' && e.gravity !== undefined).sort((a, b) => a.step - b.step);
+  // The keys are on the field grid (engine-api quantiseVec3): so is the gravity they come back to.
+  const last = keys.at(-1)?.gravity, home = quantiseVec3(g);
+  if (keys.length < 3 || !last || last[0] !== home[0] || last[1] !== home[1] || last[2] !== home[2]) return null;
+  let flips = 0, prev = 0, mx = 0, mz = 0;
+  for (const e of keys) {
+    const sx = e.gravity![0] - home[0], sz = e.gravity![2] - home[2], side = Math.abs(sx) >= Math.abs(sz) ? sx : sz;
+    mx = Math.max(mx, Math.abs(sx)); mz = Math.max(mz, Math.abs(sz));
+    if (side !== 0) { if (prev !== 0 && Math.sign(side) !== Math.sign(prev)) flips++; prev = side; }
+  }
+  return flips >= 1 ? { step: keys[0]!.step, keys, axis: mz > mx ? 90 : 0 } : null;
 }
 
 /**
