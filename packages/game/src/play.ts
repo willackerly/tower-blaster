@@ -213,6 +213,11 @@ export interface GameHandle {
   refreshMarks(): void;
   /** Physics state now: step, phase and a hash of every pose. */
   state(): SessionState;
+  /**
+   * The structure bodies asleep in the last snapshot (awake 0; on the GPU only with per-body sleep, the
+   * level's physics.sleep or `?keystone.sleep=1`, and Rapier's own sleep), of how many structure bodies.
+   */
+  asleep(): { asleep: number; of: number };
   /** This attempt's shots as the session recorded them, a rapid-fire one with `after` (Shot.after): what replay() and a session file replay. */
   line(): Shot[];
   /** The same shots from the same level on a fresh engine, built as the live one, on this device. */
@@ -298,7 +303,7 @@ export function newGameHandle(): GameHandle {
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, hold: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, card: { place: 'center', endedMs: null, shownMs: null }, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
     fire: () => false, bank: () => false, skip: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, coverage: async () => 0, pullDrawn: null, frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], refreshMarks: () => {},
-    state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null, handoff: false, scoreFloat: '',
+    state: none, asleep: () => ({ asleep: 0, of: 0 }), line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null, handoff: false, scoreFloat: '',
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
     ice: () => ({ count: 0, cracks: [] }),
     edit: { on: false, enter: () => false, play: () => {}, cancel: () => {}, key: () => false, ray: () => {}, status: () => '', def: () => null, ghosts: () => 0, played: null },
@@ -1677,6 +1682,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   handle.undo = () => undo().catch((e) => { fail(e); return false; });
   handle.undoMemory = () => marks.held;
   handle.line = () => driver.session.inputs.map((i) => ({ ...i.shot }));
+  handle.asleep = () => {
+    const s = driver.snapshot, n = Math.min(c.meta.n, s.count);
+    let k = 0;
+    for (let i = 0; i < n; i++) if (!s.awake[i]) k++;
+    return { asleep: k, of: n };
+  };
   handle.state = () => ({ step: driver.engine.stepIndex, phase: driver.session.phase, strokes: driver.session.strokes, heritageBroken: sum(driver.session.heritageBroken), hash: snapshotHash(driver.snapshot) });
   // Between steps and loads, so neither a step nor a load's dispose runs under the read.
   handle.health = () => exclusive(async () => (await driver.engine.health?.()) ?? null);
@@ -2005,6 +2016,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // There, draw only for a capture.
     viewSun.update(renderer, feel.sun);
     if ((!offscreen && draw) || want) {
+      // Debug: blocks asleep in blue (keystone.sleeptint, the Scene panel), read live.
+      renderer.toggles.sleepTint = feel.sleepTint;
       const stats = await renderer.render(fp, !!want, want?.keep);
       if (want) want.resolve(stats);
     }
