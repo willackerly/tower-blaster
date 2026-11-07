@@ -2,11 +2,12 @@
 // function, and a thin WebAudio player renders them. Everything melodic sits
 // on one major pentatonic scale, so any pile of impacts sounds consonant.
 import { BANDS, type Feedback, MATERIALS } from '@tb/keystone';
+import { LAUNCH_SECONDS, launchParams, type LaunchParams, type LaunchShape, launchWave } from './launch-sound.ts';
 
 export type Wave = 'sine' | 'triangle' | 'square' | 'sawtooth';
 export interface Voice {
-  /** 'tone' is an oscillator; 'noise' is band-passed noise centred on freq. */
-  kind: 'tone' | 'noise';
+  /** 'tone' is an oscillator; 'noise' is band-passed noise centred on freq; 'launch' plays launchWave(launch) (freq unused). */
+  kind: 'tone' | 'noise' | 'launch';
   freq: number;
   wave?: Wave;
   /** Peak gain, 0..1 before the master. */
@@ -17,6 +18,8 @@ export interface Voice {
   delay: number;
   /** Ratio the pitch glides to over the decay (1 = none). */
   glide?: number;
+  /** kind 'launch': the whump's physics (launch-sound.ts); its samples peak at gain. */
+  launch?: LaunchParams;
 }
 
 export const PENTATONIC = [1, 9 / 8, 5 / 4, 3 / 2, 5 / 3];
@@ -51,8 +54,11 @@ export const BELL_NOTE = degree(10);
  * opts.impacts false: the collision sound (@tb/audio, collapse-sound.ts) plays the impacts, so
  * `impacts` and `contact` make no voices here; the cues (launch, crowns, heritage, tier, level end) stay.
  * opts.bell: the level's crowns are bells (objective 'bell'), and a crown down rings as one (BELL_PARTIALS).
+ * opts.launch: the fired body's size and speed, so a launched shot whumps (launch-sound.ts, PaceFeel.launchSound
+ * 'whump'); without it, or with opts.launchSound 'glide', the old sine glide. A drop (released, not launched) and
+ * a cue (pushed) keep the glide either way.
  */
-export function voicesFor(fb: Feedback, opts: { impacts?: boolean; bell?: boolean } = {}): Voice[] {
+export function voicesFor(fb: Feedback, opts: { impacts?: boolean; bell?: boolean; launch?: LaunchShape | null; launchSound?: 'whump' | 'glide' } = {}): Voice[] {
   if (opts.impacts === false && (fb.t === 'impacts' || fb.t === 'contact')) return [];
   switch (fb.t) {
     case 'fired':
@@ -62,7 +68,12 @@ export function voicesFor(fb: Feedback, opts: { impacts?: boolean; bell?: boolea
       if (fb.ammo === 'plunger') return [{ kind: 'noise', freq: 2400, gain: 0.15, decay: 0.04, delay: 0 }];
       // A quake: a low rumble rising; the shaking itself is heard as the towers' impacts.
       if (fb.ammo === 'quake') return [{ kind: 'noise', freq: 120, gain: 0.3, decay: 1.2, delay: 0 }, { kind: 'tone', wave: 'sine', freq: 38, gain: 0.3, decay: 1.5, delay: 0, glide: 0.8 }];
-      // A soft whump, heavier for heavier shots.
+      // A launched shot: the launcher's whump, from the shot.
+      if (opts.launch && opts.launchSound !== 'glide' && fb.ammo !== 'drop' && fb.ammo !== 'cue') {
+        const p = launchParams(opts.launch);
+        return [{ kind: 'launch', freq: 0, gain: p.gain, decay: LAUNCH_SECONDS, delay: 0, launch: p }];
+      }
+      // The old cue: a sine gliding down, heavier for heavier shots.
       return [{ kind: 'tone', wave: 'sine', freq: fb.ammo === 'cannonball' ? 70 : fb.ammo === 'drop' ? 55 : 110, gain: 0.35, decay: 0.22, delay: 0, glide: 0.5 }];
     case 'contact': {
       const g = Math.min(0.6, 0.12 + 0.07 * Math.log2(1 + fb.impulse / 50));
@@ -152,7 +163,16 @@ export class Synth {
       env.gain.exponentialRampToValueAtTime(0.0001, t0 + v.decay);
       env.connect(this.out);
       let src: AudioScheduledSourceNode;
-      if (v.kind === 'noise') {
+      if (v.kind === 'launch' && v.launch) {
+        // Samples at the context's rate, already enveloped and at their gain: the envelope stays open.
+        const x = launchWave(v.launch, this.ctx.sampleRate), buf = this.ctx.createBuffer(1, x.length, this.ctx.sampleRate), n = this.ctx.createBufferSource();
+        buf.copyToChannel(x, 0);
+        n.buffer = buf;
+        env.gain.cancelScheduledValues(t0);
+        env.gain.setValueAtTime(1, t0);
+        n.connect(env);
+        src = n;
+      } else if (v.kind === 'noise') {
         const n = this.ctx.createBufferSource(), bp = this.ctx.createBiquadFilter();
         n.buffer = this.noise;
         bp.type = 'bandpass'; bp.frequency.value = v.freq; bp.Q.value = 1.2;
