@@ -7,7 +7,7 @@
 // every series is listed, and a trial picked from the Trials toggle loads in
 // place (no page load), with N and P walking the trials only.
 import { describe, expect, it } from 'vitest';
-import { B1, L1, type Shot, TRIAL_LEVELS, writeShots } from '@tb/keystone';
+import { AFTERSHOCK_LEVELS, B1, FUSE_LEVELS, L1, type Shot, TRIAL_LEVELS, writeShots } from '@tb/keystone';
 import { DEFAULT_SETTINGS, doorChange, type Settings } from '../src/settings.ts';
 import { gamePage } from './page.ts';
 
@@ -27,8 +27,8 @@ describe('front door', () => {
     if (!o) return ctx.skip();
     const { page, errors } = o;
     expect(await page.evaluate(() => window.__door.open)).toBe(true);
-    // Every rated level (B1-B3, L1-L5, U1-U3, RL1-RL3); the trials wait behind their toggle.
-    expect(await page.locator('.kg-door .card:not(.duel)').count()).toBe(14);
+    // Every rated level (B1-B3, L1-L5, U1-U3, RL1-RL5, F1 on, A1 on); the trials wait behind their toggle.
+    expect(await page.locator('.kg-door .card:not(.duel)').count()).toBe(16 + FUSE_LEVELS.length + AFTERSHOCK_LEVELS.length);
     expect(await page.locator('.kg-door [data-act="trials"]').innerText()).toBe(`TRIALS · UNRATED (${TRIAL_LEVELS.length}) ▸`);
     expect(await page.locator('.kg-door .card.duel').count()).toBe(2);
     expect(await page.locator('.kg-door .play').innerText()).toBe('Play · Long Wall');
@@ -64,8 +64,8 @@ describe('front door', () => {
     expect(await page.evaluate(() => window.__door.open)).toBe(false);
     await page.keyboard.press('Escape');
     expect(await page.evaluate(() => window.__door.open)).toBe(true);
-    // Every series, the slice first: B1 to B3, L1 to L5, U1 to U3, RL1 to RL3; L1 is the loaded one.
-    expect(await page.locator('.kg-door .card:not(.duel) .id').allInnerTexts()).toEqual(['B1', 'B2', 'B3', 'L1', 'L2', 'L3', 'L4', 'L5', 'U1', 'U2', 'U3', 'RL1', 'RL2', 'RL3']);
+    // Every series, the slice first: B1 to B3, L1 to L5, U1 to U3, RL1 to RL5, then Fuse & Fold and Aftershock; L1 is the loaded one.
+    expect(await page.locator('.kg-door .card:not(.duel) .id').allInnerTexts()).toEqual(['B1', 'B2', 'B3', 'L1', 'L2', 'L3', 'L4', 'L5', 'U1', 'U2', 'U3', 'RL1', 'RL2', 'RL3', 'RL4', 'RL5', ...FUSE_LEVELS.map((d) => d.id), ...AFTERSHOCK_LEVELS.map((l) => l.id)]);
     expect(await page.locator('.kg-door .card.current .id').innerText()).toBe('L1');
     await page.keyboard.press('Escape');
     expect(await page.evaluate(() => window.__door.open)).toBe(false);
@@ -185,10 +185,12 @@ describe('trials on the door', () => {
     expect(await page.locator('.kg-door .card.trial').count()).toBe(0);
     await page.locator('.kg-door [data-act="trials"]').click();
     expect(await page.locator('.kg-door .card.trial').count()).toBe(TRIAL_LEVELS.length);
-    expect(await page.locator('.kg-door .card.trial .id').allInnerTexts()).toEqual(TRIAL_LEVELS.map((d) => d.id));
+    // Each card shows the trial's number (PT18) and carries its id.
+    expect(await page.locator('.kg-door .card.trial .id').allInnerTexts()).toEqual(TRIAL_LEVELS.map((_, i) => `Trial ${i + 1}`));
+    expect(await page.locator('.kg-door .card.trial').evaluateAll((cs) => cs.map((c) => (c as HTMLElement).dataset.id))).toEqual(TRIAL_LEVELS.map((d) => d.id));
     // Play still offers the first rated level, not a trial.
     expect(await page.locator('.kg-door .play').innerText()).toBe(`Play · ${B1.name}`);
-    await page.locator('.kg-door .card[aria-label^="T-X1 "]').click();
+    await page.locator('.kg-door .card[data-id="T-X1"]').click();
     await page.waitForFunction(() => window.__game.level === 'T-X1' && window.__game.ready, undefined, { timeout: MINUTES, polling: 100 });
     expect(new URLSearchParams(await page.evaluate(() => location.search)).get('level')).toBe('T-X1');
     // The trial is outcome-scored with its objective (the last domino down) and nothing cast.
@@ -222,7 +224,9 @@ describe('trials on the door', () => {
     await page.waitForFunction(() => window.__game?.status === 'running', undefined, { timeout: MINUTES });
     expect(await page.evaluate(() => window.__game.level)).toBe('T-X3B');
     expect(await page.locator('.kg-door .card.trial').count()).toBe(TRIAL_LEVELS.length);
-    expect(await page.locator('.kg-door .card.current .id').innerText()).toBe('T-X3B');
+    // The card shows the trial's number, not its id (PT18); the id stays in the URL and data-id.
+    expect(await page.locator('.kg-door .card.current').getAttribute('data-id')).toBe('T-X3B');
+    expect(await page.locator('.kg-door .card.current .id').innerText()).toBe(`Trial ${TRIAL_LEVELS.findIndex((l) => l.id === 'T-X3B') + 1}`);
     expect(errors).toEqual([]);
     await page.close();
   }, 3 * MINUTES);

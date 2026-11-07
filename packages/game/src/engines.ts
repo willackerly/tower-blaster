@@ -49,7 +49,7 @@ export const radiusOf = (s: ShapeDesc): number => (s.kind === 'sphere' ? s.radiu
 export function gpuOptions(c: CompiledLevel, pairsPerBody?: number): Required<Pick<GpuEngineOptions, 'capacity' | 'maxRadius' | 'pairsPerBody'>> {
   const rack = c.def.rack;
   // A weapon's children count and reach too (its arm: every munition it can spawn). A pull or a plunger fires nothing.
-  const maxRadius = Math.max(0, ...rack.filter((k) => k !== 'pull' && k !== 'plunger').map((k) => c.arms[k]?.maxRadius ?? radiusOf(ammoBody(k, c.frame, [0, 0, 0], [0, 0, 0]).shape)));
+  const maxRadius = Math.max(0, ...rack.filter((k) => k !== 'pull' && k !== 'plunger' && k !== 'quake').map((k) => c.arms[k]?.maxRadius ?? radiusOf(ammoBody(k, c.frame, [0, 0, 0], [0, 0, 0]).shape)));
   // A shattered ice block's pieces are bodies too (IceBreaker.budget: every ice block's, at most).
   const capacity = c.scene.bodies.length + rackBodies(rack, c.arms) + IceBreaker.budget(c);
   return { capacity, maxRadius, pairsPerBody: pairsPerBody ?? everyPairPerBody(capacity) };

@@ -92,6 +92,12 @@ export interface BuildDef {
   brush?: boolean;
   /** What placed pieces are made of (default plaster). */
   material?: MaterialName;
+  /**
+   * The parts par: the least build cost a bot found that clears (Rube Lab, Lay levels). Present, the level
+   * scores on its parts (rules.ts partsStars) instead of strokes. Hashed, unlike stars: progress keeps the
+   * best stars per level hash, so a retuned par is a new record rather than keeping stars earned under the old.
+   */
+  par?: number;
 }
 
 /** How the player turns what they hold: a yaw, and which of the item's axes stands up (tip: 0 as built, 1 x up, 2 z up). */

@@ -1,4 +1,4 @@
-// pnpm rube:gate [RL1 RL2 RL3]: runs the Rube Lab gate search (rube-gate.ts) on the reference and prints
+// pnpm rube:gate [RL1 .. RL5]: runs the Rube Lab gate search (rube-gate.ts) on the reference and prints
 // each puzzle's robust clears by family, its cheapest clear and its wrong builds. --json FILE writes the rows.
 import { writeFileSync } from 'node:fs';
 import { gatePuzzles, NUDGES, ROBUST, runPuzzle } from './rube-gate.ts';

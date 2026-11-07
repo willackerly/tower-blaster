@@ -2,12 +2,13 @@
 // SceneDesc plus per-body metadata the rules need (role, material, mass,
 // home pose). Compilation is pure and the body order is stable, so a level
 // hash pins the exact scene a recorded solution was made against.
-import { type BodyDesc, massOf, type SceneDesc, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, massOf, quantiseVec3, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { DEFAULT_GAP, DEFAULT_UNIT, encodeTag, GRAVITY, MATERIALS, materialId, type MaterialName, type Role, ROLES } from './materials.ts';
 import { peOf_mJ, SETTLE_RULES, type SettleRule } from './rules.ts';
 import { type Arm, armLoad, chargeIssues, levelArm, rackArms } from './arsenal.ts';
 import { loadIssues, loadTier } from '@tb/weapons';
-import { chargeWeaponOf, isRackItem, itemRef, type LevelWeapon, PLUNGER, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY, weaponOf } from './rack.ts';
+import { chargeWeaponOf, isLaunchItem, isRackItem, itemRef, type LevelWeapon, PLUNGER, QUAKE, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY, weaponOf } from './rack.ts';
+import { checkQuakeRules, type QuakeRules } from './quake.ts';
 import { type ScenarioPart, scenarioBodies, scenarioKey } from './scenario-part.ts';
 import { ammoBody, type LauncherDef, launcherPos, type Shot, type ShotFrame } from './shots.ts';
 import { checkIce, type IceBlock, IceBreaker, iceOf } from './ice.ts';
@@ -27,10 +28,13 @@ export interface CourseOverride {
   omit?: boolean;
 }
 
-/** A box of unit cubes; `at` is the min corner in cells, `size` the count along x, y, z. */
-export interface BlockPart { kind: 'block'; at: Vec3; size: Vec3; material: MaterialName; role?: Role; courses?: CourseOverride[] }
-/** One box body; `at` is (centre x, bottom y, centre z) and `half` its half-extents, in h. */
-export interface BoxPart { kind: 'slab' | 'rod'; at: Vec3; half: Vec3; material: MaterialName; role?: Role }
+/**
+ * A box of unit cubes; `at` is the min corner in cells, `size` the count along x, y, z. `pinned` bolts every
+ * cube of it to the world (C8, engine-api pinned.ts): bedrock, a plinth or a curb that never moves.
+ */
+export interface BlockPart { kind: 'block'; at: Vec3; size: Vec3; material: MaterialName; role?: Role; courses?: CourseOverride[]; pinned?: true }
+/** One box body; `at` is (centre x, bottom y, centre z) and `half` its half-extents, in h. `pinned` as BlockPart's. */
+export interface BoxPart { kind: 'slab' | 'rod'; at: Vec3; half: Vec3; material: MaterialName; role?: Role; pinned?: true }
 /**
  * One box at a free pose (the build tool's piece, placement.ts): `at` is its centre in h (not cells: the
  * lattice pitch does not apply, so a piece goes exactly where it was placed), `half` its half-extents in h,
@@ -83,6 +87,17 @@ export type Objective =
    */
   | { kind: 'trial'; footprintMax?: number }
   /**
+   * Aftershock (docs/game/aftershock.md): every crown down (the condemned towers' tops) and no heritage broken (the
+   * protected towers' tops, judged standing at the settle: LevelDef.heritage 'standing'). Outcome levels only.
+   */
+  | { kind: 'quake'; footprintMax?: number }
+  /**
+   * Fuse & Fold (docs/game/fuse-and-fold.md): bring the building down into its lot. Met when the collapse
+   * fraction is at least `min`, the building's spill (rules.ts spillOf: the share of its mass outside the lot
+   * grown by 0.5 h) is at most `spillMax`, and no heritage is broken. Outcome levels only.
+   */
+  | { kind: 'fold'; min: number; spillMax: number; footprintMax?: number }
+  /**
    * Rube Lab's bell (docs/game/rube-lab.md): the crowns are the level's bells, watched every step. A bell rings
    * when its centre enters `region` (h, world: a sensor box, for a runner that must arrive somewhere) or, with
    * no region, when it has moved `moved` h from home (default rules.ts BELL_MOVED: a target that must be hit). Once rung
@@ -97,10 +112,14 @@ export type Scoring = (typeof SCORINGS)[number];
 /**
  * The one metric an outcome level's stars are measured on: collapse (D, higher is better), crowns
  * (crowns down), skyline (end skyline over start skyline, lower is better), score (the tally total)
- * or pulled (the share of the structure's mass pulled, Undercut; higher is better).
+ * pulled (the share of the structure's mass pulled, Undercut; higher is better), fold (Fuse & Fold:
+ * collapse x (1 - spill), what came down discounted by the share of the building that left its lot; higher is better)
+ * or energy (the joules fired, Aftershock's quake: lower is better, and an input, so it reads the same on every engine).
  */
-export const STAR_METRICS = ['collapse', 'crowns', 'skyline', 'score', 'pulled'] as const;
+export const STAR_METRICS = ['collapse', 'crowns', 'skyline', 'score', 'pulled', 'fold', 'energy'] as const;
 export type StarMetric = (typeof STAR_METRICS)[number];
+/** Lower is better on this metric (skyline and energy); higher for the rest. */
+export const lowerIsBetter = (metric: StarMetric): boolean => metric === 'skyline' || metric === 'energy';
 
 /**
  * Thresholds cast by the bot for an outcome level (spectacle-mode.md, section 6): two stars at t2,
@@ -128,7 +147,7 @@ export function checkStars(x: unknown, where = 'stars'): StarsDef {
   if (o.waived !== undefined && (!Array.isArray(o.waived) || !o.waived.length || !o.waived.every((g) => typeof g === 'string' && g.length > 0))) throw new Error(`${where}.waived must be a non-empty list of gate names when given: ${JSON.stringify(o.waived)}`);
   const known = new Set(['metric', 't2', 't3', 'best', 'castOn', 'engine', 'hash', 'n', 'seed', 'waived']);
   for (const k of Object.keys(o)) if (!known.has(k)) throw new Error(`${where}: unknown field ${k}`);
-  const lower = o.metric === 'skyline', t2 = o.t2 as number, t3 = o.t3 as number;
+  const lower = lowerIsBetter(o.metric as StarMetric), t2 = o.t2 as number, t3 = o.t3 as number;
   if (lower ? t3 > t2 : t3 < t2) throw new Error(`${where}: t3 (${t3}) is easier than t2 (${t2}) for ${String(o.metric)}`);
   return o as unknown as StarsDef;
 }
@@ -195,17 +214,25 @@ export interface LevelDef {
   freeze?: number;
   /** The physics the level plays at (default Keystone's: PHYSICS_DEFAULTS). Part of the level hash, so stars cast at one setting never show at another. */
   physics?: PhysicsBlock;
+  /** Aftershock (quake.ts): what the quake dial allows, for a level whose rack holds a quake. Part of the hash. */
+  quake?: QuakeRules;
+  /**
+   * How heritage is judged. 'pose' (default): broken the first step it moves 0.3 h or tilts 15 degrees from home
+   * (rules.ts heritageBroken), however briefly. 'standing' (Aftershock's protected towers): judged at each settle
+   * only, broken if it has dropped 0.3 h below home or tilts past 15 degrees there (rules.ts heritageFallen): a
+   * tower that rocked and stood, or slid and stood, still stands. Part of the hash.
+   */
+  heritage?: 'pose' | 'standing';
   /**
    * Build rules (C9, build.ts): the player places pieces and lays domino runs, within a budget, before the
    * first shot (time stopped; Play compiles the level with them). Absent: nothing may be placed.
    */
   build?: BuildDef;
   /**
-   * Rube Lab (docs/game/rube-lab.md, rules.ts rubeStars): the parts par, the least build cost a bot found
-   * that clears. Hashed, unlike stars: progress keeps the best stars per level hash, so a retuned par is a new
-   * record rather than keeping stars earned under the old one.
+   * A Rube Lab level (docs/game/rube-lab.md): its one plunger is the Go button (release the ball). Its
+   * parts par is build.par, which any build level may name (scored by rules.ts partsStars).
    */
-  rube?: { partsPar: number };
+  rube?: true;
   /**
    * Mason's Trial (M8, mason.ts, docs/game/masons-trial.md): the test that runs once the build is done, its pass
    * rule, the jitter of the worlds it is judged in, and the star points. Hashed (the stars too, as rube.partsPar).
@@ -214,7 +241,7 @@ export interface LevelDef {
   mason?: MasonDef;
   /**
    * Made from an authored level by overrides (URL keys keystone.*): it plays, but cast stars do not
-   * apply ("custom: stars not recorded"). Not part of the hash: the overrides already are.
+   * apply (the game's CUSTOM_NOTE). Not part of the hash: the overrides already are.
    */
   custom?: boolean;
 }
@@ -389,9 +416,9 @@ export interface CompiledLevel {
 export const unitOf = (d: LevelDef) => d.unit ?? DEFAULT_UNIT;
 export const pitchOf = (d: LevelDef) => 1 + (d.gap ?? DEFAULT_GAP);
 
-function body(pos: Vec3, half: Vec3, material: MaterialName, role: Role, part: number, rot: BodyDesc['rot'] = [0, 0, 0, 1]): BodyDesc {
+function body(pos: Vec3, half: Vec3, material: MaterialName, role: Role, part: number, rot: BodyDesc['rot'] = [0, 0, 0, 1], pinned = false): BodyDesc {
   const m = MATERIALS[materialId(material)]!;
-  return { shape: { kind: 'box', half }, pos, rot, linVel: [0, 0, 0], angVel: [0, 0, 0], density: m.density, friction: m.friction, restitution: m.restitution, tag: encodeTag(role, part) };
+  return { shape: { kind: 'box', half }, pos, rot, linVel: [0, 0, 0], angVel: [0, 0, 0], density: m.density, friction: m.friction, restitution: m.restitution, tag: encodeTag(role, part), ...(pinned ? { pinned: true } : {}) };
 }
 
 /** A body's half-extents at rest: a box's, a ball's radius on every axis. */
@@ -411,6 +438,8 @@ export function hashString(s: string): string {
 export function compileLevel(def: LevelDef): CompiledLevel {
   if (def.physics) checkPhysics(def.physics);
   if (def.settle !== undefined) checkSettle(def.settle);
+  if (def.quake !== undefined) checkQuakeRules(def.quake);
+  if (def.heritage !== undefined && def.heritage !== 'pose' && def.heritage !== 'standing') throw new Error(`heritage must be pose or standing: ${String(def.heritage)}`);
   const h = unitOf(def), p = pitchOf(def) * h;
   const bounce = physicsOf(def).bounce;
   const bodies: BodyDesc[] = [];
@@ -428,7 +457,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
         }
         if (omit) continue;
         const pos: Vec3 = [(part.at[0] + i + 0.5) * p, (part.at[1] + k + 0.5) * h, (part.at[2] + j + 0.5) * p];
-        add(body(pos, [h / 2, h / 2, h / 2], material, role, pi), role, material, pi);
+        add(body(pos, [h / 2, h / 2, h / 2], material, role, pi, undefined, part.pinned === true), role, material, pi);
       }
     } else if (part.kind === 'scenario') {
       for (const b of scenarioBodies(part, h, pitchOf(def))) add(body(b.pos, b.half, part.material, b.role, pi, b.rot), b.role, part.material, pi);
@@ -450,7 +479,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
       const half = part.half.map((x) => x * h) as Vec3;
       const pos: Vec3 = [part.at[0] * p, part.at[1] * h + half[1], part.at[2] * p];
       const role = part.role ?? 'plain';
-      add(body(pos, half, part.material, role, pi), role, part.material, pi);
+      add(body(pos, half, part.material, role, pi, undefined, part.pinned === true), role, part.material, pi);
     }
   });
 
@@ -470,8 +499,11 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   });
   for (let i = 0; i < n; i++) meta.band[i] = Math.min(7, Math.floor((8 * meta.home[3 * i + 1]!) / Math.max(height, 1e-9)));
 
+  // A level whose rack holds a quake plays under field events (C7): its gravity goes on the field grid, so a
+  // quake's last key restores it exactly. Every other level keeps the gravity its lines were pinned under.
+  const gravity: Vec3 = def.rack.includes(QUAKE) ? quantiseVec3([0, -GRAVITY, 0]) : [0, -GRAVITY, 0];
   const scene: SceneDesc = {
-    id: `keystone:${def.id}`, params: { version: def.version }, seed: 0, gravity: [0, -GRAVITY, 0], dt: 1 / 60,
+    id: `keystone:${def.id}`, params: { version: def.version }, seed: 0, gravity, dt: 1 / 60,
     // 'min' lets one slick face make a slip plane: ice on plaster is ice, not
     // the 0.325 the default average gives (docs/game/findings.md, section 3).
     ground: { y: 0, friction: MATERIALS[0].friction, ...(bounce !== null ? { restitution: bounce } : {}) }, sleep: true, frictionCombine: 'min', bodies, inputs: [],
@@ -625,6 +657,7 @@ function nearPairs(boxes: readonly Box[], margin: number): Array<[number, number
 export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Issue[] {
   const { def, meta: m } = c, h = c.frame.unit, issues: Issue[] = [];
   const engine = opts.engine ?? defaultEngineOf(def), max = ENGINE_MAX_BODIES[engine];
+  const pinned = (i: number) => c.scene.bodies[i]!.pinned === true;
   if (m.n === 0) issues.push({ code: 'empty', message: 'level has no bodies' });
   if (m.n > max) issues.push({ code: 'count', message: `${m.n} bodies > ${max} (the ${engine} engine's budget)` });
   else if (engine === 'rapier' && m.n + rackBodies(def.rack.filter(isRackItem), c.arms) + IceBreaker.budget(c) > max) {
@@ -642,6 +675,17 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
   if (fz) issues.push({ code: 'freeze', message: fz });
   for (const message of chargeIssues(c)) issues.push({ code: 'charge', message });
   if (def.rack.includes(PLUNGER) && !(def.charges ?? []).some((ch) => (ch.arm ?? 'plunger') === 'plunger')) issues.push({ code: 'charge', message: 'the rack has a plunger, and the level no charge a plunger arms' });
+  if (def.objective.kind === 'quake' && (m.crowns.length === 0 || m.heritage.length === 0)) issues.push({ code: 'objective', message: 'a quake objective needs a crown to bring down and a heritage body to keep standing' });
+  if (def.rack.includes(QUAKE)) {
+    if (scoringOf(def) !== 'outcome') issues.push({ code: 'objective', message: 'a quake level needs outcome scoring' });
+    if (physicsOf(def).bounce !== null) issues.push({ code: 'objective', message: 'a quake level plays without Bounce: the AVBD restitution pass refuses pinned bodies, and Aftershock levels stand on pins' });
+  } else if (def.quake !== undefined) issues.push({ code: 'rack', message: 'the level sets quake rules, and its rack holds no quake' });
+  for (const i of [...m.crowns, ...m.heritage]) if (pinned(i)) issues.push({ code: 'objective', message: `body ${i} is a ${m.role[i] === ROLE_ID.crown ? 'crown' : 'heritage'} and pinned: it could never come down`, bodies: [i] });
+  if (def.objective.kind === 'fold') {
+    const o = def.objective;
+    if (scoringOf(def) !== 'outcome') issues.push({ code: 'objective', message: 'a fold objective needs outcome scoring (a par level ends at its clear)' });
+    if (!(o.min > 0 && o.min <= 1) || !(o.spillMax >= 0 && o.spillMax < 1)) issues.push({ code: 'objective', message: `a fold objective needs 0 < min <= 1 and 0 <= spillMax < 1: min ${o.min}, spillMax ${o.spillMax}` });
+  }
   if (def.objective.kind === 'bell') {
     const o = def.objective;
     if (m.crowns.length === 0) issues.push({ code: 'objective', message: 'a bell objective needs a bell (a crown) to ring' });
@@ -660,8 +704,7 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
   // boxes (placement.ts obbOverlap), so neighbours on a curve whose AABBs cross are not flagged; upright bodies are as before.
   const bodies = c.scene.bodies, turned = (i: number) => { const q = bodies[i]!.rot; return q[0] !== 0 || q[1] !== 0 || q[2] !== 0; };
   // Pinned bodies are scenery bolted to the world (C8): two may interpenetrate (a ramp dipping into a shelf; contacts
-  // between pins do nothing), they need no support, and as infinite masses they set no mass ratio.
-  const pinned = (i: number) => bodies[i]!.pinned === true;
+  // between pins do nothing), they need no support, and as infinite masses they set no mass ratio (validateLevel's pinned).
   const boxes = Array.from({ length: m.n }, (_, i) => (turned(i) ? obbAabb(obbOfBody(bodies[i]!)) : aabb(m, i)));
   // One pass at the wider margin; the support relation below needs a subset of these pairs.
   const pairs = nearPairs(boxes, 0.1 * h);
@@ -669,6 +712,7 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
     const A = boxes[i]!, B = boxes[j]!;
     const depth = turned(i) || turned(j) ? obbOverlap(obbOfBody(bodies[i]!), obbOfBody(bodies[j]!)) : Math.min(...[0, 1, 2].map((k) => Math.min(A.hi[k]!, B.hi[k]!) - Math.max(A.lo[k]!, B.lo[k]!)));
     if (depth > eps && !(pinned(i) && pinned(j))) issues.push({ code: 'overlap', message: `bodies ${i} and ${j} overlap by ${(depth / h).toFixed(3)} h`, bodies: [i, j] });
+    // A pinned body is an infinite mass to whatever touches it (as the ground is): no ratio to keep small.
     if (pinned(i) || pinned(j)) continue;
     const ratio = Math.max(m.mass[i]! / m.mass[j]!, m.mass[j]! / m.mass[i]!);
     if (ratio > 10) issues.push({ code: 'mass-ratio', message: `bodies ${i} and ${j} touch with mass ratio ${ratio.toFixed(1)} > 10`, bodies: [i, j] });
@@ -699,6 +743,7 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
   };
   for (let i = 0; i < m.n; i++) {
     const A = boxes[i]!;
+    // On the ground, or pinned (bolted where it is: it needs no support).
     if (A.lo[1]! < eps || pinned(i)) continue;
     let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
     for (const j of below[i]!) {
@@ -725,7 +770,8 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
   }
 
   issues.push(...rackIssues(c, engine));
-  if (scoringOf(def) === 'outcome') issues.push(...launcherIssues(c));
+  // Only a launched shot can settle before it lands: a rack of plungers and pulls (Fuse & Fold, Undercut) fires nothing from the ring.
+  if (scoringOf(def) === 'outcome' && def.rack.some((it) => isLaunchItem(it) || itemRef(it)?.kind === 'weapon')) issues.push(...launcherIssues(c));
 
   for (const i of m.crowns) {
     const x = m.home[3 * i]!, y = m.home[3 * i + 1]!, z = m.home[3 * i + 2]!;
@@ -814,7 +860,7 @@ function rackIssues(c: CompiledLevel, engine: LevelEngine): Issue[] {
   for (const item of new Set<string>(def.rack)) {
     const ref = itemRef(item);
     if (!ref) { issues.push({ code: 'rack', message: `rack item ${JSON.stringify(item)} is not one of ${RACK_ITEM_NAMES}` }); continue; }
-    if (ref.kind === 'pull' || ref.kind === 'plunger') continue; // fires nothing: no body to tunnel, weigh or prove a dud
+    if (ref.kind === 'pull' || ref.kind === 'plunger' || ref.kind === 'quake') continue; // fires nothing: no body to tunnel, weigh or prove a dud
     let arm: Arm | null = null;
     if (ref.kind === 'weapon') {
       if (def.weapons && Object.hasOwn(def.weapons, ref.key)) { arm = c.arms[item] ?? null; if (!arm) continue; } // reported above

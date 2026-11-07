@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Vec3 } from '@tb/engine-api';
 import {
-  axisOf, BALL_RADIUS, bellRung, BuildSession, catalog, compileLevel, type Hit, type LevelDef, pieceQuat, RAMP_HALF, RAMP_TILT, rampTo, RL1, RL2, RL3, RUBE_GATE, rubeStars,
+  axisOf, BALL_RADIUS, bellRung, BuildSession, catalog, compileLevel, type Hit, type LevelDef, pieceQuat, RAMP_HALF, RAMP_TILT, rampTo, RL1, RL2, RL3, RUBE_GATE, partsStars,
   Session, validateLevel, yawQuat,
 } from '@tb/keystone';
 
@@ -70,7 +70,7 @@ describe('pieces: tilt and pinned', () => {
     for (const def of RUBE_GATE) for (const engine of ['gpu', 'rapier'] as const) {
       expect([def.id, engine, validateLevel(compileLevel(def), { engine }).filter((i) => !i.warning)]).toEqual([def.id, engine, []]);
     }
-    expect(RUBE_GATE.map((d) => d.id)).toEqual([RL1.id, RL2.id, RL3.id]);
+    expect(RUBE_GATE.map((d) => d.id)).toEqual(['RL1', 'RL2', 'RL3', 'RL4', 'RL5']);
   });
 });
 
@@ -92,7 +92,7 @@ describe('bell', () => {
     const w = (x: number) => ({ idx: Int32Array.from([2]), pos: Float64Array.from([x, h, 0]), rot: Float64Array.from([0, 0, 0, 1]), linVel: new Float64Array(3), angVel: new Float64Array(3) });
     type Obs = Parameters<Session['observe']>[0];
     const red = (step: number, moving: boolean): Obs['red'] => ({
-      step, nAwake: moving ? 1 : 0, maxSpeed: moving ? 1 : 0, maxAngSpeed: 0, pe_mJ: 0, displaced: 0, outOfLot: 0, heightHist: new Uint32Array(8), impacts: new Uint32Array(48),
+      step, nAwake: moving ? 1 : 0, maxSpeed: moving ? 1 : 0, maxAngSpeed: 0, pe_mJ: 0, peHeritage_mJ: 0, displaced: 0, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(8), impacts: new Uint32Array(48),
       nMoving: moving ? 1 : 0, movingBox: new Float64Array(6), ammoSpeed: 0,
     });
     s.fire({ ammo: 'plunger', fuse: [[0, 0]] }, 300);
@@ -154,9 +154,9 @@ describe('the bin: ramp, bumper and ball', () => {
 
 describe('stars', () => {
   it('3 at or under the parts par, 2 within half again, 1 for any clear, 0 uncleared', () => {
-    expect([rubeStars(true, 2, 3), rubeStars(true, 3, 3), rubeStars(true, 5, 3), rubeStars(true, 6, 3), rubeStars(false, 1, 3)]).toEqual([3, 3, 2, 1, 0]);
+    expect([partsStars(true, 2, 3), partsStars(true, 3, 3), partsStars(true, 5, 3), partsStars(true, 6, 3), partsStars(false, 1, 3)]).toEqual([3, 3, 2, 1, 0]);
   });
   it('the parts par is in the level hash: a retuned par is a new level for progress records', () => {
-    expect(compileLevel({ ...RL1, rube: { partsPar: 3 } }).hash).not.toBe(compileLevel(RL1).hash);
+    expect(compileLevel({ ...RL1, build: { ...RL1.build, par: 3 } }).hash).not.toBe(compileLevel(RL1).hash);
   });
 });

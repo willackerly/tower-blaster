@@ -1,18 +1,53 @@
 // HUD and result card. Formatting is pure and tested; the DOM side only
 // writes strings into fixed elements. Level text is authored in this repo,
 // but everything still goes through esc().
-import { castStars, type CompiledLevel, DEFAULT_GOLD, itemRef, type LevelDef, type LevelScore, levelTier, type Objective, type RackItem, scoringOf, TIER_NAMES } from '@tb/keystone';
+import { castStars, type CompiledLevel, DEFAULT_GOLD, isTrial, itemRef, type LevelDef, type LevelScore, levelTier, type Objective, type RackItem, scoringOf, TIER_NAMES, TRIAL_LEVELS } from '@tb/keystone';
 import { PROJECTILE_PRESETS } from '@tb/weapons';
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
+/**
+ * A level's short tag as the player sees it: the series code (B1, L2, U1), or for a trial its number in the trials'
+ * door order, "Trial 7" (PT18: trial ids such as T-S14T are internal; they stay in the URL, ?level=T-S14T). A trial
+ * the list does not hold (a level file's own T- id) shows "Trial".
+ */
+export function levelTag(d: Pick<LevelDef, 'id'>): string {
+  if (!isTrial(d.id)) return d.id;
+  const n = TRIAL_LEVELS.findIndex((t) => t.id.toUpperCase() === d.id.toUpperCase());
+  return n < 0 ? 'Trial' : `Trial ${n + 1}`;
+}
+
+/**
+ * A level's name as the player sees it: its name, less a trial's draft code (trial-levels.ts names the drafts it
+ * keeps "Long Wall (B1b)"; the code is ours, PT18). Display only: the name joins the level's hash, so the
+ * definition keeps it.
+ */
+export function playerName(d: Pick<LevelDef, 'id' | 'name'>): string {
+  return isTrial(d.id) ? d.name.replace(/\s*\([A-Z]\d+[a-z]?\)$/, '') : d.name;
+}
+
+/**
+ * The HUD's title: the level's tag as its door card shows it, then its name: "L2 · Lintel", "B1 · Long Wall",
+ * "Trial 7 · Town" (PT18: the HUD said "W1-2" and "W5-T-S14T" where the door said L2 and the trial).
+ */
+export function hudTitle(d: Pick<LevelDef, 'id' | 'name'>): string {
+  return `${levelTag(d)} · ${playerName(d)}`;
+}
+
 export const AMMO_LABEL: Record<'marble' | 'cannonball' | 'cue' | 'drop', string> = { marble: 'Marble', cannonball: 'Cannonball', cue: 'Cue', drop: 'Anvil' };
 
-/** A rack item's name on its chip: Keystone's ammo as before, a preset's catalogue label, a weapon's key. */
+/**
+ * Player names for weapon keys whose key is not a word a player would use (PT18: the sized grenades' keys read
+ * as typos, "Grenade" and "Grenadel" side by side in one rack). Only the name on screen: the rack item (w-grenadel)
+ * and so every level's hash stay as they are. Keys not listed show as themselves ("Bomb", "Ram").
+ */
+export const WEAPON_LABEL: Readonly<Record<string, string>> = { grenades: 'Small grenade', grenadem: 'Grenade', grenadel: 'Big grenade', grenadexl: 'Huge grenade' };
+
+/** A rack item's name on its chip: Keystone's ammo as before, a preset's catalogue label, a weapon's player name or key. */
 export function itemLabel(item: RackItem): string {
   const r = itemRef(item);
   if (!r) return item;
-  const label = r.kind === 'ammo' ? AMMO_LABEL[r.ammo] : r.kind === 'pull' ? 'Pull' : r.kind === 'plunger' ? 'Plunger' : r.kind === 'preset' ? PROJECTILE_PRESETS[r.preset].label : r.key;
+  const label = r.kind === 'ammo' ? AMMO_LABEL[r.ammo] : r.kind === 'pull' ? 'Pull' : r.kind === 'plunger' ? 'Plunger' : r.kind === 'quake' ? 'Quake' : r.kind === 'preset' ? PROJECTILE_PRESETS[r.preset].label : WEAPON_LABEL[r.key] ?? r.key;
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
@@ -76,6 +111,8 @@ export interface HudState {
   duel?: string;
   /** Outcome levels: the star thresholds on the Down (or Pulled) bar (meterTicks); no bar without any. */
   ticks?: readonly MeterTick[];
+  /** Aftershock: the quake designer's block (quake-panel.ts quakePanelHtml) while the Quake chip is selected, in place of power and height. */
+  quake?: string;
   /** Bullet Time levels (LevelDef.freeze): freezes left of the level's, whether the shot is frozen now, and whether it can be. */
   freezes?: { left: number; total: number; frozen: boolean; can: boolean };
 }
@@ -147,6 +184,8 @@ export function objectiveText(o: Objective): string {
     case 'skyline': return `skyline under ${o.maxH} h`;
     case 'collapse': return `bring ${pct(o.min)} down`;
     case 'hold': return 'keep the crown up';
+    case 'quake': return 'fell the condemned, spare the heritage';
+    case 'fold': return `fold ${pct(o.min)} into its lot, neighbours untouched`;
     case 'bell': return 'ring the bell';
     case 'trial': return 'build it to pass the test';
   }
@@ -167,11 +206,16 @@ export function keepRow(down: number, total: number): string {
   return `<div class="row"><span>${label}</span><span class="keep ${down ? 'bad' : 'ok'}">${state}</span></div>`;
 }
 
-/** Shown on a level made by overrides (LevelDef.custom). */
-export const CUSTOM_NOTE = 'custom: stars not recorded';
+/** Shown on a level made by overrides (LevelDef.custom): the link's settings, or an engine its stars were not cast on. */
+export const CUSTOM_NOTE = 'Custom settings, so no stars are recorded';
 
 /** Outcome levels: the Bank button (key B), shown while a bank is possible. */
 export const BANK_BUTTON = '<button data-act="bank" class="bank"><kbd>B</kbd> Bank</button>';
+/**
+ * Bank before the objective is met (PT18): an outline, not the primary orange, since banking then ends the level
+ * with no star (the playtest's novice was invited to bank at 17% of B1's 40%). It turns solid once the objective is met.
+ */
+export const BANK_QUIET = '<button data-act="bank" class="bank quiet" title="Ends the level now: the objective is not met yet, so no star"><kbd>B</kbd> Bank</button>';
 
 /** What the HUD's action slot offers now: one button, always in the same place (docs/game/phone-hud.md). */
 export type SlotAction = 'freeze' | 'resume' | 'skip' | 'skipping' | 'opener' | 'go' | 'bank' | null;
@@ -219,7 +263,7 @@ export const SKIP_BUTTON = '<button data-act="skip" class="skip" title="Run the 
 const SKIPPING = '<span class="small skipping">skipping to the settle…</span>';
 
 /** The action slot's contents for `act`: its button, Freeze with Skip beside it when both apply, or the skipping note. */
-export function slotHtml(act: SlotAction, s: Pick<HudState, 'canSkip'>): string {
+export function slotHtml(act: SlotAction, s: Pick<HudState, 'canSkip' | 'met'>): string {
   switch (act) {
     case 'resume': return freezeButton(true);
     case 'freeze': return freezeButton(false) + (s.canSkip ? SKIP_BUTTON : '');
@@ -227,7 +271,7 @@ export function slotHtml(act: SlotAction, s: Pick<HudState, 'canSkip'>): string 
     case 'skipping': return SKIPPING;
     case 'opener': return OPENER_BUTTON;
     case 'go': return GO_BUTTON;
-    case 'bank': return BANK_BUTTON;
+    case 'bank': return s.met ? BANK_BUTTON : BANK_QUIET;
     default: return '';
   }
 }
@@ -238,9 +282,12 @@ export function hudHtml(s: HudState, sheet = ''): string {
   const chips = s.chips.map((c) => `<button class="chip${c.selected ? ' on' : ''}${c.left ? '' : ' spent'}" data-act="ammo" data-arg="${c.key}"><kbd>${c.key}</kbd> ${esc(itemLabel(c.ammo))} <b>${c.left}</b>/${c.total}</button>`).join('');
   const heritage = s.heritageTotal ? `<div class="row"><span>Heritage</span><span class="${s.heritageBroken ? 'bad' : 'ok'}">${s.heritageBroken ? `${s.heritageBroken} cracked` : 'intact'}</span></div>` : '';
   const sel = s.chips.find((c) => c.selected)?.ammo;
+  // A rack of one quake: the docked phone HUD drops its chip while the quake panel stands for it (ui.ts).
+  const onlyQuake = s.chips.length === 1 && sel === 'quake' && s.quake ? ' only-quake' : '';
   // The power bar, with minus and plus buttons on a touch screen (keys Q and E).
-  const power = sel === 'drop' || sel === 'pull' ? '' : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
-  const height = sel === 'drop' || sel === 'pull' || s.launch === undefined ? '' : launchRow(s.launch);
+  // A plunger aims at nothing (the timeline sets it): no power, no launcher height. A quake has its own designer instead.
+  const power = sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake' ? (sel === 'quake' ? s.quake ?? '' : '') : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
+  const height = sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake' || s.launch === undefined ? '' : launchRow(s.launch);
   const reach = s.pullRefused ? `<div class="${s.pullRefused === 'tapped' ? 'bad' : 'hint'} small pull-hint">${PULL_HINT}</div>` : s.reachable === false ? '<div class="bad small reach">Out of reach at this power</div>' : '';
   const ctl = `<div class="ctl">${power}${height}</div>`;
   const pace = s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : '';
@@ -249,7 +296,7 @@ export function hudHtml(s: HudState, sheet = ''): string {
     <div class="title">${esc(d.name)}${pace}</div>
     ${s.duel}
     </div><div class="tray">
-    <div class="chips">${chips}</div>
+    <div class="chips${onlyQuake}">${chips}</div>
     ${ctl}<div class="above">${reach}</div>
     </div>`;
   }
@@ -262,12 +309,12 @@ export function hudHtml(s: HudState, sheet = ''): string {
   const fz = s.freezes;
   const freezes = fz ? `<div class="row"><span>Freezes</span><span class="${fz.left ? '' : 'spent'}">${fz.left} / ${fz.total}</span></div>` : '';
   const crowns = d.objective.kind === 'hold' ? keepRow(s.crownsDown, s.crownsTotal)
-    : !outcome || s.crownsTotal ? `<div class="row"><span>Crowns</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
+    : !outcome || s.crownsTotal ? `<div class="row"><span>${d.objective.kind === 'quake' ? 'Condemned down' : 'Crowns'}</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
   const act = slotAction(s);
   const button = slotHtml(act, s);
   const slot = `<div class="row slot-row${act ? '' : ' idle'}"><span class="slot${act ? '' : ' empty'}">${button}</span><span class="small note">${act ? SLOT_NOTE[act] : ''}</span>${touchActs(s.strokes)}</div>`;
   return `<div class="st">
-    <div class="title">W${d.world}-${esc(d.id.replace(/^L/, ''))} · ${esc(d.name)}${fz?.frozen ? ' <span class="pace frozen" title="physics is frozen: a shot fired now spends a freeze">FROZEN</span>' : pace}</div>
+    <div class="title">${esc(hudTitle(d))}${fz?.frozen ? ' <span class="pace frozen" title="physics is frozen: a shot fired now spends a freeze">FROZEN</span>' : pace}</div>
     ${d.custom ? `<div class="small custom">${CUSTOM_NOTE}</div>` : ''}
     ${head}
     ${crowns}
@@ -276,7 +323,7 @@ export function hudHtml(s: HudState, sheet = ''): string {
     ${leverageRow(s.strokes, s.leverage)}
     ${sheet}
     </div><div class="tray">
-    <div class="chips">${chips}</div>
+    <div class="chips${onlyQuake}">${chips}</div>
     ${ctl}<div class="above">${reach}${s.strokes > 0 ? '' : `<div class="tch-hint">${TOUCH_HELP}</div>`}</div>
     ${slot}
     </div>`;
@@ -349,7 +396,7 @@ export function cardActions(score: LevelScore | null, strokes: number, forward: 
 export function tallyHtml(level: LevelDef, score: LevelScore | null, over: string | null = null): string {
   if (over) return `<b>${esc(over)}</b> <span class="small">tallying…</span>`;
   const what = score ? `<b>${esc(score.stamp)}</b> <span class="stars">${starsText(score.stars)}</span>` : `<b>${scoringOf(level) === 'outcome' ? 'Round over' : 'All crowns down'}</b>`;
-  return `<span class="name">${esc(level.name)}</span> ${what} <span class="small">tallying…</span>`;
+  return `<span class="name">${esc(playerName(level))}</span> ${what} <span class="small">tallying…</span>`;
 }
 
 /**
@@ -367,7 +414,7 @@ export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: n
   const actions = cardActions(score, strokes, forward, canSave, canUndo);
   if (!score) {
     return `<div class="c1">
-    <div class="name">${esc(level.name)}</div>
+    <div class="name">${esc(playerName(level))}</div>
     <div class="sub">${shotsText}</div>
     <div class="line tally"><span>All crowns down</span><span>tallying…</span></div>
     </div><div class="c2">${actions}</div>`;
@@ -379,7 +426,7 @@ export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: n
   const fz = score.freezes ? ` · freezes used ${score.freezes.used}/${score.freezes.total}` : '';
   const lost = score.heritageStarsLost ? `<div class="lost bad" style="animation-delay:${after + 0.7}s">Heritage cracked: ${score.heritageStarsLost} star${score.heritageStarsLost === 1 ? '' : 's'} lost</div>` : '';
   return `<div class="c1">
-    <div class="name">${esc(level.name)}</div>
+    <div class="name">${esc(playerName(level))}</div>
     ${level.custom ? `<div class="sub custom">${CUSTOM_NOTE}</div>` : ''}
     <div class="sub">${shotsText}${'outcome' in score ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''} · leverage ${fmtLeverage(score.leverage)}${tierText ? ` (${tierText})` : ''}${fz}</div>
     ${lines}

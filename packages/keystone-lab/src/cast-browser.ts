@@ -130,14 +130,14 @@ export async function openBrowserCastPlayer(opts: BrowserCastOptions = {}): Prom
     adapter: info.adapter, software: info.software, engine: info.engine, playMs, reopens,
     // The game aims for the GPU engine's one substep per step; Rapier substeps once per iteration (4).
     substeps: info.engine === 'rapier' ? 4 : 1,
-    async play(level, lines) {
+    async play(level, lines, nudges) {
       const out: CastPlay[] = [];
       for (let k = 0; k < lines.length; k += batch) {
-        const text = lines.slice(k, k + batch).map((l) => writeShots(l));
-        // Shot text holds integers only (readShots checks each shot), so a line crosses to the page exactly.
+        const text = lines.slice(k, k + batch).map((l) => writeShots(l)), nud = nudges ? nudges.slice(k, k + batch) : null;
+        // Shot text holds integers only (readShots checks each shot), so a line crosses to the page exactly; so do the nudge seeds.
         for (const t of text) readShots(t);
         // Each play starts from the level on a fresh engine, so a batch replayed on a reopened page returns the same plays.
-        const got = await onPage(`plays ${k + 1}-${k + text.length}`, (p) => p.evaluate(([lv, ls, max]) => window.__cast.play(lv, ls, max ?? undefined), [level, text, opts.maxSteps ?? null] as const));
+        const got = await onPage(`plays ${k + 1}-${k + text.length}`, (p) => p.evaluate(([lv, ls, max, nd]) => window.__cast.play(lv, ls, max ?? undefined, nd ?? undefined), [level, text, opts.maxSteps ?? null, nud] as const));
         for (const { ms, ...p } of got) { playMs.push(ms); out.push(p); }
       }
       return out;

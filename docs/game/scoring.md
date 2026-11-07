@@ -65,6 +65,13 @@ no tier banner: there is no badge there to measure against.
   star's threshold), shown on the card as "Heritage cracked: 1 star lost".
 - B2 stars by points (`metric: 'score'`): flooring changes no star, since its thresholds are
   positive.
+- **Aftershock's quake levels** (M7, docs/game/aftershock.md) have their own tally and metric. The
+  tally (`outcomeTally`, `quake` facts) is Objective, Condemned (500 per crown down) and Heritage, with
+  no Collapse or Leverage line, since both would pay for felling the protected towers too. Stars are
+  on `metric: 'energy'`, the joules fired (`energyFired`, the very sum `roundLeverage` divides by),
+  where lower is better (`lowerIsBetter`, shared with skyline by `atLeast`, beat-the-bot and
+  `checkStars`). A quake's energy is computed from the shot, so the star lines read the same on every
+  engine. Tiers and the gold badge do not apply: quake levels have no `lGold`.
 
 ## Duels
 
@@ -80,14 +87,16 @@ On a level with a freeze budget (`LevelDef.freeze`), par for a round is `par + f
 cut shot): a frozen cut-in that clears keeps par, and the card says "freezes used 1/2"
 (`LevelScore.freezes`). Levels without a budget are unchanged: a rapid-fire cut is a stroke.
 
-## Rube Lab parts par (M10)
+## Parts par (Rube Lab, M10; any build level)
 
-A Rube Lab level (`LevelDef.rube`, docs/game/rube-lab.md) has one plunger and no strokes to count, so
+A level whose build block names a parts par (`BuildDef.par`: every Rube Lab level, docs/game/rube-lab.md, and
+any build level that scores on what you place, such as Wavefront's Lay levels) has no strokes worth counting, so
 `levelScore` takes the build's cost (`placedCost`, passed by the session) and scores the parts instead:
-stars are `rubeStars(cleared, spent, partsPar)` (3 at or under the parts par, 2 within `ceil(1.5 par)`,
+stars are `partsStars(cleared, spent, par)` (3 at or under the parts par, 2 within `ceil(1.5 par)`,
 1 for any clear) less one for any heritage broken (never under one, `heritageStarsLost` as on par
-levels); the stamp is PARTS PAR or +N PARTS; there is no gold; the card's sub line reads
-"parts N / par P" in place of strokes (`LevelScore.parts`). The parts par is in the level hash, so
+levels); the stamp is PARTS PAR or +N PARTS (`partsStamp`); there is no gold; the card's sub line reads
+"parts N / par P" in place of strokes (`LevelScore.parts`). `LevelDef.rube` is only Rube Lab's marker (its
+plunger is the Go button); the scoring keys on `build.par` alone. The parts par is in the level hash, so
 retuning it starts a new progress record instead of keeping stars earned under the old par.
 
 ## Mason's Trial robustness (M8)
