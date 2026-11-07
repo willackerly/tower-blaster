@@ -21,6 +21,8 @@ export interface BrowserCastOptions {
   engine?: 'gpu' | 'rapier';
   /** Engine step cap per play (castPlay's maxSteps). */
   maxSteps?: number;
+  /** A Chorus level: play world k alone (the cast page's chorusOnly). */
+  chorusOnly?: number;
   /** Lines per page.evaluate call: smaller batches report progress sooner (default 4). */
   batch?: number;
   /** Times a batch is replayed on a reopened page after the page is lost under it (default 2). */
@@ -135,7 +137,7 @@ export async function openBrowserCastPlayer(opts: BrowserCastOptions = {}): Prom
         // Shot text holds integers only (readShots checks each shot), so a line crosses to the page exactly.
         for (const t of text) readShots(t);
         // Each play starts from the level on a fresh engine, so a batch replayed on a reopened page returns the same plays.
-        const got = await onPage(`plays ${k + 1}-${k + text.length}`, (p) => p.evaluate(([lv, ls, max]) => window.__cast.play(lv, ls, max ?? undefined), [level, text, opts.maxSteps ?? null] as const));
+        const got = await onPage(`plays ${k + 1}-${k + text.length}`, (p) => p.evaluate(([lv, ls, max, only]) => window.__cast.play(lv, ls, max ?? undefined, only ?? undefined), [level, text, opts.maxSteps ?? null, opts.chorusOnly ?? null] as const));
         for (const { ms, ...p } of got) { playMs.push(ms); out.push(p); }
       }
       return out;

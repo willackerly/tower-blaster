@@ -89,3 +89,14 @@ stars are `rubeStars(cleared, spent, partsPar)` (3 at or under the parts par, 2 
 levels); the stamp is PARTS PAR or +N PARTS; there is no gold; the card's sub line reads
 "parts N / par P" in place of strokes (`LevelScore.parts`). The parts par is in the level hash, so
 retuning it starts a new progress record instead of keeping stars earned under the old par.
+
+## Chorus worlds cleared (M9)
+
+A Chorus level (`LevelDef.chorus`, docs/game/chorus.md) fires its one shot into K jittered worlds (64 by
+default), and the Driver replaces the round's levelEnd score with `chorusScore`: one line, "Worlds cleared
+(c of K)", worth `floor(3000 c / K)` through `floorTotal`; stars from fixed thresholds on the count (32, 48
+and 60 of 64, or the level's `chorus.stars`, which are in the level hash with `chorus.need`); the stamp
+"c/K CLEAR"; cleared means at least one star. It scores the fraction of worlds, never world 0 alone. A
+world with cracked heritage does not clear, so heritage has no red line and takes no stars. World 0's
+leverage is kept for the HUD only: `gold` is false and the card shows no tier. The card reads the generic
+`LevelScore.worlds = { cleared, of, thresholds }` ("c of K worlds cleared"), which Mason's Trial shares.

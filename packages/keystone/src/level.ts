@@ -12,6 +12,7 @@ import { type ScenarioPart, scenarioBodies, scenarioKey } from './scenario-part.
 import { ammoBody, type LauncherDef, launcherPos, type Shot, type ShotFrame } from './shots.ts';
 import { checkIce, type IceBlock, IceBreaker, iceOf } from './ice.ts';
 import type { BuildDef } from './build.ts';
+import { type ChorusDef, chorusIssues } from './chorus.ts';
 import { obbAabb, obbOfBody, obbOverlap, pieceQuat } from './placement.ts';
 import { runPoses } from './stroke.ts';
 
@@ -205,6 +206,11 @@ export interface LevelDef {
    * apply ("custom: stars not recorded"). Not part of the hash: the overrides already are.
    */
   custom?: boolean;
+  /**
+   * Chorus (M9, chorus.ts, docs/game/chorus.md): the level's one shot is fired into this many jittered copies of it
+   * at once, and the score is how many of them clear. Part of the hash (worlds, jitter, seed and stars all are).
+   */
+  chorus?: ChorusDef;
 }
 
 /** A charge on the structure (LevelDef.charges; arsenal.ts levelCharges resolves it). */
@@ -526,7 +532,7 @@ function bodiesDigest(bodies: readonly BodyDesc[]): string {
 }
 
 export interface Issue {
-  code: 'count' | 'capacity' | 'launcher' | 'overlap' | 'unsupported' | 'mass-ratio' | 'ammo-ratio' | 'dud' | 'tunnelling' | 'crown-start' | 'rack' | 'weapon' | 'empty' | 'watched' | 'flat' | 'objective' | 'freeze' | 'charge';
+  code: 'count' | 'capacity' | 'launcher' | 'overlap' | 'unsupported' | 'mass-ratio' | 'ammo-ratio' | 'dud' | 'tunnelling' | 'crown-start' | 'rack' | 'weapon' | 'empty' | 'watched' | 'flat' | 'objective' | 'freeze' | 'charge' | 'chorus';
   message: string;
   bodies?: number[];
   /** Legal but worth knowing (a dud item): the level still plays as authored. */
@@ -616,6 +622,7 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
   if (size || def.par < 1 || def.par > def.rack.length) issues.push({ code: 'rack', message: `rack of ${def.rack.length} with par ${def.par}: need 1 <= par <= rack, at most ${MAX_RACK} fired items and ${MAX_PULLS} pulls${size ? ` (${size})` : ''}` });
   const fz = def.freeze === undefined ? null : freezeProblem(def.freeze);
   if (fz) issues.push({ code: 'freeze', message: fz });
+  issues.push(...chorusIssues(def, m.material));
   for (const message of chargeIssues(c)) issues.push({ code: 'charge', message });
   if (def.rack.includes(PLUNGER) && !(def.charges ?? []).some((ch) => (ch.arm ?? 'plunger') === 'plunger')) issues.push({ code: 'charge', message: 'the rack has a plunger, and the level no charge a plunger arms' });
   if (def.objective.kind === 'bell') {

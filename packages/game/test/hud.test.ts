@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { B1, B2, compileLevel, levelGoldLine, L1, L2, L3, L4, L5, levelScore, outcomeScore, RL1, type ShotOutcome, U3 } from '@tb/keystone';
+import { B1, B2, type ChorusJudgement, chorusScore, compileLevel, levelGoldLine, L1, L2, L3, L4, L5, levelScore, outcomeScore, RL1, type ShotOutcome, U3 } from '@tb/keystone';
 import { HOW_TO_PLAY } from '../src/door.ts';
 import { GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, TOUCH_HELP } from '../src/ui.ts';
 import { BANK_BUTTON, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs } from '../src/hud.ts';
@@ -257,6 +257,16 @@ describe('scores and leverage add up (PT9, PT16)', () => {
     const html = resultHtml(B1, score, 2, false);
     expect(html).toContain('leverage ×0.13</div>');
     expect(html).not.toMatch(/Brute|Clean/);
+  });
+  it('a Chorus card shows the worlds cleared, with no tier and no gold badge (M9, chorus.ts chorusScore)', () => {
+    const def = { ...L1, rack: ['cannonball' as const], chorus: { worlds: 64 } }; // a par level: the badge would show but for the worlds
+    const j: ChorusJudgement = { step: 600, worlds: 64, cleared: Array.from({ length: 64 }, (_, k) => k < 49), heritage: Array(64).fill(0), crownsDown: Array(64).fill(3), moved: Array(64).fill(0.5), crowns: 3, need: 3, clears: 49, leaks: 0 };
+    const score = chorusScore(compileLevel(def), j, { leverage: 2.4 });
+    expect(score.stars).toBe(2);
+    const html = resultHtml(def, score, 1, false);
+    expect(html).toContain('49 of 64 worlds cleared');
+    expect(html).not.toMatch(/Brute|Clean|Elegant|Keystone|class="gold/);
+    expect(goldHtml(def, score)).toBe('');
   });
   it('heritage is its own red line with the stars it cost, and the total never shows negative', () => {
     const score = levelScore(L3, [shot({ dPE_mJ: 1e5, heritageNew: 9 }), shot({ dPE_mJ: 1e5 })], true, 40);

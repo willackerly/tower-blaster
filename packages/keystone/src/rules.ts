@@ -417,6 +417,12 @@ export interface LevelScore {
    * empty, total and stars 0, the stamp DUEL; the duel's own result (Duel.result) is the outcome.
    */
   refereed?: true;
+  /**
+   * A round scored on many jittered worlds (Chorus, chorus.ts chorusScore; Mason's Trial's judge): worlds cleared
+   * `of` the worlds, and the counts its one, two and three stars are at. The card shows "c of K" and neither a gold
+   * badge nor a leverage tier (the leverage is world 0's, shown as information). Mode extras live in their own fields.
+   */
+  worlds?: { cleared: number; of: number; thresholds: readonly [number, number, number] };
 }
 
 /** A score's total: its lines' sum, floored at 0 (LevelScore.lines). */

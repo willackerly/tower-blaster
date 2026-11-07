@@ -306,7 +306,7 @@ export function tierLabel(L: number, level: LevelDef): string {
  * still to reach. Leverage gates no star; this is what it earns. Nothing on outcome levels or before a clear.
  */
 export function goldHtml(level: LevelDef, score: LevelScore, delay = 0): string {
-  if (scoringOf(level) !== 'par' || score.stars === 0) return '';
+  if (scoringOf(level) !== 'par' || score.stars === 0 || score.worlds) return '';
   const line = fmtLeverage(level.lGold ?? DEFAULT_GOLD);
   return score.gold
     ? `<div class="gold got" style="animation-delay:${delay}s">◆ Gold leverage (${line} or more)</div>`
@@ -374,13 +374,15 @@ export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: n
   // A line that costs points (heritage, footprint) is red end to end: its own red line, never netted into another.
   const lines = score.lines.map((l, i) => `<div class="line${l.value < 0 ? ' bad' : ''}" style="animation-delay:${0.15 + 0.22 * i}s"><span>${esc(l.label)}</span><span class="${l.value < 0 ? 'bad' : ''}">${fmtPoints(l.value)}</span></div>`).join('');
   const after = 0.15 + 0.22 * score.lines.length;
-  const tierText = tierLabel(score.leverage, level);
+  // Scored on many worlds (Chorus): the count is the result; world 0's leverage is information, with no tier.
+  const tierText = score.worlds ? '' : tierLabel(score.leverage, level);
+  const worlds = score.worlds ? ` · ${score.worlds.cleared} of ${score.worlds.of} worlds cleared` : '';
   const fz = score.freezes ? ` · freezes used ${score.freezes.used}/${score.freezes.total}` : '';
   const lost = score.heritageStarsLost ? `<div class="lost bad" style="animation-delay:${after + 0.7}s">Heritage cracked: ${score.heritageStarsLost} star${score.heritageStarsLost === 1 ? '' : 's'} lost</div>` : '';
   return `<div class="c1">
     <div class="name">${esc(level.name)}</div>
     ${level.custom ? `<div class="sub custom">${CUSTOM_NOTE}</div>` : ''}
-    <div class="sub">${shotsText}${'outcome' in score ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''} · leverage ${fmtLeverage(score.leverage)}${tierText ? ` (${tierText})` : ''}${fz}</div>
+    <div class="sub">${shotsText}${'outcome' in score ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''}${worlds} · leverage ${fmtLeverage(score.leverage)}${tierText ? ` (${tierText})` : ''}${fz}</div>
     ${lines}
     <div class="line total" style="animation-delay:${after}s" title="The lines' sum, never below 0"><span>Total</span><span>${fmtPoints(score.total)}</span></div>
     </div><div class="c2">
