@@ -7,7 +7,7 @@ import { BAND_HALF, FX_BAND, FX_EMISSIVE_MAX, FX_MATTE, FX_PAINT, FX_WGSL, XRAY_
 import { BEVEL_WGSL, OKLAB_WGSL, WARM_AXIS } from './look.ts';
 import { MARKS_WGSL } from './marks.ts';
 import { ASLEEP_BLUE, LOOK_ASLEEP } from './looks.ts';
-import { COAT_GILT, COAT_WGSL } from './coats.ts';
+import { COAT_GILT, COAT_PAINT, COAT_WGSL } from './coats.ts';
 import { SPARK_COMMON } from './sparks.ts';
 import { LIGHT_META, LIGHT_PACKED, LIGHT_VEC4, MAX_BALLS, TRAIL } from './lights.ts';
 import { AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL } from './ao.ts';
@@ -1311,9 +1311,11 @@ fn heatGlow(slot: u32, base: vec3f, edge: f32) -> vec3f {
   let dndy = dpdy(n);
   let isBall = material(v.look) == 1u;
   let w = fx[v.slot];
-  // Painted (FX_PAINT): the tint is the colour, and a ball's glow takes it too.
-  let paint = (w.y & ${FX_PAINT}u) != 0u;
-  let own = select(select(albedo(v.look), fr.ball, isBall), vec3f(1.0), paint);
+  // Painted (FX_PAINT): the tint is the colour, and a ball's glow takes it too. A coat (coats.ts) is the sphere's
+  // own colour as on a box (a bell, a crown; a ball the player placed): gilt, glaze, or paint (the tint is the colour).
+  let coat = coatOf(w.y);
+  let paint = (w.y & ${FX_PAINT}u) != 0u || coat == ${COAT_PAINT}u;
+  let own = select(select(select(albedo(v.look), fr.ball, isBall), vec3f(1.0), paint), coatAlbedo(coat), coat != 0u);
   // Band (FX_BAND): a white stripe round the body-space equator, antialiased over a pixel, turning with the ball.
   // (The derivative is taken in uniform control flow, before the flag picks it.)
   let bandY = abs(normalize(v.local).y);
@@ -1327,8 +1329,11 @@ fn heatGlow(slot: u32, base: vec3f, edge: f32) -> vec3f {
   let ao = aoBody(v, n);
   var c = vec3f(0.0);
   if (steel < 1.0) { c = shade(base, v.rel, n, aaAlpha(select(0.04, 0.3, matte), n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.5, 0.0, matte), ao); }
-  if (steel > 0.0) { c = mix(c, shadeSteel(v.rel, n, aaAlpha(fr.ballSteel.y, n, dndx, dndy), ao), steel); }` : `var c = shade(base, v.rel, n, aaAlpha(select(0.04, 0.3, matte), n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.5, 0.0, matte), aoBody(v, n));`}
-  c += base * fxGlow(w, fr.time);
+  if (steel > 0.0) { c = mix(c, shadeSteel(v.rel, n, aaAlpha(fr.ballSteel.y, n, dndx, dndy), ao), steel); }
+  // Gilded (a bell): gold leaf as on a gilded box, without the stone's wear.
+  if (coat == ${COAT_GILT}u) { c = mix(c, shadeMetal(v.rel, n, aaAlpha(${GILT_ROUGH * GILT_ROUGH}, n, dndx, dndy), ao, vec3f(${GILT_F0.join(', ')}) * fxTint(w.x)), ${GILT_COVER}); }` : `var c = shade(base, v.rel, n, aaAlpha(select(0.04, 0.3, matte), n, dndx, dndy), aaAlpha(0.0049, n, dndx, dndy), select(0.5, 0.0, matte), aoBody(v, n));`}
+  // A gilded sphere's steady glow is kept low as on a box (GILT_GLOW); a flash (a bell rung) glows in full.
+  c += base * fxGlow(w, fr.time) * select(1.0, ${GILT_GLOW}, coat == ${COAT_GILT}u && bitcast<f32>(w.w) <= 0.0);
   let NoV = max(dot(n, normalize(-v.rel)), 0.0);
   // The look's ball glow takes the paint, not the band: a glowing white band would clip flat in a look with a strong glow (candy).
   c += select(vec3f(0.0), select(fr.ball, own * fxTint(w.x), paint) * (1.0 - band) * fr.ballEmissive * (0.35 + 0.65 * NoV), isBall && !matte);

@@ -306,10 +306,13 @@ export function hudHtml(s: HudState, sheet = ''): string {
     ${s.ticks?.length ? meterHtml(d.objective.kind === 'hold' ? s.pulled ?? 0 : s.collapse ?? 0, s.ticks, d.objective.kind === 'hold' ? 'pulled' : 'down') : ''}
     <div class="row obj"><span>Objective</span><span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span></div>`
     : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>`;
+  // A bell level (Rube Lab) says what it wants on its par row's level too (PT26: nothing said "ring the bell").
+  const rung = s.crownsTotal > 0 && s.crownsDown >= s.crownsTotal;
+  const bellRow = !outcome && d.objective.kind === 'bell' ? `<div class="row obj"><span>Objective</span><span class="${rung ? 'ok' : ''}">${esc(objectiveText(d.objective))}${rung ? ' ✓' : ''}</span></div>` : '';
   const fz = s.freezes;
   const freezes = fz ? `<div class="row"><span>Freezes</span><span class="${fz.left ? '' : 'spent'}">${fz.left} / ${fz.total}</span></div>` : '';
   const crowns = d.objective.kind === 'hold' ? keepRow(s.crownsDown, s.crownsTotal)
-    : !outcome || s.crownsTotal ? `<div class="row"><span>${d.objective.kind === 'quake' ? 'Condemned down' : 'Crowns'}</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
+    : !outcome || s.crownsTotal ? `<div class="row"><span>${d.objective.kind === 'quake' ? 'Condemned down' : d.objective.kind === 'bell' ? 'Bells rung' : 'Crowns'}</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
   const act = slotAction(s);
   const button = slotHtml(act, s);
   const slot = `<div class="row slot-row${act ? '' : ' idle'}"><span class="slot${act ? '' : ' empty'}">${button}</span><span class="small note">${act ? SLOT_NOTE[act] : ''}</span>${touchActs(s.strokes)}</div>`;
@@ -317,6 +320,7 @@ export function hudHtml(s: HudState, sheet = ''): string {
     <div class="title">${esc(hudTitle(d))}${fz?.frozen ? ' <span class="pace frozen" title="physics is frozen: a shot fired now spends a freeze">FROZEN</span>' : pace}</div>
     ${d.custom ? `<div class="small custom">${CUSTOM_NOTE}</div>` : ''}
     ${head}
+    ${bellRow}
     ${crowns}
     ${heritage}
     ${freezes}
