@@ -111,7 +111,7 @@ export interface HudState {
   duel?: string;
   /** Outcome levels: the star thresholds on the Down (or Pulled) bar (meterTicks); no bar without any. */
   ticks?: readonly MeterTick[];
-  /** Aftershock: the quake designer's block (quake-panel.ts quakePanelHtml) while the Quake chip is selected, in place of power and height. */
+  /** Aftershock: the quake designer's block (quake-panel.ts quakePanelHtml) while the Quake chip is selected, and the running quake's (quakeRunHtml) once it is fired, in place of power and height. */
   quake?: string;
   /** Bullet Time levels (LevelDef.freeze): freezes left of the level's, whether the shot is frozen now, and whether it can be. */
   freezes?: { left: number; total: number; frozen: boolean; can: boolean };
@@ -300,8 +300,10 @@ export function hudHtml(s: HudState, sheet = ''): string {
   const onlyQuake = s.chips.length === 1 && sel === 'quake' && s.quake ? ' only-quake' : '';
   // The power bar, with minus and plus buttons on a touch screen (keys Q and E).
   // A plunger aims at nothing (the timeline sets it): no power, no launcher height. A quake has its own designer instead.
-  const power = sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake' ? (sel === 'quake' ? s.quake ?? '' : '') : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
-  const height = sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake' || s.launch === undefined ? '' : launchRow(s.launch);
+  // The quake panel stands while the quake is set and while it runs (PT25: the rack is empty then, nothing selected).
+  const quakeUp = s.quake !== undefined && (sel === 'quake' || sel === undefined);
+  const power = quakeUp ? s.quake! : sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake' ? '' : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
+  const height = quakeUp || sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake' || s.launch === undefined ? '' : launchRow(s.launch);
   const reach = s.pullRefused ? `<div class="${s.pullRefused === 'tapped' ? 'bad' : 'hint'} small pull-hint">${d.cut && s.phase !== 'running' ? CUT_HINT : PULL_HINT}</div>` : s.reachable === false ? '<div class="bad small reach">Out of reach at this power</div>' : '';
   const ctl = `<div class="ctl">${power}${height}</div>`;
   const pace = s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : '';

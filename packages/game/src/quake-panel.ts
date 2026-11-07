@@ -89,10 +89,11 @@ export const axisOnScreen = (axisDeg: number, yaw: number): number => (axisDeg *
 const f1 = (x: number) => x.toFixed(1);
 
 /** The seismograph strip: a polyline of the side load, scaled to the dial's top strength. */
-function stripSvg(trace: readonly number[], top: number): string {
+function stripSvg(trace: readonly number[], top: number, playhead?: number): string {
   const w = 180, h = 40, mid = h / 2, s = (mid - 2) / Math.max(top, 1e-9);
   const pts = trace.map((v, i) => `${f1((i / Math.max(1, trace.length - 1)) * w)},${f1(mid - v * s)}`).join(' ');
-  return `<svg class="seismo" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-label="seismograph"><line x1="0" y1="${mid}" x2="${w}" y2="${mid}" class="axis"/><polyline points="${pts}"/></svg>`;
+  const head = playhead === undefined ? '' : `<line class="head" x1="${f1(playhead * w)}" y1="0" x2="${f1(playhead * w)}" y2="${h}"/>`;
+  return `<svg class="seismo" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-label="seismograph"><line x1="0" y1="${mid}" x2="${w}" y2="${mid}" class="axis"/><polyline points="${pts}"/>${head}</svg>`;
 }
 
 /** The compass: a double-headed arrow along the axis as the camera sees it. */
@@ -134,6 +135,21 @@ function fixedPanelHtml(c: CompiledLevel, d: QuakeDial, yaw: number, trace: read
   const start = `<button data-act="quake" class="quake-go"${canStart ? '' : ' disabled'}><kbd>Enter</kbd> Start<span class="qlong"> the quake</span></button>`;
   return `<div class="quake-panel fixed"><div class="qdials">${row('peak')}${row('hz')}${row('sec')}${row('axis', compassSvg(axisOnScreen(d.axis, yaw)))}</div>
     <div class="qfoot">${stripSvg(trace, d.peak / 100)}${braced}${start}</div><div class="small qnote hint">the level's quake: it is coming, brace for it</div></div>`;
+}
+
+/**
+ * The panel while the quake runs and after it (PT25): the quake fired, read out as on a retrofit's panel, its
+ * seismograph with a playhead at `at` (0 at the fire, 1 at the quake's end) and how long it has left, then
+ * "settling" until the result. It stands where the designer stood, so the tray does not change to power and height
+ * mid-quake, and the player watches the waveform the ground is moving to.
+ */
+export function quakeRunHtml(c: CompiledLevel, d: QuakeDial, yaw: number, trace: readonly number[], at: number): string {
+  const text = dialText(d), r = quakeRulesOf(c.def), top = r.fixed ? d.peak / 100 : r.peakMax / 100;
+  const row = (f: DialField, extra = '') => `<div class="row"><span>${LABEL[f]}</span><span class="power"><b class="qv" data-q="${f}">${text[f]}</b>${extra}</span></div>`;
+  const t = Math.max(0, Math.min(1, at)), left = (1 - t) * (d.sec / 10);
+  const status = t < 1 ? `<span class="qe qrun"><b>${left.toFixed(1)} s</b> left</span>` : '<span class="qe qrun">settling</span>';
+  return `<div class="quake-panel running"><div class="qdials">${row('peak')}${row('hz')}${row('sec')}${row('axis', compassSvg(axisOnScreen(d.axis, yaw)))}</div>
+    <div class="qfoot">${stripSvg(trace, top, t)}${status}</div></div>`;
 }
 
 /** Joules for the meter: "209 J", "14.3 kJ". */

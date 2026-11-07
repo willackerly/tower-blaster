@@ -7,9 +7,11 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
-import { armRefusal, type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, RUBE_GO, runSession, selectFootprints, selectGroups, type Shot, isIcePiece, QUAKE, snapshotHash, TIER_NAMES } from '@tb/keystone';
-import { DIAL_KEYS, type DialField, dialShot, dialStart, dialStep, type QuakeDial, quakePanelHtml, seismogram } from './quake-panel.ts';
+import { armRefusal, type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, RUBE_GO, runSession, selectFootprints, selectGroups, type Shot, isIcePiece, QUAKE, type QuakeShot, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { DIAL_KEYS, type DialField, dialShot, dialStart, dialStep, type QuakeDial, quakePanelHtml, quakeRunHtml, seismogram } from './quake-panel.ts';
+import { groundAt, type GroundMotion, groundMotion } from './quake-ground.ts';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
+import { multiply } from '@tb/render/math';
 import type { EffectStats, FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import type { HostStats } from '@tb/audio';
 import type { WeaponTier } from '@tb/weapons';
@@ -218,6 +220,8 @@ export interface GameHandle {
   pixelsOf(body: number): Promise<{ width: number; height: number; at: number[] }>;
   /** Tests: the last pull's slide as last drawn (pull-anim.ts): steps since the pull, the drawn centre and scale; null when none is drawn. */
   pullDrawn: { body: number; k: number; pos: [number, number, number]; scale: number } | null;
+  /** Where the last frame drew the ground (PT25, quake-ground.ts): its displacement along x and z, metres; 0 without a quake. */
+  ground: [number, number];
   /** Bullet Time's frozen look as last drawn (frozen-look.ts): the grade's amount, 0 none to 1 full, eased per frame. */
   frozenGrade: number;
   /**
@@ -334,7 +338,7 @@ export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, hold: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0, impact: false, xray: false }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, card: { place: 'center', endedMs: null, shownMs: null }, openingHud: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, skip: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, impact: null, select: () => false, dial: () => null, dialStep: () => null, startQuake: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, sightlines: async () => null, coverage: async () => 0, pixelsOf: async () => ({ width: 0, height: 0, at: [] }), pullDrawn: null, frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], refreshMarks: () => {},
+    fire: () => false, bank: () => false, skip: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, impact: null, select: () => false, dial: () => null, dialStep: () => null, startQuake: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, sightlines: async () => null, coverage: async () => 0, pixelsOf: async () => ({ width: 0, height: 0, at: [] }), pullDrawn: null, ground: [0, 0], frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], refreshMarks: () => {},
     state: none, asleep: () => ({ asleep: 0, of: 0 }), line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null, handoff: false, scoreFloat: '',
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
     ice: () => ({ count: 0, cracks: [] }),
@@ -661,6 +665,19 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   // The quake designer's dial (levels with a quake in the rack), kept over Retry and Undo so the player can iterate,
   // and its seismogram, recomputed only when the dial moves.
   let dial: QuakeDial | null = null, traceFor = '', trace: number[] = [];
+  /** The quake fired this attempt (PT25): its fire step, the ground's motion and its seismogram, for the picture and the running panel. */
+  let quakeRun: { shot: QuakeShot; step: number; motion: GroundMotion; trace: number[] } | null = null;
+  /** The engine step of the snapshot last given to the renderer (the ground's motion is drawn at it). */
+  let uploadedStep = 0;
+  /** The quake among the attempt's shots (one at most: a rack holds one), as quakeRun. */
+  const quakeRunOf = (): typeof quakeRun => {
+    const i = driver.session.inputs.find((x) => x.shot.ammo === 'quake');
+    if (!i) return null;
+    const shot = i.shot as QuakeShot;
+    return { shot, step: i.step, motion: groundMotion(c, shot), trace: seismogram(c, shot) };
+  };
+  /** Steps since the quake went in at the drawn frame (between the last two snapshots by alpha); NaN without one. */
+  const quakeAt = (alpha: number) => (quakeRun ? uploadedStep - 1 + alpha - quakeRun.step : NaN);
   /**
    * The launcher height (1/4 h) and what it was set for: the level's hash and the launch mode. A new level
    * or mode starts again at launchHeight; a retry or an undo keeps the player's height (keys W and S).
@@ -979,6 +996,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { ...roles.heritageKept, tint: ownTint(c.meta.heritage[k]!) }); });
     // No spark, heat, flash, blast or lit fuse of the undone shot carries over (PT2); the kept shots' fuses are lit again below.
     renderer.resetEffects();
+    quakeRun = quakeRunOf();
     fading = [];
     firedLooks = [...mark.looks];
     for (let i = c.meta.n; i < descs.length; i++) paintFired(i, firedLooks[i - c.meta.n] ?? null);
@@ -1218,6 +1236,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // drawn in the effect style the feel asks for; the kept shots' fuses are lit again below.
     renderer.setEffectStyle(feel.fx);
     renderer.resetEffects();
+    quakeRun = quakeRunOf();
     fading = [];
     // After an undo the kept shots' bodies are back in their slots: drawn as they were (bombs, painted balls). A fresh attempt starts with none.
     if (line) {
@@ -1303,6 +1322,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
    * over, the slot's own tint and full scale back (it is a tombstone, drawn by no pass, until an undo restores it).
    */
   function uploadSnapshot(d: Driver) {
+    uploadedStep = d.engine.stepIndex;
     const a = pullAnim, k = a ? d.engine.stepIndex - pullStep : 0;
     if (!a || k > PULL_SLIDE_STEPS + 1) { source.update(d.snapshot, descs); handle.pullDrawn = null; return; }
     const p = withPulled(d.snapshot, a, k, () => source.update(d.snapshot, descs));
@@ -1686,6 +1706,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // The world as this shot goes in, for undo (before the fire: the shot is not in it yet).
     takeMark();
     const fb = driver.fire(shot);
+    if (shot.ammo === 'quake') quakeRun = quakeRunOf();
     if (duel) { duel.fired(shot); turnStart = performance.now(); syncDuel(); swing.grab(); hideHandoff(); firedAt = aimHit && aimed && aimed.shot === shot ? aimHit.point : null; }
     // A shot fired while frozen (Bullet Time) has cut in at the frozen step: the world runs on with it.
     frozen = false;
@@ -2113,7 +2134,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       opener: !stepping && regrowT === null && s.phase === 'aiming' && openerNow() !== null, ticks,
       // While the turn view swings or the hand-over card shows, the aim is the old side's: no refusal, cue or warning (PT5's red line mid-swing).
       ...(duel ? { duel: swing.active || handle.handoff ? duelHudHtml(duel) : duelHudHtml(duel, s.phase === 'aiming' && aimed ? duel.refuse(aimed.shot) : null, azFromYaw(orbit.yaw), s.phase === 'aiming' && aimHit !== null && duel.owned[duel.turn].includes(aimHit.body)) } : {}),
-      ...(selected === QUAKE && dial ? { quake: quakeHud(dial) } : {}),
+      ...(quakeRun ? { quake: quakeRunHtml(c, quakeRun.shot, orbit.yaw, quakeRun.trace, quakeAt(1) / Math.max(1, quakeRun.motion.steps)) } : selected === QUAKE && dial ? { quake: quakeHud(dial) } : {}),
       ...(c.def.freeze !== undefined ? { freezes: { left: s.freezesLeft, total: c.def.freeze, frozen, can: canFreeze() } } : {}),
     }, goalsHudHtml(handle.goals, sheetOpen));
     showPanel();
@@ -2215,7 +2236,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     renderer.freezeFx = freezeFxOf(frozenGrade, feel.frozenAim);
     handle.frozenGrade = frozenGrade;
     frozenLabel.classList.toggle('on', frozenLook);
-    const fp = { viewProj: viewProj(view, aspect()), eye: eyeOf(view), focus: orbit.target, time: now / 1000, groundY: 0, alpha: running ? alphaAt(arrivals, now, 1000 * c.scene.dt) : 1, ...(frozenLook ? { dt: 0 } : {}) };
+    // A quake moves the ground (PT25, quake-ground.ts): the site is drawn displaced by the ground's motion, the eye where the player put it.
+    const alpha = running ? alphaAt(arrivals, now, 1000 * c.scene.dt) : 1, ground = feel.quakeGround && quakeRun ? groundAt(quakeRun.motion, quakeAt(alpha)) : null;
+    handle.ground = ground ? [ground[0], ground[1]] : [0, 0];
+    const vp = viewProj(view, aspect());
+    // World points are drawn at p + ground: the view-projection times a translation (column-major, as render math.ts).
+    const fp = { viewProj: ground ? multiply(vp, Float32Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, ground[0], 0, ground[1], 1)) : vp, eye: eyeOf(view), focus: orbit.target, time: now / 1000, groundY: 0, alpha, ...(frozenLook ? { dt: 0 } : {}) };
     // Offscreen (tests), nobody sees a frame and nothing throttles requestAnimationFrame
     // to the GPU: on SwiftShader a frame takes up to a second, so frames would queue
     // without bound and every readback (a step's, a replay's) wait behind them.

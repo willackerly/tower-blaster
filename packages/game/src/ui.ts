@@ -134,7 +134,7 @@ export const GAME_CSS = `
   .kg-hud .qe { display: flex; align-items: center; gap: 8px; } .kg-hud .qe b { white-space: nowrap; }
   .kg-hud button.qd { font: 700 16px/1 system-ui, sans-serif; width: 28px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: #2b3242; color: #e8ebf2; cursor: pointer; }
   .kg-hud .qv { min-width: 58px; text-align: center; }
-  .kg-hud .seismo polyline { fill: none; stroke: #f7b955; stroke-width: 1.4; } .kg-hud .seismo .axis { stroke: #3a4459; stroke-width: 1; }
+  .kg-hud .seismo polyline { fill: none; stroke: #f7b955; stroke-width: 1.4; } .kg-hud .seismo .axis { stroke: #3a4459; stroke-width: 1; } .kg-hud .seismo .head { stroke: #e8ebf2; stroke-width: 1.6; }
   .kg-hud .compass circle { fill: none; stroke: #3a4459; } .kg-hud .compass line { stroke: #f7b955; stroke-width: 2.2; } .kg-hud .compass .tip { fill: #f7b955; stroke: none; }
   .kg-hud button.quake-go { font: 650 14px/1 system-ui, sans-serif; padding: 8px 12px; border: 0; border-radius: 6px; background: #d8693f; color: #fff; cursor: pointer; }
   .kg-hud button.quake-go:disabled { background: #3a4459; color: #8a93a6; cursor: default; }

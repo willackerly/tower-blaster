@@ -21,6 +21,7 @@ import { look } from './look.ts';
 import { marks } from './marks.ts';
 import { view } from './openview.ts';
 import { pullAnim } from './pullanim.ts';
+import { quakeGround } from './quakeground.ts';
 import { quality } from './quality.ts';
 import { rapid } from './rapid.ts';
 import { shake } from './shake.ts';
@@ -66,6 +67,7 @@ export const OPTIONS = [
   spent,
   sleepTint,
   pullAnim,
+  quakeGround,
   frozenLook,
   frozenAim,
 ] as const;
