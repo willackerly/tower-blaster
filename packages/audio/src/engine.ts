@@ -42,7 +42,7 @@
 // limiting does not crackle.
 import { binOf, DV_EDGES, TOP_FIELDS, type AudioFrame } from './frame.ts';
 import type { SoundMaterial } from './material.ts';
-import { clickFilter, clickKernel, contactTime, radiatedClick, DENSE_BANDS, denseField, forceSpectrum, gauss, modes, roughness, roughTime, soundSize, type Modes } from './modes.ts';
+import { C_AIR, clickFilter, clickKernel, contactTime, mass, RHO_AIR, radiatedClick, DENSE_BANDS, denseField, forceSpectrum, gauss, modes, roughness, roughTime, soundSize, type Modes } from './modes.ts';
 
 export const BLOCK = 128;
 const RING = 64; // blocks of scheduling horizon (171 ms at 48 kHz)
@@ -126,8 +126,19 @@ export function gritEnergy(m: SoundMaterial, edge = 1): number {
   return study * 10 ** (m.gritDb / 10) * (soundSize(m, edge) / GRIT.refEdge) ** 3;
 }
 
+/**
+ * Most of an impact's kinetic energy (1/2 m* dv^2) its grit may radiate. Grit's energy grows as
+ * rate dv^3 (grains in proportion to dv, each of (A dv)^2) against the impact's dv^2, so a loud
+ * crack burst (ice, gritDb 50) would pass 15% of the energy at 4 m/s; fracture radiates far less.
+ * Past the share an impact sheds fewer grains of the same size. G6's grit never reaches it.
+ */
+export const GRIT_SHARE = 0.05;
+
 /** Expected grains of one impact (rate: the material's gritRate, grains per m/s; the cap scales with it). */
 export const gritGrains = (dv: number, rate: number = GRIT.perDv): number => (dv > GRIT.dvMin ? Math.min(rate * dv, (GRIT.most * rate) / GRIT.perDv) : 0);
+
+/** Expected grains of one impact on a material: its gritRate's, under the GRIT_SHARE cap. */
+const grainsOf = (st: { gritRate: number; gritCap: number }, dv: number): number => Math.min(gritGrains(dv, st.gritRate), st.gritCap / (dv * dv));
 
 export interface EngineOptions {
   sampleRate: number;
@@ -149,6 +160,8 @@ export interface EngineOptions {
 
 interface MatState {
   slot: number; // its index in mats
+  /** The material's levelDb as a gain on every impact's A = dv / distance (all of its sound is linear in A). */
+  level: number;
   m: SoundMaterial;
   md: Modes;
   /** Body edge for shell and cube materials without their own size. */
@@ -172,6 +185,8 @@ interface MatState {
   w: Float64Array; // scratch weights
   /** Grit: amplitude per (A dv) of a unit-energy grain kernel (0: none), and the grains' mean delay in samples. */
   gritAmp: number; gritDelay: number; gritRate: number;
+  /** Most grains an impact sheds, times dv^2: GRIT_SHARE of its kinetic energy (Infinity: no grit). */
+  gritCap: number;
   /** Ringing cracks (gritRing): a grain's dry click gain, sqrt(1 - ring), and the impulse A per unit of grain amplitude that rings the body with ring of its energy (0: none). */
   gritDry: number; crackA: number;
   /** Contact roughness (amplitude floor re the impulse, 0: smooth). */
@@ -311,7 +326,7 @@ export class CollapseEngine {
     const old = this.mats[i];
     const keep = old && old.M === M;
     const st: MatState = {
-      slot: i, m, md, edge, M, mult: new Float64Array(C),
+      slot: i, m, md, edge, M, mult: new Float64Array(C), level: 10 ** ((m.levelDb ?? 0) / 20),
       a1: new Float32Array(n), a2: new Float32Array(n), b: new Float32Array(n),
       y1: keep ? old.y1 : new Float32Array(n), y2: keep ? old.y2 : new Float32Array(n),
       x: keep ? old.x : new Float32Array(n * BLOCK), live: keep ? old.live : new Uint8Array(n), nLive: keep ? old.nLive : 0,
@@ -322,7 +337,7 @@ export class CollapseEngine {
       cf: clickFilter(m, this.sr, edge), cfz: new Float64Array(4 * S), cbus: new Float64Array(S * BLOCK),
       clickPeak: new Float64Array(DV_EDGES.length), binT: new Float64Array(DV_EDGES.length), w: new Float64Array(md.freq.length),
       gritAmp: Math.sqrt(gritEnergy(m, edge)),
-      gritRate: m.gritRate ?? GRIT.perDv, gritDry: Math.sqrt(1 - (m.gritRing ?? 0)), crackA: 0,
+      gritRate: m.gritRate ?? GRIT.perDv, gritCap: Infinity, gritDry: Math.sqrt(1 - (m.gritRing ?? 0)), crackA: 0,
       gritDelay: (m.gritSpread ?? GRIT.spread) * Math.sqrt(soundSize(m, edge) / GRIT.refEdge) * this.sr,
       rough: roughness(m),
       roughT: roughTime(m),
@@ -367,6 +382,8 @@ export class CollapseEngine {
     // contact's dense row), with no rigid-body click (it carries no momentum). Its energy for A = 1:
     // a mode of amplitude c rings c^2 tau sr / 4 (Pa^2 samples, the resonator's r^n sin), averaged over
     // the classes' unit-rms weights, plus the dense bands' A^2 E sr. crackA makes that ring of the grain's a^2.
+    // Grit's energy cap: n grains of an impact at 1 m radiate W = 4 pi / (rho c) n gritAmp^2 dv^4 / 48000 (J).
+    if (st.gritAmp > 0) st.gritCap = ((m.gritShare ?? GRIT_SHARE) * 0.5 * m.mstar * mass(m, edge) * RHO_AIR * C_AIR * 48000) / (4 * Math.PI * st.gritAmp ** 2);
     const ring = m.gritRing ?? 0;
     if (ring > 0 && st.gritAmp > 0) {
       let e = 0;
@@ -392,10 +409,10 @@ export class CollapseEngine {
       const s = Math.min(S - 1, Math.max(0, Math.floor(((pan + 1) / 2) * S))), c = (mat * DV_EDGES.length + binOf(dv)) * S + s;
       counts[c] = Math.max(0, counts[c]! - 1); a2[c] = Math.max(0, a2[c]! - (dv / dist) ** 2);
       const at = start + (this.alignOnsets ? 0 : Math.floor(this.rand() * len));
-      this.voice(mat, dv, dist, pan, f.top[o + 4]!, at);
-      const st = this.mats[mat];
-      if (st?.dK) this.impulse(at, mat, DENSE_ONLY, s, dv / dist, dv);
-      if (st && st.gritAmp > 0) this.grit(st, at, s, (dv / dist) * dv, gritGrains(dv, st.gritRate), 1);
+      const st = this.mats[mat], A = (st?.level ?? 1) * dv / dist;
+      this.voice(mat, dv, dv / A, pan, f.top[o + 4]!, at);
+      if (st?.dK) this.impulse(at, mat, DENSE_ONLY, s, A, dv);
+      if (st && st.gritAmp > 0) this.grit(st, at, s, A * dv, grainsOf(st, dv), 1);
     }
     for (let mat = 0; mat < f.materials; mat++) {
       if (!this.mats[mat]) continue;
@@ -407,16 +424,16 @@ export class CollapseEngine {
         let sum = 0;
         const dvs: number[] = [];
         for (let e = 0; e < k; e++) { const dv = lo * (hi / lo) ** this.rand(); dvs.push(dv); sum += dv * dv; }
-        const g = Math.sqrt(a2[c]! / sum), st = this.mats[mat]!;
+        const st = this.mats[mat]!, g = st.level * Math.sqrt(a2[c]! / sum);
         // Grit: impulse e stands for n / k impacts (its A^2 is theirs summed), so it sheds their grains,
         // n / k gritGrains(dv) of them, times q to keep the cell under maxGrains; each grain's amplitude is
         // over sqrt(n / k q), so the energy is what the impacts' own grains would carry.
         let q = 0;
-        if (st.gritAmp > 0) { let lam = 0; for (const dv of dvs) lam += gritGrains(dv, st.gritRate); lam *= n / k; q = lam > 0 ? Math.min(1, this.maxGrains / lam) * (n / k) : 0; }
+        if (st.gritAmp > 0) { let lam = 0; for (const dv of dvs) lam += grainsOf(st, dv); lam *= n / k; q = lam > 0 ? Math.min(1, this.maxGrains / lam) * (n / k) : 0; }
         for (const dv of dvs) {
           const at = start + (this.alignOnsets ? 0 : Math.floor(this.rand() * len));
           this.impulse(at, mat, Math.min(this.classes - 1, Math.floor(this.rand() * this.classes)), s, g * dv, dv);
-          if (q > 0) this.grit(st, at, s, g * dv * dv, gritGrains(dv, st.gritRate) * q, 1 / Math.sqrt(q));
+          if (q > 0) this.grit(st, at, s, g * dv * dv, grainsOf(st, dv) * q, 1 / Math.sqrt(q));
         }
       }
     }
