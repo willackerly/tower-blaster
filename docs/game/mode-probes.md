@@ -21,7 +21,7 @@ Each run writes `results/mode-probes/<id>-<size>-<time>.{json,md}`. `--size ci` 
 | X3 | Towers as dominoes | M6 Steer | CI size: cube and Kapla towers topple on, a bonded pier stops the front | **PASS**: cube towers 24/24 always; bonded piers all or nothing (38%); Kapla dies after 2-3 |
 | X4 | Cantilevers and hollows hold | M1 Hollow, M8 | CI size: stacks, span and brick arch behave | **PASS at 40 iterations, FAIL at 20**: at 20 the 95% stack falls and the arch wall creeps 1.1 cm; at 40 both hold (wall 3.8 mm; the creep over the hole is single bricks falling slowly) |
 | X5 | Pinned anchors solid | C8 | CI size: pins exactly still, bodies on them match the ground | **PASS**: pins exactly still, flood KS p >= 0.64 |
-| X6 | Resonance under a gravity schedule; far-blast shove | M7 | CI size: no sign of resonance (rocking-block behaviour); far kick exact | **FAIL, as predicted**: no resonance; 0.5 Hz is worst for every height; kick exact |
+| X6 | Resonance under a gravity schedule; far-blast shove | M7 | CI size: no sign of resonance (rocking-block behaviour); far kick exact | **FAIL, as predicted**: no resonance; 0.5 Hz is worst for every height; kick exact. M7 follow-up: threshold curves and the choice-matters gate pass on all 5 sites ("On levels") |
 | X7 | (optional) 1.5x domino amplifier | showcase | not planned | not run |
 | X8 | Islands behave like solo worlds | C10 | CI size: outcomes match; a world tracks its f32 coordinates (mm) more than the shared solve (solo at origin cm apart) | **PASS** (wrecking ball): KS p 0.39 / 0.52 against solo; islands cost 0.66 of the block per body; no world reproduces exactly, only distributions |
 
@@ -302,6 +302,31 @@ Median failure amplitude over 8 columns (g; "> 1" means half or more of them sti
 For M7 this settles it: a quake should be slow (0.5 to 1 Hz) and strong. Amplitude and duration are the levers, and no level should depend on tuning a quake to a tower. Above about 2 Hz a quake slides things rather than felling them.
 
 **C7 built (2026-11-06).** Field events (engine-api `field.ts`, `docs/design/gravity-and-pins.md`) replace the emulation above: the shake is one quantised gravity key per step in the scene's inputs (2^-12 m/s^2 grid, so the GPU's f32 uniform holds the reference's value exactly), a change of gravity wakes every sleeper, and a field kick is the exact uniform jolt the far blast approximates. The CI-size shake passes as before. Following this probe, quakes are built around amplitude and duration (`quakeEvents`: peak side load, seconds, rise and fall; 1 Hz by default), not tuned frequencies.
+
+### On levels (M7 follow-up, 2026-11-07)
+
+Aftershock's design search (docs/game/aftershock.md; `pnpm keystone:quake`, keystone-lab `quake-search.ts`) takes this probe's finding as given and asks what a quake *can* choose between. Reference engine, nudged builds (1 mm, 0.2 deg).
+
+**Threshold curves** (one tower, a ladder of peaks): the verify is a threshold curve, not a resonance curve. The curve rises with frequency, as above; what tells towers apart is where it sits against slenderness, size, duration and axis:
+- 0.5 Hz: towers fall near their static thresholds, slender first.
+- 1 Hz for 1.5 s: col3 down from 0.50 g, col4 from 0.45 g; col8 holds to 0.70 g; slab towers (same slenderness, bigger blocks) hold to 1.0 g. The rocking block's size effect, which the fast-ramp CI run above already showed.
+- A long 1 Hz quake fells the tall towers first. At 2 Hz and above nothing topples on the dial; things slide.
+- Rod walls (one rod per storey) fall at 0.20 g across, 0.30 g at 45 degrees, 0.65 g along (0.5 Hz, 6 s). Cube walls show no axis preference.
+
+**The choice-matters gate** (a site ships only if it passes): the best grid quake meets the objective (every condemned crown down, every protected tower standing at the settle) on at least 80% of 8 builds; its tower score beats the naive quake's (0.8 g, 0.3 Hz, 12 s, along x: the dial's brute end) by at least 0.1 and by more than 3 SE; the naive quake meets it on at most 20%. Grid: 0.15 to 0.75 g by 0.05, 0.3/0.5/0.8/1/1.5 Hz, 1/1.5/3/6/12 s (325 quakes, plus axes 0/45/90 on the wall sites).
+
+| site | towers (C condemned, P protected) | gate | best quake (8 builds) | naive (8 builds) | grid quakes that meet it |
+|---|---|---|---|---|---|
+| QC-1 Slow Sway | col8 C, col4 P, col7 C, col3 P | **PASS** | 0.20 g 0.8 Hz 1.5 s: 100%, towers 1.000 | 0%, towers 0.500 | 36 of 325 |
+| QC-3 Big Brother | col4 C, slab8x2 P, col4 C | **PASS** | 0.40 g 1 Hz 1 s: 100%, towers 1.000 | 0%, towers 0.667 | 56 of 325 |
+| QC-4 Short Sharp Shock | col3 C, col8 P, col4 C, col7 P | **PASS** | 0.50 g 1 Hz 1.5 s: 100%, towers 1.000 | 0%, towers 0.500 | 4 of 325 |
+| QC-2 Cross Grain (row along x) | rod walls: C laid along x, P along z | **PASS** | 0.30 g 1 Hz 1 s at 90 deg: 100%, towers 1.000 | 0%, towers 0.500 | 179 of 975 (all at 90 deg; none at 0 or 45) |
+| QC-5 Fault Line | rod wall C, slab8x2 P, col4 C, rod wall P | **PASS** | 0.40 g 1 Hz 1 s along x: 100%, towers 1.000 | 0%, towers 0.500 | 38 of 975 (37 along x, 1 at 45) |
+
+- The naive quake fails every site: at 0.3 Hz for 12 s it is a slow tilt held long enough to fell everything slender, protected or not, and it costs 14 to 47 kJ against the best quakes' 35 to 284 J.
+- On Short Sharp Shock the band is narrow: 0.50, 0.60 and 0.65 g at 1 Hz for 1.5 s meet it on all 8 builds, 0.55 g on 6 of 8. That is chaos at the edge, which is why the gate confirms on nudged builds; the level ships last in the set.
+- The axis is decisive on the wall sites: Cross Grain's first layout (row along z) met at 0 deg in 182 of 325 grid quakes, at 45 deg in 1, at 90 in none; it was turned so the answer is not the dial's starting axis, and the turned site was searched again (the row above).
+- These sites ship as A1 to A5 (aftershock.md, "Levels"), their stars cast on energy from these plays. On the GPU solver (SwiftShader) each shipped level's ace clears it, and a quake replays bit for bit; the Metal run of the confirm stage goes through the Mac queue.
 
 ## X8 Islands behave like solo worlds
 
