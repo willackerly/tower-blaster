@@ -173,6 +173,8 @@ export function tintOf(c: CompiledLevel, i: number, coats = true): number {
  */
 export function markOf(c: CompiledLevel, i: number): MarkId {
   const role = c.meta.role[i];
+  // Wavefront's starter slabs (LevelDef.push, PT39): the crosshair says what to hit to start the wave.
+  if (role === 0 && c.def.push?.includes(c.meta.part[i]!)) return MARK_HIT;
   if (role === 1) return c.def.objective.kind === 'hold' ? MARK_KEEP : MARK_HIT;
   if (role === 2) return MARK_SAVE;
   return MARK_NONE;
