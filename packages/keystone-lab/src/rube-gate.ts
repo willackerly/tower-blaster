@@ -6,7 +6,7 @@
 // families (what mechanism does the work). A clear counts only if it is robust:
 // it clears on at least ROBUST of NUDGES builds with every placed part nudged
 // up to NUDGE h across the ground (seeded), so a knife-edge build is not a solution.
-import { BuildSession, compileLevel, type CatalogName, type LevelDef, type Part, RL1, RL2, RL3 } from '@tb/keystone';
+import { BuildSession, compileLevel, type CatalogName, type LevelDef, type Part, RL1, RL2, RL3, RL4, RL5 } from '@tb/keystone';
 import { build, type BuildStep, type Candidate, ground, playRube, top } from './rube.ts';
 import { arc, line, RUBE_WRONG } from './rube-solutions.ts';
 
@@ -71,7 +71,35 @@ export function gatePuzzles(): GatePuzzle[] {
     ],
     wrong: RUBE_WRONG.RL3!,
   };
-  return [rl1, rl2, rl3];
+  // RL4 (M10b): a ramp up to the shelf, then a turner on its top; or a run curving on the ground into a plank on end in front of it.
+  const rl4: GatePuzzle = {
+    def: RL4,
+    cands: [
+      ...(['bumper', 'beam'] as const).flatMap((t) => [5, 6, 7].flatMap((rx) => range(10.5, 13, 0.5).flatMap((tx) => [-30, -45, -60].map((yaw): Candidate => ({
+        label: `ramp at ${rx} then a ${t} on the shelf at ${tx}, yaw ${yaw}`, family: `climb + turn (a ramp, a ${t === 'bumper' ? 'fixed bumper' : 'free beam'})`,
+        steps: (s) => [{ place: 'ramp', hit: ground(s, rx, 0) }, { place: t, hit: top(s, 3, tx, 0), yaw }],
+      }))))),
+      ...[3, 5].flatMap((x0) => [8.5, 9, 9.5].flatMap((px) => [5.5, 6.5, 7.5].flatMap((pz) => [0, 90].map((yaw): Candidate => ({
+        label: `run arc from ${x0},0 into a plank on end at ${px},${pz} (yaw ${yaw})`, family: 'relay (a run into a plank on end)',
+        steps: (s) => [{ place: 'plank', hit: ground(s, px, pz), yaw, tip: 1 }, { stroke: arc(x0, 0, px - 1.2, pz) }],
+      }))))),
+    ],
+    wrong: RUBE_WRONG.RL4!,
+  };
+  // RL5 (M10b): something across the 2 h wide, 1 h deep gap (a cube in it, a slab from either platform), then a turner on the far platform.
+  const cross: [string, (s: BuildSession) => BuildStep[]][] = [
+    ...[0.5, 0.75, 1, 1.25, 1.5].map((x): [string, (s: BuildSession) => BuildStep[]] => [`a cube in the gap at ${x}`, (s) => [{ place: 'cube', hit: ground(s, x, 0) }]]),
+    ...[[2, -1], [2, -0.75], [2, -0.5], [2, -0.25], [2, -0.1], [3, 2.1], [3, 2.25], [3, 2.5], [3, 2.75], [3, 3]].map(([b, x]): [string, (s: BuildSession) => BuildStep[]] => [`a slab on platform ${b === 2 ? 'A' : 'B'} at ${x}`, (s) => [{ place: 'slab', hit: top(s, b!, x!, 0) }]]),
+  ];
+  const rl5: GatePuzzle = {
+    def: RL5,
+    cands: cross.flatMap(([cl, cs]) => (['bumper', 'beam'] as const).flatMap((t) => range(6, 12, 1).flatMap((tx) => [-45, -60, -75].map((yaw): Candidate => ({
+      label: `${cl}, then a ${t} at ${tx}, yaw ${yaw}`, family: `cross + turn (${cl.startsWith('a cube') ? 'a cube' : 'a slab'}, a ${t === 'bumper' ? 'fixed bumper' : 'free beam'})`,
+      steps: (s) => [...cs(s), { place: t, hit: top(s, 3, tx, 0), yaw }],
+    }))))),
+    wrong: RUBE_WRONG.RL5!,
+  };
+  return [rl1, rl2, rl3, rl4, rl5];
 }
 
 /** A candidate's placed parts nudged (seeded): each piece's or ball's centre moved by up to NUDGE h in x and z. */

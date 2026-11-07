@@ -40,6 +40,18 @@ export const DOCK_CSS = `
     body.kg-touch .kg-dock .tray .ctl .power { flex: 1; gap: 4px; }
     body.kg-touch .kg-dock .tray .ctl .bar { flex: 1; width: auto; min-width: 48px; }
     body.kg-touch .kg-dock .tray .ctl .launch { flex: 1; text-align: center; white-space: nowrap; }
+    body.kg-touch .kg-dock .tray .ctl .quake-panel { flex: 1 1 100%; min-width: 0; margin: 0; gap: 4px; }
+    body.kg-touch .kg-dock .tray .ctl .qdials { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 4px 8px; }
+    body.kg-touch .kg-dock .tray .ctl .qdials .power { justify-content: space-between; }
+    body.kg-touch .kg-dock .tray .ctl .qdials .compass { width: 26px; height: 26px; }
+    body.kg-touch .kg-dock .tray .ctl .qv { min-width: 0; flex: 1; }
+    body.kg-touch .kg-dock .tray .ctl .qfoot { display: flex; gap: 8px; }
+    body.kg-touch .kg-dock .tray .ctl .qfoot .seismo { flex: 1 1 40px; min-width: 0; width: 40px; height: 32px; }
+    body.kg-touch .kg-dock .tray .ctl .qfoot .qe .bar { width: 48px; min-width: 48px; flex: none; }
+    body.kg-touch .kg-dock .tray .ctl .qfoot .quake-go { min-height: 44px; }
+    body.kg-touch .kg-dock .tray .ctl .qlong, body.kg-touch .kg-dock .tray .ctl .qnote { display: none; }
+    /* A rack of one quake has no choice to show: its chip goes while the panel stands for it. */
+    body.kg-touch .kg-dock .tray .chips.only-quake { display: none; }
     body.kg-touch .kg-dock .tray .ctl .launch::before { content: '↕ '; color: #9aa3b8; }
     body.kg-touch .kg-dock .slot-row, body.kg-touch .kg-dock .slot-row.idle { display: flex; gap: 8px; margin: 0; }
     body.kg-touch .kg-dock .slot, body.kg-touch .kg-dock .slot.empty { display: flex; flex: 1; min-height: 44px; }
@@ -50,6 +62,23 @@ export const DOCK_CSS = `
     body.kg-touch .kg-dock .above > * { background: rgba(17, 20, 28, 0.8); border-radius: 6px; padding: 4px 8px; }
     body.kg-touch .kg-dock .tch-hint { display: block; color: #c3cad8; font-size: 12px; }
     body.kg-touch .kg-dock ~ .kg-help { display: none; }
+    /*
+     * The Build panel (C9, play.ts; PT18) docked: before and after building, its Build button sits under the Menu
+     * button in the column the strip leaves free (upright) or at the top right (sideways). While building, the aim
+     * tray goes (nothing fires until Play) and the panel takes the bottom (upright) or the right side (sideways),
+     * scrolling if its rows need more; the status strip or rail stays.
+     */
+    body.kg-touch .kg-dock ~ .kg-build { top: 64px; right: 8px; bottom: auto; left: auto; width: auto; max-width: 68px; padding: 6px; border-radius: 10px; font-size: 12.5px; }
+    body.kg-touch .kg-dock ~ .kg-build[open] > summary { display: none; }
+    body.kg-touch .kg-dock ~ .kg-build[open] .edit { margin-top: 0; }
+    body.kg-touch .kg-dock ~ .kg-build button { min-height: 44px; }
+    body.kg-touch:not(.kg-building) .kg-dock ~ .kg-build[open] { padding: 0; background: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+    body.kg-touch:not(.kg-building) .kg-dock ~ .kg-build[open] button { background: rgba(17, 20, 28, 0.85); box-shadow: inset 0 0 0 1px #5a6680; font-weight: 650; }
+    body.kg-building.kg-touch .kg-dock > .tray { visibility: hidden; }
+    body.kg-building.kg-touch .kg-dock ~ .kg-build { max-width: none; overflow-y: auto; overscroll-behavior: contain; padding: 8px 10px; }
+    body.kg-building.kg-touch .kg-dock ~ .kg-build .edit { gap: 5px; }
+    body.kg-building.kg-touch .kg-dock ~ .kg-build .buttons { gap: 5px; }
+    body.kg-building.kg-touch .kg-dock ~ .kg-build button { padding: 4px 9px; }
   }
   @media ${DOCK_PORTRAIT} {
     body.kg-touch .kg-dock > .st { margin-right: 76px; display: flex; flex-wrap: wrap; column-gap: 12px; flex: none; }
@@ -61,11 +90,17 @@ export const DOCK_CSS = `
     body.kg-touch .kg-dock .st .row > span:first-child { color: #9aa3b8; }
     /* The objective says itself ("bring 40% down"): its label goes, so leverage and freezes share its line. */
     body.kg-touch .kg-dock .st .obj > span:first-child { display: none; }
+    body.kg-building.kg-touch .kg-dock ~ .kg-build { top: auto; left: 8px; right: 8px; bottom: 8px; max-height: 46%; }
+    body.kg-touch .kg-dock .tray button.qd { width: 44px; height: 44px; }
   }
   @media ${DOCK_SIDEWAYS} {
     body.kg-touch .kg-hud.kg-dock { right: auto; width: clamp(200px, 28vw, 250px); }
+    body.kg-touch .kg-dock .tray button.qd { width: 34px; height: 34px; font-size: 15px; }
+    body.kg-touch .kg-dock .tray .ctl .qdials { grid-template-columns: minmax(0, 1fr); }
+    body.kg-touch .kg-dock .tray .qfoot .quake-go { min-height: 36px; }
     body.kg-touch .kg-dock > .st { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
     body.kg-touch .kg-dock .above { left: 100%; right: auto; bottom: 0; margin: 0 0 0 8px; width: max-content; max-width: 50vw; }
+    body.kg-building.kg-touch .kg-dock ~ .kg-build { max-height: calc(100% - 72px); width: min(340px, 42vw); box-sizing: border-box; }
   }
 `;
 
@@ -88,6 +123,19 @@ export const GAME_CSS = `
   .kg-hud .chip.spent { opacity: 0.4; }
   .kg-hud .bar { width: 110px; height: 8px; border-radius: 4px; background: #2b3242; overflow: hidden; }
   .kg-hud .bar i { display: block; height: 100%; background: linear-gradient(90deg, #8fd3b6, #f7b955, #f0806a); }
+  .kg-hud .bar.over i { background: #f0806a; }
+  .kg-hud .quake-panel { display: grid; gap: 3px; margin-top: 4px; }
+  .kg-hud .qdials { display: grid; gap: 3px; }
+  .kg-hud .qfoot { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: center; }
+  .kg-hud .qfoot .seismo { grid-column: 1 / -1; width: 100%; }
+  .kg-hud .qe { display: flex; align-items: center; gap: 8px; } .kg-hud .qe b { white-space: nowrap; }
+  .kg-hud button.qd { font: 700 16px/1 system-ui, sans-serif; width: 28px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: #2b3242; color: #e8ebf2; cursor: pointer; }
+  .kg-hud .qv { min-width: 58px; text-align: center; }
+  .kg-hud .seismo polyline { fill: none; stroke: #f7b955; stroke-width: 1.4; } .kg-hud .seismo .axis { stroke: #3a4459; stroke-width: 1; }
+  .kg-hud .compass circle { fill: none; stroke: #3a4459; } .kg-hud .compass line { stroke: #f7b955; stroke-width: 2.2; } .kg-hud .compass .tip { fill: #f7b955; stroke: none; }
+  .kg-hud button.quake-go { font: 650 14px/1 system-ui, sans-serif; padding: 8px 12px; border: 0; border-radius: 6px; background: #d8693f; color: #fff; cursor: pointer; }
+  .kg-hud button.quake-go:disabled { background: #3a4459; color: #8a93a6; cursor: default; }
+  body.kg-touch .kg-hud button.qd { width: 40px; height: 40px; }
   .kg-banner { position: fixed; top: 22%; left: 0; right: 0; text-align: center; pointer-events: none; font: 800 44px/1.45 system-ui, sans-serif; letter-spacing: 0.04em; color: #fff; text-shadow: 0 3px 18px rgba(0, 0, 0, 0.45); opacity: 0; }
   .kg-banner.show { animation: kg-banner 1.4s ease-out; }
   .kg-frozen { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); padding: 6px 18px; border-radius: 10px; background: rgba(14, 34, 64, 0.55); border: 1px solid rgba(140, 200, 255, 0.6); color: #e4f2ff; font: 600 20px/1.3 system-ui, sans-serif; letter-spacing: 0.03em; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 0.15s; z-index: 3; }
@@ -135,6 +183,7 @@ export const GAME_CSS = `
   .kg-result button { font: inherit; padding: 7px 12px; border: 0; border-radius: 6px; background: #2b3242; color: #e8ebf2; cursor: pointer; }
   .kg-result button.primary { background: #d8693f; }
   .kg-hud button.bank { font: inherit; padding: 4px 10px; border: 0; border-radius: 6px; background: #d8693f; color: #fff; cursor: pointer; margin-top: 6px; }
+  .kg-hud button.bank.quiet { background: transparent; color: #f2a07e; box-shadow: inset 0 0 0 1.5px #b9623f; }
   .kg-hud button.skip { font: inherit; padding: 4px 10px; border: 1px solid #ffffff55; border-radius: 6px; background: #ffffff1a; color: #fff; cursor: pointer; margin-top: 6px; }
   .kg-hud button.freeze { font: inherit; padding: 4px 10px; border: 0; border-radius: 6px; background: #3f8fd8; color: #fff; cursor: pointer; margin-top: 6px; }
   .kg-hud .pace.frozen { background: #3f8fd8; color: #fff; }
@@ -170,10 +219,13 @@ export const GAME_CSS = `
   .kg-build .edit { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
   .kg-build .buttons { display: flex; flex-wrap: wrap; gap: 5px; }
   .kg-build button { font: inherit; padding: 4px 8px; border: 0; border-radius: 5px; background: #2b3242; color: #e8ebf2; cursor: pointer; }
-  .kg-build button.on, .kg-build button.go { background: #d8693f; color: #fff; }
+  /* Play (go) is the one orange button; the tool and item held (on) are filled in the accent, as the door's segmented controls (PT18). */
+  .kg-build button.go { background: #d8693f; color: #fff; }
+  .kg-build button.on { background: #9fc3ff; color: #11141c; }
   .kg-build button:disabled { color: #6b7387; cursor: default; }
   .kg-build .key { font-size: 10px; color: #9aa3b8; margin-left: 3px; }
-  .kg-build button.on .key, .kg-build button.go .key { color: #ffe3d6; }
+  .kg-build button.go .key { color: #ffe3d6; }
+  .kg-build button.on .key { color: #3a4459; }
   .kg-build .snap { font-size: 12px; color: #c9cfdc; }
   .kg-build .out { font-size: 12px; min-height: 1.45em; }
   .kg-build .out.warn { color: #f5b169; }

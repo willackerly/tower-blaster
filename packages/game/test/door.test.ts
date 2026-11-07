@@ -1,7 +1,9 @@
 // The front door's formatting (door.ts) and the settings it edits (settings.ts): pure.
 import { describe, expect, it } from 'vitest';
-import { B1, B2, B3, BIG_LEVELS, compileLevel, FUSE_LEVELS, L1, L3, type LevelDef, LEVELS, RUBE_LEVELS, SERIES, TRIAL_LEVELS, UNDERCUT_LEVELS } from '@tb/keystone';
+import { AFTERSHOCK_LEVELS, B1, B2, B3, BIG_LEVELS, compileLevel, FUSE_LEVELS, L1, L3, type LevelDef, LEVELS, RUBE_LEVELS, SERIES, TRIAL_LEVELS, UNDERCUT_LEVELS } from '@tb/keystone';
 import { bestText, BULLET_TIME_HOW, doorHtml, doorLevels, doorMode, doorOnLoad, nextLevel, openerFor, preaimMode, rackText, seriesTitle, starTargets, thresholdText, TRIALS_BLURB } from '../src/door.ts';
+// PT18's own names, on a line of their own so the line above merges as main's.
+import { DOOR_CSS, SIEGE_TABLE_HOW } from '../src/door.ts';
 import { GAME_SERIES } from '../src/params.ts';
 import type { LevelRecord } from '../src/progress.ts';
 import { cameraFeel, DEFAULT_SETTINGS, launchFeel, marksFeel, parseSettings, rapidFeel, SETTINGS_KEY, SettingsStore, turnViewFeel, urlSettings } from '../src/settings.ts';
@@ -86,7 +88,7 @@ describe('door levels', () => {
     expect(l).toMatchObject({ custom: true, best: null, cast: false });
   });
   it('Play opens the first level without a star, else the first', () => {
-    const mk = (s: Array<0 | 1 | null>, trials = 0) => s.map((x, i) => ({ id: `B${i}`, name: '', blocks: 0, rack: '', targets: ['', '', ''] as [string, string, string], short: ['', '', ''] as [string, string, string], cast: true, custom: false, best: x === null ? null : rec(x), index: i, series: '', trial: i < trials }));
+    const mk = (s: Array<0 | 1 | null>, trials = 0) => s.map((x, i) => ({ id: `B${i}`, tag: `B${i}`, name: '', blocks: 0, rack: '', targets: ['', '', ''] as [string, string, string], short: ['', '', ''] as [string, string, string], cast: true, custom: false, best: x === null ? null : rec(x), index: i, series: '', trial: i < trials }));
     expect(nextLevel(mk([1, null, null]))).toBe(1);
     expect(nextLevel(mk([1, 0, null]))).toBe(1);
     expect(nextLevel(mk([1, 1, 1]))).toBe(0);
@@ -97,16 +99,16 @@ describe('door levels', () => {
   });
   it('every series shows under its title, in the game\'s order; the trials behind a toggle, closed and uncompiled until opened', () => {
     expect(GAME_SERIES.flat().map((d) => d.id).sort()).toEqual(SERIES.flat().map((d) => d.id).sort());
-    expect([seriesTitle('b2'), seriesTitle('L1'), seriesTitle('U3'), seriesTitle('F1'), seriesTitle('t-s4'), seriesTitle('S4')]).toEqual(['Spectacle', 'Chamber', 'Undercut', 'Fuse & Fold', 'Trials · unrated', '']);
+    expect([seriesTitle('b2'), seriesTitle('L1'), seriesTitle('U3'), seriesTitle('F1'), seriesTitle('a2'), seriesTitle('t-s4'), seriesTitle('S4')]).toEqual(['Spectacle', 'Chamber', 'Undercut', 'Fuse & Fold', 'Aftershock', 'Trials · unrated', '']);
     const all = GAME_SERIES.flat(), compiled: string[] = [];
     const compile = (d: (typeof all)[number]) => { compiled.push(d.id); return compileLevel(d); };
     const closed = doorLevels(all, () => null, compile, (d) => d.id.startsWith('T-'));
-    expect(compiled).toEqual([...BIG_LEVELS, ...LEVELS, ...UNDERCUT_LEVELS, ...RUBE_LEVELS, ...FUSE_LEVELS].map((d) => d.id));
+    expect(compiled).toEqual([...BIG_LEVELS, ...LEVELS, ...UNDERCUT_LEVELS, ...RUBE_LEVELS, ...FUSE_LEVELS, ...AFTERSHOCK_LEVELS].map((d) => d.id));
     // A card's data-arg is its index in the page's whole list, skipped trials or not.
     expect(closed.map((l) => l.index)).toEqual(compiled.map((_, i) => i));
     const shut = doorHtml({ levels: closed, current: 3, settings: DEFAULT_SETTINGS, howTo: false, advanced: false, trials: { count: TRIAL_LEVELS.length, open: false } });
-    expect([...shut.matchAll(/<h2 class="series-head">([^<]*)</g)].map((x) => x[1])).toEqual(['Spectacle', 'Chamber', 'Undercut', 'Rube Lab', 'Fuse &#38; Fold']);
-    expect(shut.match(/class="card[ "]/g)).toHaveLength(11 + RUBE_LEVELS.length + FUSE_LEVELS.length);
+    expect([...shut.matchAll(/<h2 class="series-head">([^<]*)</g)].map((x) => x[1])).toEqual(['Spectacle', 'Chamber', 'Undercut', 'Rube Lab', 'Fuse &#38; Fold', 'Aftershock']);
+    expect(shut.match(/class="card[ "]/g)).toHaveLength(11 + RUBE_LEVELS.length + FUSE_LEVELS.length + AFTERSHOCK_LEVELS.length);
     expect(shut).toContain(`data-act="trials" class="series-head trials-head" aria-expanded="false">Trials · unrated (${TRIAL_LEVELS.length}) ▸</button>`);
     expect(shut).not.toContain(TRIALS_BLURB.slice(0, 20));
     expect(shut).toContain('class="card current" data-act="level" data-arg="3"');
@@ -116,7 +118,9 @@ describe('door levels', () => {
     const html = doorHtml({ levels: open, current: t, settings: DEFAULT_SETTINGS, howTo: false, advanced: false, trials: { count: TRIAL_LEVELS.length, open: true } });
     expect(html).toContain('aria-expanded="true">Trials · unrated');
     expect(html.match(/class="card[^"]* trial"/g)).toHaveLength(TRIAL_LEVELS.length);
-    expect(html).toContain(`class="card current trial" data-act="level" data-arg="${t}" aria-label="T-X1 Domino Run"`);
+    const tag = `Trial ${TRIAL_LEVELS.findIndex((l) => l.id === 'T-X1') + 1}`;
+    expect(html).toContain(`class="card current trial" data-act="level" data-arg="${t}" data-id="T-X1" aria-label="${tag} Domino Run"`);
+    expect(html).toContain(`<div class="id">${tag}</div>`);
     // Play still opens the first rated level (B1), though a trial is loaded; Back names the trial.
     expect(html).toContain(`Play · ${B1.name}`);
     expect(html).toContain('Back to Domino Run');
@@ -139,6 +143,12 @@ describe('door levels', () => {
     expect(html).toContain(`<li>${BULLET_TIME_HOW}</li>`);
     expect(BULLET_TIME_HOW).toMatch(/Bullet Time.*<kbd>T<\/kbd>.*Freeze.*keeps the freeze/);
     expect(html).toContain('data-act="advanced" class="howlink advlink on" aria-expanded="true"');
+    // PT18: Sound reads its state, On (marked on, so filled in the accent by DOOR_CSS) or Off; How to play has the Siege Table.
+    // (Its markup is the option registry's, pinned by options-golden: one toggle button inside a segment.)
+    expect(html).toContain('<span class="seg"><button data-act="sound" class="on">On</button></span>');
+    expect(doorHtml({ levels, current: 0, settings: { ...DEFAULT_SETTINGS, sound: false }, howTo: false, advanced: true })).toContain('<button data-act="sound" class="">Off</button>');
+    expect(DOOR_CSS).toMatch(/\.seg button\.on \{ background: #9fc3ff; color: #11141c/);
+    expect(html).toContain(`<li>${SIEGE_TABLE_HOW}</li>`);
     expect(doorHtml({ levels, current: -1, settings: DEFAULT_SETTINGS, howTo: false, advanced: false })).not.toContain('data-act="close"');
     // Back to the level is the Play button already when the next level is the loaded one.
     expect(doorHtml({ levels, current: 1, settings: DEFAULT_SETTINGS, howTo: false, advanced: false })).not.toContain('data-act="close"');

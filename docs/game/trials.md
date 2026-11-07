@@ -13,7 +13,7 @@ Code: `packages/keystone/src/trial-levels.ts` (`TRIAL_LEVELS`, `TRIAL_NOTES`), t
 - **Rack**: up to a few thousand blocks, a cannonball, two marbles and two grenades (`TRIAL_RACK_SMALL`); light bodies (S8's rods, dominoes, Kapla planks), three marbles and a grenade (`TRIAL_RACK_LIGHT`: a cannonball is 27 to 68 times one, over the ammo ratio); 5k blocks and up, the big levels' three bombs and two rams (`TRIAL_RACK_BIG`). The drafts keep their own racks.
 - Everything else (launcher ring, lot, physics) is what `scenarioLevel` or `outcomeLevel` gives, so a change there (the launch point, for one) reaches the trials too.
 
-## The 31 trials
+## The 34 trials
 
 | Id | Name | From | Blocks | Validator notes |
 |---|---|---|---|---|
@@ -36,6 +36,7 @@ Code: `packages/keystone/src/trial-levels.ts` (`TRIAL_LEVELS`, `TRIAL_NOTES`), t
 | T-B2A to T-B2E | Spare the Cathedral | drafts B2a to B2e | 5,184 | |
 | T-B3A, T-B3B, T-B3C, T-B3E | Ten Thousand | drafts B3a, B3b, B3c, B3e | 10,000 | |
 | T-B4A | Domino Boulevard | draft B4a | 1,680 | |
+| T-B5A, T-B5B, T-B5C | Kapla Spire | drafts B5a (one spire), B5b (five towers), B5c (B5a without GPU sleep) | 2,884; 3,106; 2,884 | planks 1.5 x 0.3 x 0.1 m; launcher 27 m up |
 | T-I1 | Ice Tower | ice: L1's 2 x 2 column, all ice, crowned | 40 | |
 | T-I2 | Ice Wall | ice: a third-bond wall 8 x 6 | 48 | |
 | T-I3 | Frozen Keep | ice: a 3 x 3 stone keep, its top four courses ice | 72 | |

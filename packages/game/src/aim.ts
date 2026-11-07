@@ -174,6 +174,7 @@ export function shotFor(c: CompiledLevel, ammo: RackItem, az: number, power: num
   if (ammo === 'cue') return null; // no starter level racks a cue yet
   if (ammo === 'pull') return null; // a pull picks a block, not a point: pullFor
   if (ammo === 'plunger') return null; // a plunger arms charges, it aims at nothing
+  if (ammo === 'quake') return null; // a quake shakes the ground: the quake panel sets it
   const a = aimAt(f, ammo, { az, y: launchY(c, ammo, at), power }, target, { substeps, minPitch: AIM_MIN_PITCH });
   return { shot: a.shot, error: a.error, reachable: a.error <= REACH };
 }
@@ -193,7 +194,7 @@ export interface Contact { body: number; step: number; point: Vec3; normal: Vec3
  * structure's bounding box and each body's bounding sphere. Free bodies (ammo) and pulled ones are skipped, as pick.
  */
 export function arcContact(c: CompiledLevel, s: Snapshot, shot: Shot, substeps = SUBSTEPS, groundY = 0): Contact | null {
-  if (shot.ammo === 'pull' || shot.ammo === 'cue' || shot.ammo === 'plunger') return null; // no flight: a pull, a cue, a plunger's charges
+  if (shot.ammo === 'pull' || shot.ammo === 'cue' || shot.ammo === 'plunger' || shot.ammo === 'quake') return null; // no flight: a pull, a cue, a plunger's charges, a quake
   const ev = shotToSpawn(c.frame, shot, 0), sh = ev.body.shape;
   // A ball touches with its radius, a box item with its thinnest half (it may arrive on any face).
   const radius = sh.kind === 'sphere' ? sh.radius : sh.kind === 'box' ? Math.min(...sh.half) : 0;

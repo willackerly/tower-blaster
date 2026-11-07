@@ -6,7 +6,7 @@ import { compileLevel, D1, D2, Duel, duelLevel, DUELS, outcomeScore, type Shot }
 import { doorDuels, doorHtml, doorOnLoad, duelsOnDoor } from '../src/door.ts';
 import { duelHudHtml, duelResultHtml, handoffHtml, handoffText, keepTallyHtml, ptsText, scoreFloatHtml, sideOf } from '../src/duel-hud.ts';
 import { hudHtml, rackChips } from '../src/hud.ts';
-import { goalsHudHtml, goalsMode, goalsResultHtml } from '../src/lot-hud.ts';
+import { goalsHudHtml, goalsMode, goalsResultHtml, sheetMode, sheetOpenAtLoad } from '../src/lot-hud.ts';
 import { duelOf, parseGameParams } from '../src/params.ts';
 import { emptyProgress, parseProgress, recordPlay } from '../src/progress.ts';
 import { DEFAULT_SETTINGS } from '../src/settings.ts';
@@ -28,6 +28,21 @@ describe('lot sheet on the page', () => {
     expect(html).toMatch(/☑<\/span>All crowns with the &#60;first&#62; shot/);
     expect(html).toMatch(/class=" before"[^>]*><span class="tick">☒/);
     expect(goalsHudHtml([])).toBe('');
+  });
+  it('the game page\'s HUD sheet: a toggle on its count line, listed only when open; keystone.sheet (PT18)', () => {
+    const shut = goalsHudHtml(goals, false), open = goalsHudHtml(goals, true);
+    expect(shut).toContain('<button class="row goals-head" data-act="goals" aria-expanded="false"');
+    expect(shut).toMatch(/Lot sheet ▸<\/span><span class="small">1\/3 so far/);
+    expect(shut).not.toContain('<ul>');
+    expect(open).toContain('aria-expanded="true"');
+    expect(open).toMatch(/Lot sheet ▾/);
+    expect(open).toMatch(/<ul>.*All crowns/);
+    // The viewer passes no state: the plain list, as before.
+    expect(goalsHudHtml(goals)).not.toContain('data-act="goals"');
+    expect(sheetMode(q(''))).toBe('auto');
+    expect(sheetMode(q('keystone.sheet=open'))).toBe('open');
+    expect(() => sheetMode(q('keystone.sheet=1'))).toThrow(/keystone.sheet must be/);
+    expect([sheetOpenAtLoad('auto', false), sheetOpenAtLoad('auto', true), sheetOpenAtLoad('open', false)]).toEqual([false, true, true]);
   });
   it('the result card counts the goals met, marks first-time ones new, and shows the grade when the level has grades', () => {
     const html = goalsResultHtml(goals, 'B', true);

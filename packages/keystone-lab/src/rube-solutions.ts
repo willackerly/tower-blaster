@@ -38,7 +38,22 @@ export const RUBE_SOLUTIONS: Record<string, RubeBuild[]> = {
     { label: 'a fixed ramp up onto the shelf', family: 'ramp', steps: (s) => [{ place: 'ramp', hit: ground(s, 7, 0) }] },
     { label: 'a domino run into a plank on end, which falls onto the bell', family: 'topple', steps: (s) => [{ place: 'plank', hit: ground(s, 9, 0), tip: 1 }, { stroke: line(3, 0, 9 - 0.9 - 0.2, 0) }] },
   ],
+  // M10b: RL4 and RL5 chain two of the gate's families (docs/game/rube-lab.md, RL4 and RL5).
+  RL4: [
+    { label: 'a ramp up onto the shelf, then a fixed bumper on it at -60 degrees', family: 'climb + turn', steps: (s) => [{ place: 'ramp', hit: ground(s, 6, 0) }, { place: 'bumper', hit: top(s, 3, 11.5, 0), yaw: -60 }] },
+    { label: 'a ramp up onto the shelf, then a free beam on it at -60 degrees', family: 'climb + turn', steps: (s) => [{ place: 'ramp', hit: ground(s, 6, 0) }, { place: 'beam', hit: top(s, 3, 11.5, 0), yaw: -60 }] },
+  ],
+  RL5: [
+    { label: 'a cube in the gap, then a fixed bumper on the far platform at -45 degrees', family: 'fill + turn', steps: (s) => [{ place: 'cube', hit: ground(s, 0.5, 0) }, { place: 'bumper', hit: top(s, 3, 6, 0), yaw: -45 }] },
+    { label: 'a slab from the far platform over the gap, then a fixed bumper at -45 degrees', family: 'span + turn', steps: (s) => [{ place: 'slab', hit: top(s, 3, 2.25, 0) }, { place: 'bumper', hit: top(s, 3, 6, 0), yaw: -45 }] },
+  ],
 };
+
+/**
+ * Distinct families each level must have recorded (default 2). RL4 has one: the gate found only climb + turn
+ * (with a fixed bumper or a free beam, both robust); the ground relay into a plank on end never rang its bell.
+ */
+export const RUBE_MIN_FAMILIES: Record<string, number> = { RL4: 1 };
 
 /** The obvious wrong builds, by level id: every one must fail. */
 export const RUBE_WRONG: Record<string, RubeBuild[]> = {
@@ -61,5 +76,15 @@ export const RUBE_WRONG: Record<string, RubeBuild[]> = {
         return [{ place: 'cube', hit: ground(s, 9, 0) }, { place: 'cube', hit: ground(s, 10, 0) }, { place: 'cube', hit: on(n + 1, 10) }, { place: 'cube', hit: ground(s, 11, 0) }, { place: 'cube', hit: on(n + 3, 11) }];
       },
     },
+  ],
+  RL4: [
+    { label: 'nothing (the ball stops at the shelf)', family: 'none', steps: [] },
+    { label: 'a ramp alone (the ball runs over the shelf, past the bell)', family: 'climb', steps: (s) => [{ place: 'ramp', hit: ground(s, 6, 0) }] },
+    { label: 'a bumper on the ground (it turns the ball along the shelf face)', family: 'turn', steps: (s) => [{ place: 'bumper', hit: ground(s, 9, 0), yaw: -45 }] },
+  ],
+  RL5: [
+    { label: 'nothing (the ball drops into the gap)', family: 'none', steps: [] },
+    { label: 'a cube in the gap alone (the ball rolls past the pocket)', family: 'cross', steps: (s) => [{ place: 'cube', hit: ground(s, 1, 0) }] },
+    { label: 'a bumper alone (the ball drops into the gap before it)', family: 'turn', steps: (s) => [{ place: 'bumper', hit: top(s, 3, 7, 0), yaw: -45 }] },
   ],
 };

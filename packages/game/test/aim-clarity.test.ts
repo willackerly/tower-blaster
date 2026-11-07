@@ -17,7 +17,7 @@ function atHome(c: CompiledLevel): Snapshot {
   for (let i = 0; i < s.count; i++) s.rot.set(c.scene.bodies[i]!.rot, 4 * i);
   return s;
 }
-const isLaunch = (a: string): a is LaunchItem => a !== 'drop' && a !== 'pull' && a !== 'cue' && a !== 'plunger';
+const isLaunch = (a: string): a is LaunchItem => a !== 'drop' && a !== 'pull' && a !== 'cue' && a !== 'plunger' && a !== 'quake';
 const ALL = SERIES.flat();
 
 /**
@@ -139,7 +139,7 @@ describe('the pre-aimed openers', () => {
   for (const def of withOpener) {
     it(`${def.id}: its opener's arc comes down on the structure`, () => {
       const c = compileLevel(def), shot = (def.solutions!.ace?.[0] ?? def.solutions!.par![0])!;
-      if (shot.ammo === 'pull' || shot.ammo === 'cue' || shot.ammo === 'plunger') return expect(arcContact(c, atHome(c), shot)).toBeNull();
+      if (shot.ammo === 'pull' || shot.ammo === 'cue' || shot.ammo === 'plunger' || shot.ammo === 'quake') return expect(arcContact(c, atHome(c), shot)).toBeNull();
       const k = arcContact(c, atHome(c), shot);
       expect(k?.body ?? -2).toBeGreaterThanOrEqual(0);
       if (c.scene.bodies[k!.body]!.shape.kind === 'sphere') return; // a Rube Lab runner: the normal is radial
