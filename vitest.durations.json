@@ -336,5 +336,6 @@
   "packages/weapons/test/tiers.test.ts": 0.2,
   "packages/weapons/test/yield.test.ts": 0.1,
   "packages/game/test/coats-e2e.test.ts": 60.0,
-  "packages/game/test/ice-pale-e2e.test.ts": 75.0
+  "packages/game/test/ice-pale-e2e.test.ts": 75.0,
+  "packages/game/test/duel-colours-e2e.test.ts": 35.0
 }

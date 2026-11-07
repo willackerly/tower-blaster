@@ -589,7 +589,7 @@ export class Renderer {
   }
 
   /**
-   * Coat count = coats.length slots from slot0 (coats.ts: COAT_NONE, COAT_GILT, COAT_GLAZE per slot): the block's
+   * Coat count = coats.length slots from slot0 (coats.ts: COAT_NONE, COAT_GILT, COAT_GLAZE, COAT_PAINT per slot): the block's
    * own colour in every look. A coat stays through every setFx that does not name one, until clearFx; only boxes draw it.
    */
   setCoats(slot0: number, coats: ArrayLike<number>): void {
