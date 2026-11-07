@@ -2,13 +2,15 @@
 // (pinned cliffs, tables and walls: C8 via M10's pinned pieces), what the build
 // protects (heritage) and a test (mason.ts MasonDef): a ball rolled over the
 // gap, debris dropped on the shelter, boulders rolled at the berm, a weight
-// dropped on the reach. Lengths in h. The star points come from the author
+// dropped on the reach, the ground shaken under the bell tower. Lengths in h. The star points come from the author
 // solutions (keystone-lab mason-solutions.ts), whose test re-derives them.
 import type { Vec3 } from '@tb/engine-api';
 import type { BuildDef, CatalogName } from './build.ts';
 import type { LevelDef, Part, PiecePart } from './level.ts';
 import type { MasonDef } from './mason.ts';
 import type { MaterialName } from './materials.ts';
+import { masonQuakeOf } from './mason.ts';
+import { RETROFIT_QUAKE } from './aftershock-levels.ts';
 
 /** A pinned box (cliff, table, wall), centre and half-extents in h. */
 const fixed = (at: Vec3, half: Vec3, material: MaterialName = 'stone'): PiecePart => ({ kind: 'piece', at, half, pinned: true, material });
@@ -118,5 +120,30 @@ export const MT4: LevelDef = masonLevel({
   lot: [-8, -4, 8, 4],
 });
 
+/** A plain piece of masonry (the column's lower courses), centre and half-extents in h. */
+const course = (at: Vec3, half: Vec3 = [0.5, 0.5, 0.5]): PiecePart => ({ kind: 'piece', at, half, material: 'plaster' });
+
+/**
+ * MT5 Bell Tower: a tower of six plaster cubes on open ground, its bell (the top cube) the heritage, and the test is
+ * Aftershock's retrofit quake (RETROFIT_QUAKE: 0.3 g at 1 Hz for 1 s, here along x; one profile for both modes,
+ * masonQuakeOf). The bell must not move half a cell. Bare, the tower falls on every world: the quake's strong swing
+ * throws it toward -x. A pier of three against it on that side is enough (the clever build: read which way the bare
+ * tower falls); a pier on each side is the plain one. A pier on the +x side, or one half a cell off the tower, mostly
+ * fails: the tower falls away from the first and rocks into the second hard enough to knock it over. Only the placed
+ * pieces are jittered (the quake is world-wide), so the spread across worlds is the build's own.
+ */
+export const MT5: LevelDef = masonLevel({
+  id: 'MT5', name: 'Bell Tower',
+  parts: [...[0, 1, 2, 3, 4].map((k) => course([0, 0.5 + k, 0])), ward([0, 5.5, 0])],
+  build: { budget: 10, pieces: ['cube', 'slab', 'beam', 'plank', 'pier3', 'course4'], brush: false },
+  mason: {
+    test: 'quake', run: 180, probes: [],
+    quake: masonQuakeOf({ ...RETROFIT_QUAKE, axis: 0 }),
+    pass: [{ who: 'heritage', test: 'moved', d: 0.5, atMost: 0 }],
+    stars: [630, 760],
+  },
+  lot: [-6, -4, 6, 4],
+});
+
 /** Mason's Trial's series, in door order. */
-export const MASON_LEVELS: readonly LevelDef[] = [MT1, MT2, MT3, MT4];
+export const MASON_LEVELS: readonly LevelDef[] = [MT1, MT2, MT3, MT4, MT5];

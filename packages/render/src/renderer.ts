@@ -10,7 +10,7 @@ import type { GpuProfiler } from '@tb/gpu';
 import { Culler, NO_LOD, SEG, type CullFrame } from './cull.ts';
 import { CLASSIC_SPARKS, CTL, DEFAULT_DEBRIS, DEFAULT_SPARKS, MATERIAL_ICE, Sparks } from './sparks.ts';
 import { BLAST_LIGHTS, CLASSIC_LIGHTS, DEFAULT_LIGHTS, Lights, MAX_BALLS, TRAIL } from './lights.ts';
-import { Blasts } from './blasts.ts';
+import { Blasts, RING_BLASTS, RING_ECHO_S } from './blasts.ts';
 import { Fuses } from './fuses.ts';
 import { BlastReach, IMPACT_STYLE } from './reach.ts';
 import { aoFrame, aoGrid, AoVolume } from './ao.ts';
@@ -1107,6 +1107,15 @@ export class Renderer {
    */
   blast(centre: V3, radius: number, time = this.lastTime): void {
     this.blasts.add(centre, radius, time);
+  }
+
+  /**
+   * A bell rung at `centre` (Rube Lab, PT26): two ring waves (blasts.ts RING_BLASTS: the shell alone, slow, with a
+   * short warm light) out to `radius`, the second a beat after the first and wider, as a struck bell rings on.
+   */
+  ring(centre: V3, radius: number, time = this.lastTime): void {
+    this.blasts.add(centre, radius, time, RING_BLASTS);
+    this.blasts.add(centre, 1.5 * radius, time + RING_ECHO_S, RING_BLASTS);
   }
 
   /** Mark (or unmark) a body slot as a lit bomb: a flickering spark rides on top of it until it is removed (fuses.ts). */

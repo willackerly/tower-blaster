@@ -19,6 +19,7 @@ import { type CompiledLevel, type LevelDef, MASON_ITERATIONS, physicsOf, unitOf 
 import { MATERIALS, materialId, type MaterialName, ROLES } from './materials.ts';
 import { obbOfBody, obbOverlap } from './placement.ts';
 import { TOUCH } from './build.ts';
+import { type QuakeDialValues, quakeAzimuth } from './quake.ts';
 
 /** Worlds a build is judged in (C10; the roadmap's Daily Seventeen judge). */
 export const MASON_WORLDS = 64;
@@ -55,6 +56,18 @@ export interface MasonCheck {
 
 /** The ground shaking (C7 field events, engine-api quakeEvents): `peak` side load in g, at `hz`, for `seconds`, along x or z. */
 export interface MasonQuake { peak: number; hz: number; seconds: number; axis: 'x' | 'z' }
+
+/**
+ * A quake in Aftershock's dial units (quake.ts QuakeDialValues: % g, 0.1 Hz, 0.1 s, degrees) as a Mason test's quake,
+ * so the two modes share one profile (aftershock-levels.ts RETROFIT_QUAKE) and feel the same: masonField then gives
+ * the keys Aftershock's shot path (quakeInputs) gives for that quake at the test step. Throws on an axis other than 0
+ * (x) or 90 (z), the two a Mason test runs along.
+ */
+export function masonQuakeOf(f: QuakeDialValues): MasonQuake {
+  const axis = f.axis === 0 ? 'x' : f.axis === 90 ? 'z' : null;
+  if (!axis) throw new Error(`masonQuakeOf: a Mason quake runs along x (0 degrees) or z (90), not ${f.axis} degrees`);
+  return { peak: f.peak / 100, hz: f.hz / 10, seconds: f.sec / 10, axis };
+}
 
 export const MASON_TESTS = ['roll', 'drop', 'flood', 'reach', 'quake'] as const;
 export type MasonTest = (typeof MASON_TESTS)[number];
@@ -154,7 +167,7 @@ export function masonProbes(c: CompiledLevel, k: number): SpawnEvent[] {
 export function masonField(c: CompiledLevel): FieldEvent[] {
   const q = c.def.mason!.quake;
   if (!q) return [];
-  const evs = quakeEvents({ step: masonTimeline(c).test, seconds: q.seconds, dt: c.scene.dt, peak: q.peak, hz: q.hz, azimuth: q.axis === 'x' ? 0 : Math.PI / 2 }, c.scene.gravity);
+  const evs = quakeEvents({ step: masonTimeline(c).test, seconds: q.seconds, dt: c.scene.dt, peak: q.peak, hz: q.hz, azimuth: quakeAzimuth(q.axis === 'x' ? 0 : 90) }, c.scene.gravity);
   for (const e of evs) checkField(e);
   return evs;
 }
