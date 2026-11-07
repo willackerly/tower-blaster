@@ -13,7 +13,7 @@ import { createDevice } from '@tb/gpu';
 import { lookByName, parseBlastOptions, parseIceOptions, parseRealOptions, Renderer, SnapshotSource } from '@tb/render';
 import { installDoor, type DoorPage } from './door-page.ts';
 import { doorDuels, doorMode, doorOnLoad, duelsOnDoor, openerFor, preaimMode, seriesForward } from './door.ts';
-import { GAME_SERIES, loadOptions, lookName, onEngine, parseGameParams, weaponTierOf, withRules } from './params.ts';
+import { buildOption, GAME_SERIES, loadOptions, lookName, onEngine, parseGameParams, weaponTierOf, withRules } from './params.ts';
 import { browserKeyValue, memoryKeyValue, type ProgressStore, progressStore } from './progress.ts';
 import { bankAfterLine, type SessionFacts, sessionFile, sessionFileName } from './session-file.ts';
 import { CAMERA_KEYS, cameraFeel, LAUNCH_KEYS, launchFeel, MARKS_KEYS, marksFeel, RAPID_KEYS, rapidFeel, type Settings, SettingsStore, TURN_VIEW_KEYS, turnViewFeel } from './settings.ts';
@@ -171,7 +171,7 @@ async function main() {
   await playKeystone({
     canvas, offscreen, offscreenSize, device, renderer, source, hud: $('hud'), banner: $('banner'), result: $('result'),
     levels: played, start: duel ? 0 : start, ...(duel ? {} : { series: seriesIdx, seriesForward: (i: number) => seriesForward(seriesIdx, i, levels) }),
-    layout, onLevels: () => front.show(), engine, feel, weaponTier: () => weaponTierOf(weaponTier, handle.quality?.tier), fail, sound, impactsDb, muted: !settings.current.sound, touch: touchMode(q), ...loadOptions(q),
+    layout, onLevels: () => front.show(), engine, feel, weaponTier: () => weaponTierOf(weaponTier, handle.quality?.tier), fail, sound, impactsDb, muted: !settings.current.sound, touch: touchMode(q), ...loadOptions(q), ...buildOption(q),
     ...(duel ? { duel } : {}),
     // The pre-aimed opener (?keystone.preaim): by default the series' first level, until it has a record here.
     // The level's lot sheet (?keystone.goals=shown|all|off): proven goals by default, with the ones met on earlier plays marked.

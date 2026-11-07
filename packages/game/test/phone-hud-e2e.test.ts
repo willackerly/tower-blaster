@@ -93,6 +93,40 @@ describe('the docked phone HUD (PT3)', () => {
     }
   }, 10 * MINUTES);
 
+  it('a running shot on a Bullet Time level: Freeze and Skip together in the slot, then the skipping note, the HUD the same size throughout', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const o = await game.open('/?level=B1&keystone.freeze=3&engine=rapier&offscreen=1&door=0', 2 * MINUTES, UPRIGHT);
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await ready(page, 2 * MINUTES);
+    const before = await hudBoxes(page);
+    expect(await page.evaluate(() => window.__game.fire({ ammo: 'w-bomb', az: 0, y: 4, yaw: 900, pitch: 0, power: 30 }))).toBe(true);
+    await page.waitForSelector('.kg-hud .slot button[data-act="freeze"] + button[data-act="skip"]', { timeout: 30_000 });
+    const both = await hudBoxes(page);
+    expect(both.st, 'the status while Freeze and Skip show').toEqual(before.st);
+    expect(both.tray, 'the tray while Freeze and Skip show').toEqual(before.tray);
+    // In one read: the HUD re-renders while the shot runs, so a located button can be replaced before its box is read.
+    const tray = both.tray!;
+    const buttons = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.kg-hud .slot button')].map((b) => { const r = b.getBoundingClientRect(); return { act: b.dataset.act, x: r.left, w: r.width, h: r.height }; }));
+    expect(buttons.map((b) => b.act)).toEqual(['freeze', 'skip']);
+    for (const b of buttons) {
+      expect(b.h, `${b.act} is a tap target`).toBeGreaterThanOrEqual(44);
+      expect(b.x >= tray.x && b.x + b.w <= tray.x + tray.w + 0.5, `${b.act} inside the tray`).toBe(true);
+    }
+    expect(await page.evaluate(() => window.__game.skip())).toBe(true);
+    // The boxes on the first frame the note is up (a skip can reach the settle within a few frames).
+    const skipping = await (await page.waitForFunction(() => {
+      const note = document.querySelector('.kg-hud .slot .skipping');
+      if (!note || !note.getClientRects().length) return null;
+      const box = (sel: string) => { const r = document.querySelector(sel)!.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; };
+      return { st: box('.kg-hud .st'), tray: box('.kg-hud .tray') };
+    }, undefined, { timeout: 10_000, polling: 'raf' })).jsonValue();
+    expect(skipping!.st, 'the status while it skips').toEqual(before.st);
+    expect(skipping!.tray, 'the tray while it skips').toEqual(before.tray);
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 5 * MINUTES);
+
   it('Layout classic (keystone.hud=panel): the one panel at the top left, and the touch hint line until the first shot', async (ctx) => {
     if (!game.browser()) return ctx.skip();
     const o = await game.open('/?level=L1&engine=rapier&offscreen=1&door=0&keystone.hud=panel', 2 * MINUTES, UPRIGHT);

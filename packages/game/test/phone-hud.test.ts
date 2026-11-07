@@ -67,6 +67,22 @@ describe('the HUD keeps one shape through a round (PT3)', () => {
     expect(slotAction({ level: B1, duel: '', opener: true })).toBeNull();
     const html = hudHtml({ ...base, strokes: 1, collapse: 0.4, canBank: true, freezes: fz(false, true) });
     expect([...html.matchAll(/data-act="(freeze|bank|opener)"/g)].map((m) => m[1])).toEqual(['freeze']);
+    // Skip (PT6) shares a running shot's moment: after Freeze, before the opener and Bank; then a note while it skips.
+    expect(slotAction({ level: B1, canSkip: true, opener: true, canBank: true })).toBe('skip');
+    expect(slotAction({ level: L1, skipping: true })).toBe('skipping');
+    expect(slotAction({ level: B1, freezes: fz(false, true), canSkip: true })).toBe('freeze');
+    expect(slotAction({ level: B1, freezes: fz(true, false), canSkip: false })).toBe('resume');
+    expect(slotAction({ level: B1, duel: '', canSkip: true })).toBeNull();
+  });
+  it('the slot holds Skip, Freeze with Skip beside it on a Bullet Time level, and the skipping note, in the same place', () => {
+    const fz = { left: 1, total: 2, frozen: false, can: true };
+    const slot = (html: string) => html.match(/<span class="slot[^"]*">(.*?)<\/span><span class="small note">/)![1]!;
+    const running = { ...base, strokes: 1, collapse: 0.2, phase: 'running' };
+    expect([...slot(hudHtml({ ...running, canSkip: true })).matchAll(/data-act="(\w+)"/g)].map((m) => m[1])).toEqual(['skip']);
+    expect([...slot(hudHtml({ ...running, canSkip: true, freezes: fz })).matchAll(/data-act="(\w+)"/g)].map((m) => m[1])).toEqual(['freeze', 'skip']);
+    expect(slot(hudHtml({ ...running, skipping: true }))).toMatch(/class="small skipping">skipping to the settle…/);
+    // Skip shows nowhere else in the HUD.
+    expect([...hudHtml({ ...running, canSkip: true }).matchAll(/data-act="skip"/g)]).toHaveLength(1);
   });
 });
 

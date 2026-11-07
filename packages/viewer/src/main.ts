@@ -10,14 +10,14 @@ import { makeEngine, parseSpec } from '@tb/bench';
 import { type BodyDesc, type EngineHealth, type EngineInfo, type InputEvent, limitsHit, type PhysicsEngine, type Snapshot, spawnedBodies } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { DEFAULT_AVBD } from '@tb/physics-ref';
-import { GAME_KEYS, gameOverlays, playLine, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureMarks, structureTints } from '@tb/game';
-import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, cubeScale, type Driver, type Shot } from '@tb/keystone';
+import { applyEditAction, EditController, type EditAction, EditView, type EditOptions, GAME_KEYS, gameOverlays, isCatalogName, isEditTool, mountEditPanel, playLine, type GameHandle, installGameStyles, newGameHandle, playKeystone, structureMarks, structureTints } from '@tb/game';
+import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, cubeScale, type Driver, type LevelDef, scenarioLevel, type Shot } from '@tb/keystone';
 import { clampPitch, EYE_ABOVE_GROUND, frame, rayThrough, viewProj, eyeOf, orbitAt, poseOf, type CameraPose, type Orbit } from './camera.ts';
 import { alphaAt, newArrivals, newClock, newPacer, pauseLatch, runFree, stepsDue, taskYield, trackSimSpeed, Window } from './loop.ts';
 import type { V3 } from './math.ts';
 import { HEALTH_MS, limitFix, limitFixLabel, limitsHtml } from './health.ts';
 import { escapeHtml } from './html.ts';
-import { bounceOn, engineSpec, firedBody, froudeSpeed, keystoneEngine, levelOf, pageLevels, parseViewerConfig, presetSearch, quarterMetre, scenarioEngineSpec, sceneTitle, tierRefusal, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
+import { bounceOn, defaultPresettle, engineSpec, firedBody, froudeSpeed, keystoneEngine, levelOf, pageLevels, parseViewerConfig, presetSearch, quarterMetre, scenarioEngineSpec, sceneTitle, tierRefusal, toSearch, type ViewerConfig, viewerScene, withOption, worldEngineSpec } from './params.ts';
 import { inLevelGrenade, inLevelWeapon, projectileRadius, pushRadiusLimit, worldGrenade, worldWeapon } from './projectile.ts';
 import { grenadeAsSpec, type GrenadeWorld, type WeaponScale, WeaponRuntime, type WeaponSpec } from '@tb/weapons';
 import { previewBeads, scenePreview } from './weapon-preview.ts';
@@ -116,6 +116,29 @@ interface ViewerHandle {
   inputHook: (() => InputHook) | null;
   /** Collision sound: its state, frames posted to the audio thread and the thread's latest report. */
   sound(): { status: SoundStatus; error: string; posted: number; stats: ViewerSound['stats'] };
+  /** The loaded level's hash (@tb/keystone compileLevel), or null for a scenario; set at each load. */
+  levelHash: string | null;
+  /** Edit mode (C9, docs/game/placement.md; key B, URL edit=1): the sandbox only. */
+  edit: EditHandle;
+}
+/** Edit mode for tests and the console: what the panel and the pointer do, by world rays. */
+interface EditHandle {
+  readonly on: boolean;
+  /** Enter edit mode (a scenario becomes a level first, @tb/keystone scenarioLevel); Play; leave without the edits. */
+  enter(opts?: EditOptions): void;
+  play(): void;
+  cancel(): void;
+  /** A key as the page takes it in edit mode; returns whether it was one. */
+  key(k: string, shift?: boolean): boolean;
+  /** The pointer as a world ray: a move, a press (starts a brush stroke) or a release (a click, or a stroke's end). */
+  ray(kind: 'move' | 'down' | 'up', origin: V3, dir: V3, alt?: boolean): void;
+  status(): string;
+  /** The level as edited (null when not editing). */
+  def(): LevelDef | null;
+  /** Bodies the ghost draws now. */
+  ghosts(): number;
+  /** The hash of the level the last Play started, as compileLevel gives it from the edited definition; null before. */
+  played: string | null;
 }
 type InputHook = (s: Snapshot, step: number) => InputEvent[];
 declare global { interface Window { __viewer: ViewerHandle } }
@@ -129,7 +152,9 @@ const PREVIEW_BEAD = 0.08;
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const hud = document.getElementById('hud')!;
 const errorBox = document.getElementById('error')!;
-const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, painted: [], variant: {}, health: null, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [], blastsDrawn: [], preview: null, previewAt: () => null, game: null, inputHook: null, sound: () => ({ status: 'off', error: '', posted: 0, stats: null }) };
+const handle: ViewerHandle = { status: 'loading', frames: 0, bodies: 0, awake: 0, stepIndex: 0, msPerStep: NaN, snapMs: NaN, resets: 0, overlapped: 0, tinted: 0, painted: [], variant: {}, health: null, camera: () => ({ target: [0, 0, 0], yaw: 0, pitch: 0, distance: 1 }), fire: () => {}, capture: async () => null, inputs: [], blastsDrawn: [], preview: null, previewAt: () => null, game: null, inputHook: null, sound: () => ({ status: 'off', error: '', posted: 0, stats: null }), levelHash: null,
+  edit: { on: false, enter: () => {}, play: () => {}, cancel: () => {}, key: () => false, ray: () => {}, status: () => '', def: () => null, ghosts: () => 0, played: null } };
+
 window.__viewer = handle;
 
 function fail(e: unknown) {
@@ -212,6 +237,12 @@ async function main() {
   // A bare URL opens the default scene (or ?defaults=factory the built-in setup), written into the address bar.
   const start = startSearch(location.search);
   if (start !== location.search) history.replaceState(null, '', start);
+  // Edit mode from the link (edit=1, edit.tool, edit.item): a tool state, not part of the scene, so read once here.
+  const editLink = new URLSearchParams(location.search);
+  const editAtStart: EditOptions | null = editLink.get('edit') === '1' ? {
+    ...(isEditTool(editLink.get('edit.tool') ?? '') ? { tool: editLink.get('edit.tool') as EditOptions['tool'] } : {}),
+    ...(isCatalogName(editLink.get('edit.item') ?? '') ? { item: editLink.get('edit.item') as EditOptions['item'] } : {}),
+  } : null;
   let config = parseViewerConfig(location.search);
   presets(location.search);
   const { device, adapter } = await createDevice({ timestamps: false });
@@ -262,7 +293,7 @@ async function main() {
   // This load's fired weapons, waiting on their triggers (proj.weapon: the grenade or a WeaponSpec).
   let grenades: WeaponRuntime | null = null;
   // The arc preview (weapon-preview.ts): the runtime's world, the last state read, the editor's weapon, where the pointer hovers.
-  let weaponWorld: GrenadeWorld | null = null, lastSnap: Snapshot | null = null, editing: WeaponSpec | null = null;
+  let weaponWorld: GrenadeWorld | null = null, lastSnap: Snapshot | null = null, weaponEditing: WeaponSpec | null = null;
   let hover: [number, number] = [0, 0], previewAt = -Infinity, previewKey = '';
   /** Weapon blasts pushed but not yet seen: drawn (renderer.blast) from the first state at or past their step. */
   let blastsDue: InputEvent[] = [];
@@ -277,6 +308,10 @@ async function main() {
   };
   // The engine's limits (handle.health), read at most every HEALTH_MS and one read at a time.
   let healthAt = -Infinity, healthBusy = false;
+  // Edit mode (C9): time stopped, the level as edited drawn in place of the engine's state. editAfterLoad: enter it once a
+  // scenario has been rebuilt as a level.
+  let editing: EditController | null = null, editAfterLoad: EditOptions | null = null;
+  const editView = new EditView(renderer, source);
 
   async function reset() {
     resetting = true;
@@ -300,6 +335,11 @@ async function main() {
     resetting = false;
     handle.stepIndex = engine.stepIndex;
     handle.resets++;
+    if (editAfterLoad) {
+      const o = editAfterLoad;
+      editAfterLoad = null;
+      enterEdit(o);
+    }
     // Show the new scene's HUD and any notice now: with loop=free, frames (which redraw it
     // every 10) need not keep pace with steps.
     drawHud();
@@ -320,6 +360,8 @@ async function main() {
     const s = await engine.snapshot();
     config = want;
     scene = next;
+    // A load ends edit mode (Play, Cancel, R, a new scene from the panel).
+    if (editing) leaveEdit();
     handle.variant = engine.info.variant;
     handle.health = null;
     healthAt = -Infinity;
@@ -335,6 +377,7 @@ async function main() {
     // A level draws as the game draws it: crowns gold, heritage celadon, materials tinted (@tb/game structureTints), stones marked (structureMarks).
     if (fxSlots) renderer.clearFx(0, fxSlots);
     const def = levelOf(want), compiled = def ? compileLevel(def) : null, tints = compiled ? structureTints(compiled) : null;
+    handle.levelHash = compiled?.hash ?? null;
     // On a level's page a weapon's cube units stand for the level's block (inLevelGrenade); a level of no blocks keeps them.
     levelScale = compiled && compiled.meta.n > 0 ? cubeScale(compiled) : null;
     if (tints) renderer.setFx(0, tints);
@@ -438,7 +481,7 @@ async function main() {
     },
     camera: () => poseOf(orbit),
     editing(spec) {
-      editing = spec;
+      weaponEditing = spec;
       previewKey = '';
     },
     setWeapons(w) {
@@ -473,6 +516,8 @@ async function main() {
   // step: the engine step the snapshot is of, for the input hook.
   function apply(s: Snapshot, t0: number, step: number) {
     lastSnap = s;
+    // Edit mode draws the level as edited; a read that lands after it began is not shown.
+    if (editing) return;
     source.update(s, shapesFor(s.count));
     sound.snapshot(s, shapes, eyeOf(orbit), orbit.target);
     snapMs.push(performance.now() - t0);
@@ -565,7 +610,7 @@ async function main() {
   /** The weapon a preview shows: the editor's while it is open, else the fired one's with weapon.preview=1; in world units. */
   function previewSpec(): WeaponSpec | null {
     const p = config.projectile;
-    const cube = editing ?? (config.weapons.preview ? (p.weapon === 'grenade' && p.grenade ? null : p.spec ?? null) : null);
+    const cube = weaponEditing ?? (config.weapons.preview ? (p.weapon === 'grenade' && p.grenade ? null : p.spec ?? null) : null);
     if (cube) return worldWeapon(levelScale ? inLevelWeapon(cube, levelScale) : cube, froudeSpeed(config.scale), config.substeps);
     if (config.weapons.preview && p.weapon === 'grenade' && p.grenade) {
       const g = worldGrenade(levelScale ? inLevelGrenade(p.grenade, levelScale) : p.grenade, froudeSpeed(config.scale), config.substeps);
@@ -646,21 +691,127 @@ async function main() {
     }
   };
 
-  // Pointer: drag orbits (right or shift: pan), a click without drag fires.
-  let drag: { x: number; y: number; moved: number; pan: boolean } | null = null;
+  // Edit mode (C9, docs/game/placement.md). Time stops: physics is paused (paused() below), engine reads are not
+  // shown (apply), and the level as edited is drawn at its authored poses with the ghost (EditView). Play compiles
+  // the edited level and loads it as this page's level (exactly what its file or link loads); Cancel reloads the scene.
+  const buildEl = document.createElement('details');
+  buildEl.id = 'build';
+  buildEl.className = 'panel';
+  document.getElementById('left')!.append(buildEl);
+  const buildPanel = mountEditPanel(buildEl, (x) => editAct(x));
+  buildPanel.show(null);
+  const editSearch = () => `${toSearch(config)}&edit=1`;
+  function showEdit() {
+    if (editing) editView.show(editing, config.feel.marks);
+    buildPanel.show(editing);
+  }
+  function enterEdit(opts: EditOptions = {}) {
+    if (editing || resetting || resetAsked) return;
+    const def = levelOf(config);
+    if (!def) {
+      // A scenario is built on as a level of its own (@tb/keystone scenarioLevel: its bodies at the level's 0.5 m h).
+      let lvl: LevelDef;
+      try {
+        lvl = scenarioLevel(config.scenario, config.params, config.seed);
+      } catch (e) {
+        notice = `Build: ${e instanceof Error ? e.message : String(e)}`;
+        drawHud();
+        return;
+      }
+      editAfterLoad = opts;
+      rebuild({ ...config, customLevel: lvl, level: lvl.id, scale: 1, presettle: defaultPresettle(lvl.id), camera: null }, `${sceneTitle(config)} as a level, to build on`);
+      return;
+    }
+    editing = new EditController(def, { author: true, ...opts });
+    buildEl.open = true;
+    history.replaceState(null, '', editSearch());
+    showEdit();
+    drawHud();
+  }
+  /** Ends edit mode without loading anything (a load is under way, or follows). */
+  function leaveEdit() {
+    editing = null;
+    editView.forget();
+    buildPanel.show(null);
+  }
+  function playEdit() {
+    if (!editing || resetting) return;
+    const def = editing.play();
+    handle.edit.played = compileLevel(def).hash;
+    const same = JSON.stringify(def) === JSON.stringify(levelOf(config));
+    leaveEdit();
+    rebuild(same ? config : { ...config, customLevel: def, level: def.id }, 'Playing the level as built');
+  }
+  function cancelEdit() {
+    if (!editing || resetting) return;
+    leaveEdit();
+    rebuild(config, 'Left edit mode without the edits');
+  }
+  function editAct(x: EditAction) {
+    if (x.a === 'enter') enterEdit();
+    else if (x.a === 'play') playEdit();
+    else if (x.a === 'cancel') cancelEdit();
+    else if (editing && applyEditAction(editing, x)) showEdit();
+  }
+  const editRay = (kind: 'move' | 'down' | 'up', origin: V3, dir: V3, alt = false) => {
+    if (!editing) return;
+    const r = { origin, dir };
+    if (kind === 'move') editing.move(r, { alt });
+    else if (kind === 'down') editing.down(r);
+    else editing.up(r, { alt });
+    showEdit();
+  };
+  handle.edit = {
+    get on() { return editing !== null; },
+    enter: (o) => enterEdit(o),
+    play: playEdit,
+    cancel: cancelEdit,
+    key(k, shift = false) {
+      if (!editing) return false;
+      const did = editing.key(k, { shift });
+      if (did) showEdit();
+      return did;
+    },
+    ray: editRay,
+    status: () => editing?.status() ?? '',
+    def: () => editing?.play() ?? null,
+    ghosts: () => (editing ? editing.bodies().ghost.length : 0),
+    played: null,
+  };
+  /** The world ray under a pointer event. */
+  const rayAt = (e: { clientX: number; clientY: number }) => {
+    const r = canvas.getBoundingClientRect();
+    return rayThrough(orbit, aspect(), ((e.clientX - r.left) / r.width) * 2 - 1, 1 - ((e.clientY - r.top) / r.height) * 2);
+  };
+
+  // Pointer: drag orbits (right or shift: pan), a click without drag fires. In edit mode a click places (or erases),
+  // and with the domino brush a left drag draws the run instead of orbiting.
+  let drag: { x: number; y: number; moved: number; pan: boolean; brush: boolean } | null = null;
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   canvas.addEventListener('pointerdown', (e) => {
     canvas.setPointerCapture(e.pointerId);
-    drag = { x: e.clientX, y: e.clientY, moved: 0, pan: e.button === 2 || e.shiftKey };
+    const pan = e.button === 2 || e.shiftKey;
+    let brush = false;
+    if (editing && e.button === 0 && !pan) {
+      const r = rayAt(e);
+      brush = editing.down({ origin: r.origin as V3, dir: r.dir as V3 });
+      if (brush) showEdit();
+    }
+    drag = { x: e.clientX, y: e.clientY, moved: 0, pan, brush };
   });
   canvas.addEventListener('pointermove', (e) => {
     const r = canvas.getBoundingClientRect();
     hover = [((e.clientX - r.left) / r.width) * 2 - 1, 1 - ((e.clientY - r.top) / r.height) * 2];
+    if (editing && (!drag || drag.brush)) {
+      const r = rayAt(e);
+      editRay('move', r.origin as V3, r.dir as V3, e.altKey);
+    }
     if (!drag) return;
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     drag.moved += Math.abs(dx) + Math.abs(dy);
     drag.x = e.clientX;
     drag.y = e.clientY;
+    if (drag.brush) return;
     if (drag.pan) {
       const s = orbit.distance * 0.0015;
       const cy = Math.cos(orbit.yaw), sy = Math.sin(orbit.yaw);
@@ -671,6 +822,12 @@ async function main() {
     }
   });
   canvas.addEventListener('pointerup', (e) => {
+    if (editing) {
+      const r = rayAt(e);
+      if (drag?.brush || (drag && drag.moved < 5 && e.button === 0 && !e.shiftKey)) editRay('up', r.origin as V3, r.dir as V3, e.altKey);
+      drag = null;
+      return;
+    }
     if (drag && drag.moved < 5 && e.button === 0 && !e.shiftKey) {
       const r = canvas.getBoundingClientRect();
       handle.fire(((e.clientX - r.left) / r.width) * 2 - 1, 1 - ((e.clientY - r.top) / r.height) * 2);
@@ -684,9 +841,18 @@ async function main() {
   addEventListener('keydown', (e) => {
     // Typing in the control panel is not a command.
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+    if (editing) {
+      // R, P and space do nothing while time is stopped.
+      if (e.key === 'Enter') playEdit();
+      else if (e.key === 'Escape') cancelEdit();
+      else if (!e.ctrlKey && !e.metaKey && editing.key(e.key, { shift: e.shiftKey })) showEdit();
+      else if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); if (editing.undo()) showEdit(); }
+      return;
+    }
     if (e.key === ' ') { e.preventDefault(); handle.fire(0, 0); }
     if (e.key === 'r' || e.key === 'R') resetAsked = true;
     if (e.key === 'p' || e.key === 'P') paused = !paused;
+    if (e.key === 'b' || e.key === 'B') enterEdit();
   });
 
   const aspect = () => (config.offscreen ? 640 / 400 : canvas.width / canvas.height);
@@ -714,7 +880,7 @@ async function main() {
       <div class="row"><span>snapshot + upload</span><span>${fmt(handle.snapMs)} ms</span></div>
       <div class="row muted"><span>budget</span><span>7.5 ms/step</span></div>${handle.health ? `\n      ${limitsHtml(handle.health)}` : ''}${config.sound.on ? `
       <div class="row"><span>sound</span><span class="${sound.status === 'error' ? 'warn' : ''}">${sound.status === 'waiting' ? 'click to start' : escapeHtml(sound.status === 'error' ? sound.error : sound.status)} · ${soundMaterialName(config)}</span></div>` : ''}
-      <div class="muted">${escapeHtml(adapter.info.vendor)} ${escapeHtml(adapter.info.architecture)}${paused ? ' · <b>paused</b>' : ''}</div>${notice ? `\n      <div class="warn">${escapeHtml(notice)}</div>` : ''}`;
+      <div class="muted">${escapeHtml(adapter.info.vendor)} ${escapeHtml(adapter.info.architecture)}${paused ? ' · <b>paused</b>' : ''}${editing ? ' · <b>building: time stopped</b>' : ''}</div>${notice ? `\n      <div class="warn">${escapeHtml(notice)}</div>` : ''}`;
     // The button's node stays; only a new fix changes its text.
     const fix = limitFix(handle.health, config.engine);
     if (fix === null) delete fixButton.dataset.fix;
@@ -727,6 +893,7 @@ async function main() {
 
   await reset();
   handle.status = 'running';
+  if (editAtStart) enterEdit(editAtStart);
   let last = performance.now();
   let pendingCapture: { resolve: (s: PixelStats | null) => void; keep: boolean } | null = null;
   handle.capture = (keep = false) => new Promise((resolve) => { pendingCapture = { resolve, keep }; });
@@ -761,7 +928,7 @@ async function main() {
     const frameMs = frameTime(now);
     resize();
     if (resetAsked) { resetAsked = false; await reset(); }
-    const n = paused ? 0 : stepsDue(clock, frameMs, scene.dt, config.maxSteps * config.substeps);
+    const n = paused || editing ? 0 : stepsDue(clock, frameMs, scene.dt, config.maxSteps * config.substeps);
     // A GPU engine's step() only submits, so its steps are timed to completion with finish().
     // refresh() waits for the GPU anyway to read a snapshot back; the wait adds one
     // queue-completion round trip before that readback's copy is submitted.
@@ -779,7 +946,7 @@ async function main() {
     }
     handle.stepIndex = engine.stepIndex;
     if (n > 0) await refresh();
-    await draw(now, paused ? 1 : clock.acc / scene.dt);
+    await draw(now, paused || editing ? 1 : clock.acc / scene.dt);
     if (handle.status === 'running') requestAnimationFrame(() => void tick().catch(fail));
   };
 
@@ -795,7 +962,7 @@ async function main() {
   const physics = () => runFree({
     running: () => handle.status === 'running',
     // A hidden tab gets no frames, so it would show nothing for the GPU and power it spends.
-    paused: () => latch.paused(paused, document.visibilityState === 'visible'),
+    paused: () => latch.paused(paused || editing !== null, document.visibilityState === 'visible'),
     now: () => performance.now(),
     dtMs,
     resetAsked: () => resetAsked,
@@ -829,10 +996,10 @@ async function main() {
     const now = performance.now();
     const frameMs = frameTime(now);
     resize();
-    if (!paused && !resetting && !wasHidden) trackSimSpeed(clock, stepsSinceFrame, frameMs, scene.dt);
+    if (!paused && !editing && !resetting && !wasHidden) trackSimSpeed(clock, stepsSinceFrame, frameMs, scene.dt);
     stepsSinceFrame = 0;
     wasHidden = false;
-    await draw(now, paused || resetting ? 1 : alphaAt(arrivals, now, dtMs()));
+    await draw(now, paused || editing || resetting ? 1 : alphaAt(arrivals, now, dtMs()));
     // At most two frames queued on the GPU. Nothing else holds this loop back: an offscreen
     // target gets no presentation backpressure, and on a slow GPU (SwiftShader) the queue was
     // 50 s behind after 12 s, starving physics and every readback.

@@ -65,6 +65,9 @@ export interface HudState {
   pulled?: number;
   met?: boolean;
   canBank?: boolean;
+  /** A shot is running and can be skipped to its settle (the Skip button, key K; agent playtest PT6), and whether it is skipping now. */
+  canSkip?: boolean;
+  skipping?: boolean;
   /** The slow-motion tag while physics runs slower than real time ('80% speed'; pacing.ts slowTag), '' or absent at real time. */
   pace?: string;
   /** The level's pre-aimed opening shot can be fired now (the Fire button, key F). */
@@ -167,17 +170,21 @@ export const CUSTOM_NOTE = 'custom: stars not recorded';
 export const BANK_BUTTON = '<button data-act="bank" class="bank"><kbd>B</kbd> Bank</button>';
 
 /** What the HUD's action slot offers now: one button, always in the same place (docs/game/phone-hud.md). */
-export type SlotAction = 'freeze' | 'resume' | 'opener' | 'bank' | null;
+export type SlotAction = 'freeze' | 'resume' | 'skip' | 'skipping' | 'opener' | 'bank' | null;
 
 /**
- * The action slot's button, by priority: Resume while frozen, Freeze while a running shot can be, the
- * pre-aimed opener before the first shot, Bank while an outcome round can bank. Never two at once: they
- * are offered at different moments (a shot running, before the first, between shots).
+ * The action slot's button, by priority: Resume while frozen, Freeze while a running shot can be, Skip
+ * while a running shot can be skipped to its settle (PT6; then a note while it skips), the pre-aimed opener
+ * before the first shot, Bank while an outcome round can bank. They are offered at different moments (a
+ * shot running, before the first, between shots), apart from Freeze and Skip, which a running shot on a
+ * Bullet Time level offers together: the slot then holds both (`slotHtml`), Freeze first.
  */
-export function slotAction(s: Pick<HudState, 'level' | 'opener' | 'canBank' | 'freezes' | 'duel'>): SlotAction {
+export function slotAction(s: Pick<HudState, 'level' | 'opener' | 'canBank' | 'freezes' | 'duel' | 'canSkip' | 'skipping'>): SlotAction {
   if (s.duel !== undefined) return null;
   if (s.freezes?.frozen) return 'resume';
   if (s.freezes?.can) return 'freeze';
+  if (s.canSkip) return 'skip';
+  if (s.skipping) return 'skipping';
   if (s.opener) return 'opener';
   if (s.canBank && scoringOf(s.level) === 'outcome') return 'bank';
   return null;
@@ -187,6 +194,8 @@ export function slotAction(s: Pick<HudState, 'level' | 'opener' | 'canBank' | 'f
 const SLOT_NOTE: Record<Exclude<SlotAction, null>, string> = {
   resume: 'aim and fire, or Resume: the freeze is kept',
   freeze: 'stop the world to aim',
+  skip: 'to the settle',
+  skipping: '',
   opener: '<span class="kg-desk">or aim and click</span><span class="kg-tch">or drag and lift</span>',
   bank: 'end here, keep the rack',
 };
@@ -199,6 +208,24 @@ const SLOT_NOTE: Record<Exclude<SlotAction, null>, string> = {
  * frame, hidden where it does not apply yet, so the docked HUD keeps one size through the round.
  * `sheet` is the lot sheet's HUD block (lot-hud.ts goalsHudHtml), in the status group.
  */
+/** The Skip button (key K), shown while a running shot can be skipped to its settle. */
+export const SKIP_BUTTON = '<button data-act="skip" class="skip" title="Run the rest of this shot fast, to where it settles: the outcome is the same"><kbd>K</kbd> Skip</button>';
+/** What the slot says while a shot skips (in the slot itself, so the docked HUD, which hides the notes, shows it). */
+const SKIPPING = '<span class="small skipping">skipping to the settle…</span>';
+
+/** The action slot's contents for `act`: its button, Freeze with Skip beside it when both apply, or the skipping note. */
+export function slotHtml(act: SlotAction, s: Pick<HudState, 'canSkip'>): string {
+  switch (act) {
+    case 'resume': return freezeButton(true);
+    case 'freeze': return freezeButton(false) + (s.canSkip ? SKIP_BUTTON : '');
+    case 'skip': return SKIP_BUTTON;
+    case 'skipping': return SKIPPING;
+    case 'opener': return OPENER_BUTTON;
+    case 'bank': return BANK_BUTTON;
+    default: return '';
+  }
+}
+
 export function hudHtml(s: HudState, sheet = ''): string {
   const d = s.level;
   // Chips are buttons (a tap selects, as the key does); kbd hints hide on a touch screen (GAME_CSS, body.kg-touch).
@@ -231,7 +258,7 @@ export function hudHtml(s: HudState, sheet = ''): string {
   const crowns = d.objective.kind === 'hold' ? keepRow(s.crownsDown, s.crownsTotal)
     : !outcome || s.crownsTotal ? `<div class="row"><span>Crowns</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
   const act = slotAction(s);
-  const button = act === 'freeze' || act === 'resume' ? freezeButton(act === 'resume') : act === 'opener' ? OPENER_BUTTON : act === 'bank' ? BANK_BUTTON : '';
+  const button = slotHtml(act, s);
   const slot = `<div class="row slot-row${act ? '' : ' idle'}"><span class="slot${act ? '' : ' empty'}">${button}</span><span class="small note">${act ? SLOT_NOTE[act] : ''}</span>${touchActs(s.strokes)}</div>`;
   return `<div class="st">
     <div class="title">W${d.world}-${esc(d.id.replace(/^L/, ''))} · ${esc(d.name)}${fz?.frozen ? ' <span class="pace frozen" title="physics is frozen: a shot fired now spends a freeze">FROZEN</span>' : pace}</div>
