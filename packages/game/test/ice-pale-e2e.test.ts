@@ -48,10 +48,13 @@ describe('ice pale at any depth (real look)', () => {
     const low = (L: number[]) => (L[0]! + L[1]! + L[2]! + L[3]!) / 4, mid = (L: number[]) => (L[4]! + L[5]! + L[6]! + L[7]!) / 4;
     const now = got['0.7']!, before = got['0']!, none = got['1']!;
     expect(now.length).toBeGreaterThanOrEqual(9);
-    for (let k = 0; k < 8; k++) expect(now[k], `course ${k}`).toBeGreaterThan(0.5);
-    // The opaque shadow darkens the low courses against their own upper neighbours; ice casting no shadow at
-    // all is the ceiling. The screen door closes at least 70% of the gap and keeps them within 7% of the mid courses.
-    expect(low(before)).toBeLessThan(0.85 * mid(before));
+    // T-I1 is a 3 x 3 tower since PT38 (it was a 2 x 2 column): light crosses three blocks, not two, so every
+    // course sits about 0.05 lower (docs/render/ice.md). Still no course near black.
+    for (let k = 0; k < 8; k++) expect(now[k], `course ${k}`).toBeGreaterThan(0.45);
+    // The opaque shadow darkens the low courses against ice casting no shadow at all (the ceiling); on the
+    // 3 x 3 tower it darkens every course alike, so the measure is against the ceiling, not the mid courses.
+    // The screen door closes at least 70% of the gap and keeps them within 7% of the mid courses.
+    expect(low(before)).toBeLessThan(0.85 * low(none));
     expect(low(now)).toBeGreaterThan(0.93 * mid(now));
     expect(low(now) - low(before)).toBeGreaterThan(0.7 * (low(none) - low(before)));
   }, 15 * MINUTES);

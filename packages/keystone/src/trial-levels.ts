@@ -222,15 +222,27 @@ const PROBE_TRIALS: LevelDef[] = [
 
 const iceNote = (what: string): TrialNote => ({ from: `ice (ice.ts): ${what}` });
 
+/** thirdBondWall of ice, two blocks deep (z -1 to 1). */
+const iceWall = (w: number, h: number): Part[] => thirdBondWall(w, h, 'ice').map((p) => (p.kind === 'block' ? { ...p, at: [p.at[0], p.at[1], -1] as [number, number, number], size: [p.size[0], 1, 2] as [number, number, number] } : p));
+
 /**
  * Ice (Will, 2026-11-06: "would be so cool to look like we're shattering ice"). A block cracks from a
  * 1.5 m/s hit and shatters from 5 (ICE_DEFAULTS); ice is slippery (friction 0.05), so ice on ice slides.
+ *
+ * Ice is light (225 against stone's 625) and a cannonball weighs about 18 ice blocks, so a cannonball first
+ * brought T-I1 and T-I2 100% down and left the rest of the rack nothing to do (agent playtest 2, PT38). The
+ * ice racks lead with marbles, which crack and chip; the cannonball is the third item, the one that brings
+ * it down. The structures are stout enough that a marble at the middle (a first visit's click) does not
+ * clear them alone (keystone-lab ice-trials.test.ts, on Rapier and the reference).
  */
+export const ICE_RACK: readonly RackItem[] = ['marble', 'marble', 'cannonball', 'w-grenade', 'w-grenadel'];
 const ICE_TRIALS: LevelDef[] = [
-  // L1's tower, all ice: a cannonball low on it shatters what it hits and cracks most of the rest as it falls.
-  trial(outcomeLevel('T-I1', 'Ice Tower', [{ kind: 'block', at: [-1, 0, -1], size: [2, 10, 2], material: 'ice', courses: [{ k: 9, role: 'crown' }] }], [1, 1], 10, [...TRIAL_RACK_SMALL], { world: 5, objective: { kind: 'crowns' } }), iceNote('a 2 x 2 column 10 courses high, crowned')),
-  // A wall of ice in third bond, 8 long and 6 high: breaking a hole shows the bend of what is behind.
-  trial(outcomeLevel('T-I2', 'Ice Wall', thirdBondWall(8, 6, 'ice'), [4.5, 1], 6, [...TRIAL_RACK_SMALL], { world: 5, objective: { kind: 'collapse', min: 0.3 } }), iceNote('a third-bond wall 8 x 6')),
+  // A 3 x 3 ice tower 10 courses high, its top course nine crowns: a marble at the middle chips a hole and
+  // drops a few crowns; a marble along the crown course, or the cannonball, sweeps them.
+  trial(outcomeLevel('T-I1', 'Ice Tower', [{ kind: 'block', at: [-1.5, 0, -1.5], size: [3, 10, 3], material: 'ice', courses: [{ k: 9, role: 'crown' }] }], [1.5, 1.5], 10, [...ICE_RACK], { world: 5, objective: { kind: 'crowns' } }), iceNote('a 3 x 3 tower 10 courses high, its top course crowns; marbles first')),
+  // A wall of ice two blocks deep in third bond, 8 long and 6 high, to bring 65% down: a marble breaks a hole
+  // that shows the bend of what is behind; the cannonball, or marbles worked along it, bring the rest.
+  trial(outcomeLevel('T-I2', 'Ice Wall', iceWall(8, 6), [4.5, 1], 6, [...ICE_RACK], { world: 5, objective: { kind: 'collapse', min: 0.65 } }), iceNote('a third-bond wall 8 x 6, two deep; marbles first')),
   // A stone keep with an ice crown: four courses of stone under four of ice, the top one crowns.
   trial(outcomeLevel('T-I3', 'Frozen Keep', [{ kind: 'block', at: [-1.5, 0, -1.5], size: [3, 8, 3], material: 'stone', courses: [4, 5, 6, 7].map((k) => ({ k, material: 'ice' as const, ...(k === 7 ? { role: 'crown' as const } : {}) })) }], [1.5, 1.5], 8, [...TRIAL_RACK_SMALL], { world: 5, objective: { kind: 'crowns' } }), iceNote('a 3 x 3 stone keep, its top four courses ice')),
 ];
