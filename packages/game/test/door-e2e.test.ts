@@ -27,8 +27,8 @@ describe('front door', () => {
     if (!o) return ctx.skip();
     const { page, errors } = o;
     expect(await page.evaluate(() => window.__door.open)).toBe(true);
-    // Every rated level (B1-B3, L1-L5, U1-U3, RL1-RL5, F1 on, A1 on); the trials wait behind their toggle.
-    expect(await page.locator('.kg-door .card:not(.duel)').count()).toBe(16 + FUSE_LEVELS.length + AFTERSHOCK_LEVELS.length);
+    // Every rated level (B1-B3, L1-L5, U1-U3, RL1-RL5, F1 on, A1 on, W3 on); the trials wait behind their toggle.
+    expect(await page.locator('.kg-door .card:not(.duel)').count()).toBe(16 + FUSE_LEVELS.length + AFTERSHOCK_LEVELS.length + WAVE_LEVELS.length);
     expect(await page.locator('.kg-door [data-act="trials"]').innerText()).toBe(`TRIALS · UNRATED (${TRIAL_LEVELS.length}) ▸`);
     expect(await page.locator('.kg-door .card.duel').count()).toBe(2);
     expect(await page.locator('.kg-door .play').innerText()).toBe('Play · Long Wall');
