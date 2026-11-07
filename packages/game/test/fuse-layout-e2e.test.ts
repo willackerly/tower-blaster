@@ -32,8 +32,8 @@ const shown = (page: Page, sel: string) => page.evaluate((s) => {
   return { x: r.left, y: r.top, w: r.width, h: r.height, inside: r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight, onTop: hit === e || (hit !== null && e.contains(hit)) };
 }, sel);
 
-/** Every button on the shown card, as `shown` sees it. */
-const cardButtons = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.kg-result.show button')].map((b) => {
+/** Every visible button on the shown card, as `shown` sees it (a phone strip's Details is not drawn on a wide screen). */
+const cardButtons = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.kg-result.show button')].filter((b) => b.getClientRects().length > 0).map((b) => {
   const r = b.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
   return { act: b.dataset.act, inside: r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight, onTop: document.elementFromPoint(cx, cy)?.closest('button') === b };
 }));
