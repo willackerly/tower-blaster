@@ -31,6 +31,7 @@
     "keystone:goals": "tsx packages/keystone-lab/src/goals-cli.ts",
     "duel:bot": "tsx packages/game/src/duel-bot-cli.ts",
     "keystone:settle-study": "tsx packages/keystone-lab/src/settle-study-cli.ts",
+    "rube:gate": "tsx packages/keystone-lab/src/rube-gate-cli.ts",
     "game": "vite packages/game",
     "playtest:build": "tsx packages/playtest/src/build.ts",
     "playtest:local": "tsx packages/playtest/src/local.ts",

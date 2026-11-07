@@ -27,6 +27,19 @@ export function yawQuat(deg: number): Quat {
   return [0, Math.sin(a), 0, Math.cos(a)];
 }
 
+/**
+ * A piece's rotation (PiecePart): `tiltDeg` about its own +z first (positive raises its +x end: a ramp
+ * rising along +x), then `yawDeg` about +y. With no tilt it is exactly yawQuat(yawDeg). Trig is fine
+ * here: a piece's fields, not its bodies, join the level hash (level.ts placedKey).
+ */
+export function pieceQuat(yawDeg: number, tiltDeg = 0): Quat {
+  const y = yawQuat(yawDeg);
+  if (tiltDeg === 0) return y;
+  const a = (tiltDeg * Math.PI) / 360, tz = Math.sin(a), tw = Math.cos(a);
+  // y * t, with y = (0, sy, 0, wy) and t = (0, 0, tz, tw).
+  return [y[1] * tz, y[1] * tw, y[3] * tz, y[3] * tw];
+}
+
 /** The yaw in degrees of a rotation that only turns about +y, or null when it tilts (beyond 1e-9). */
 export function yawOf(q: Quat): number | null {
   if (Math.abs(q[0]) > 1e-9 || Math.abs(q[2]) > 1e-9) return null;
@@ -80,7 +93,8 @@ export function obbOverlap(a: Obb, b: Obb): number {
 
 /** A level body as an oriented box (its shape must be a box). */
 export function obbOfBody(b: BodyDesc): Obb {
-  if (b.shape.kind !== 'box') throw new Error('placement handles boxes only');
+  // A ball is placed against as its bounding cube: conservative for overlaps, close enough for picks.
+  if (b.shape.kind === 'sphere') { const r = b.shape.radius; return { c: b.pos, q: QUAT_ID, half: [r, r, r] }; }
   return { c: b.pos, q: b.rot, half: b.shape.half };
 }
 

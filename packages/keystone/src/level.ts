@@ -12,7 +12,7 @@ import { type ScenarioPart, scenarioBodies, scenarioKey } from './scenario-part.
 import { ammoBody, type LauncherDef, launcherPos, type Shot, type ShotFrame } from './shots.ts';
 import { checkIce, type IceBlock, IceBreaker, iceOf } from './ice.ts';
 import type { BuildDef } from './build.ts';
-import { obbAabb, obbOfBody, obbOverlap, yawQuat } from './placement.ts';
+import { obbAabb, obbOfBody, obbOverlap, pieceQuat } from './placement.ts';
 import { runPoses } from './stroke.ts';
 
 /** A course (layer) override inside a block: change material or role, or leave cells out. */
@@ -36,14 +36,29 @@ export interface BoxPart { kind: 'slab' | 'rod'; at: Vec3; half: Vec3; material:
  * `yaw` its turn about +y in degrees (absent: 0). `placed` marks a piece the player placed under a level's
  * build budget (build.ts), which the editor may take back; authored pieces have none.
  */
-export interface PiecePart { kind: 'piece'; at: Vec3; half: Vec3; yaw?: number; material: MaterialName; role?: Role; placed?: true }
+export interface PiecePart {
+  kind: 'piece'; at: Vec3; half: Vec3; yaw?: number;
+  /**
+   * Degrees about the piece's own +z before the yaw (placement.ts pieceQuat): positive raises its +x end, so a
+   * plank with a tilt is a ramp rising along its length (absent: 0, upright). Rube Lab (docs/game/rube-lab.md).
+   */
+  tilt?: number;
+  /** Bolted to the world (engine-api BodyDesc.pinned, C8): a ramp, wall, shelf or trapdoor that never moves. */
+  pinned?: true;
+  material: MaterialName; role?: Role; placed?: true;
+}
+/**
+ * One ball (a sphere body): `at` its centre in h, `radius` in h. Rube Lab's runner and the build bin's ball
+ * (docs/game/rube-lab.md); `pinned` bolts it (a fixed bumper), `placed` as for a piece.
+ */
+export interface BallPart { kind: 'ball'; at: Vec3; radius: number; material: MaterialName; role?: Role; pinned?: true; placed?: true }
 /**
  * A run of dominoes laid by the stroke brush (stroke.ts): `path` the drawn points (x, z) in h, the
  * dominoes `pitch` h apart centre to centre (straight line), each of half-extents `half` (x across the
  * path, y up, z along it), standing on `y` h (default 0). `omit` lists dominoes left out by index.
  */
 export interface RunPart { kind: 'run'; path: [number, number][]; pitch: number; half: Vec3; y?: number; material: MaterialName; role?: Role; omit?: number[]; placed?: true }
-export type Part = BlockPart | BoxPart | ScenarioPart | PiecePart | RunPart;
+export type Part = BlockPart | BoxPart | ScenarioPart | PiecePart | RunPart | BallPart;
 
 /**
  * What the level asks for; meeting it is the first star. footprintMax (a fraction of the structure
@@ -60,7 +75,14 @@ export type Objective =
    * Undercut's Hollow (docs/game/undercut-bullet-time.md): every crown still up at the end. Outcome
    * levels only; a settle with a crown down ends the level there, failed. Scored on what was pulled.
    */
-  | { kind: 'hold'; footprintMax?: number };
+  | { kind: 'hold'; footprintMax?: number }
+  /**
+   * Rube Lab's bell (docs/game/rube-lab.md): the crowns are the level's bells, watched every step. A bell rings
+   * when its centre enters `region` (h, world: a sensor box, for a runner that must arrive somewhere) or, with
+   * no region, when it has moved `moved` h from home (default rules.ts BELL_MOVED: a target that must be hit). Once rung
+   * it stays rung; the objective is every bell rung.
+   */
+  | { kind: 'bell'; region?: { min: Vec3; max: Vec3 }; moved?: number; footprintMax?: number };
 
 /** How a level is scored: par (strokes, golf stamps; L1 to L5) or outcome (what came down; the spectacle mode). */
 export const SCORINGS = ['par', 'outcome'] as const;
@@ -179,6 +201,12 @@ export interface LevelDef {
    * first shot (time stopped; Play compiles the level with them). Absent: nothing may be placed.
    */
   build?: BuildDef;
+  /**
+   * Rube Lab (docs/game/rube-lab.md, rules.ts rubeStars): the parts par, the least build cost a bot found
+   * that clears. Hashed, unlike stars: progress keeps the best stars per level hash, so a retuned par is a new
+   * record rather than keeping stars earned under the old one.
+   */
+  rube?: { partsPar: number };
   /**
    * Made from an authored level by overrides (URL keys keystone.*): it plays, but cast stars do not
    * apply ("custom: stars not recorded"). Not part of the hash: the overrides already are.
@@ -364,6 +392,9 @@ function body(pos: Vec3, half: Vec3, material: MaterialName, role: Role, part: n
   return { shape: { kind: 'box', half }, pos, rot, linVel: [0, 0, 0], angVel: [0, 0, 0], density: m.density, friction: m.friction, restitution: m.restitution, tag: encodeTag(role, part) };
 }
 
+/** A body's half-extents at rest: a box's, a ball's radius on every axis. */
+export const halfOf = (b: BodyDesc): Vec3 => (b.shape.kind === 'sphere' ? [b.shape.radius, b.shape.radius, b.shape.radius] : b.shape.half);
+
 /** FNV-1a over a string, twice with different offsets: 64 bits as hex. */
 export function hashString(s: string): string {
   let a = 0x811c9dc5, b = 0x01000193 ^ 0x5bd1e995;
@@ -402,7 +433,12 @@ export function compileLevel(def: LevelDef): CompiledLevel {
       for (const b of scenarioBodies(part, h, pitchOf(def))) add(body(b.pos, b.half, part.material, b.role, pi, b.rot), b.role, part.material, pi);
     } else if (part.kind === 'piece') {
       const role = part.role ?? 'plain';
-      add(body([part.at[0] * h, part.at[1] * h, part.at[2] * h], part.half.map((x) => x * h) as Vec3, part.material, role, pi, yawQuat(part.yaw ?? 0)), role, part.material, pi);
+      const b = body([part.at[0] * h, part.at[1] * h, part.at[2] * h], part.half.map((x) => x * h) as Vec3, part.material, role, pi, pieceQuat(part.yaw ?? 0, part.tilt ?? 0));
+      add(part.pinned ? { ...b, pinned: true } : b, role, part.material, pi);
+    } else if (part.kind === 'ball') {
+      const role = part.role ?? 'plain', m = MATERIALS[materialId(part.material)]!;
+      const b: BodyDesc = { shape: { kind: 'sphere', radius: part.radius * h }, pos: [part.at[0] * h, part.at[1] * h, part.at[2] * h], rot: [0, 0, 0, 1], linVel: [0, 0, 0], angVel: [0, 0, 0], density: m.density, friction: m.friction, restitution: m.restitution, tag: encodeTag(role, pi) };
+      add(part.pinned ? { ...b, pinned: true } : b, role, part.material, pi);
     } else if (part.kind === 'run') {
       const role = part.role ?? 'plain', half = part.half.map((x) => x * h) as Vec3, y = ((part.y ?? 0) + part.half[1]) * h;
       const omit = new Set(part.omit ?? []);
@@ -426,7 +462,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   };
   let height = 0;
   bodies.forEach((b, i) => {
-    const half = (b.shape as { half: Vec3 }).half;
+    const half = halfOf(b);
     meta.half.set(half, 3 * i);
     meta.home.set(b.pos, 3 * i);
     height = Math.max(height, b.pos[1] + half[1]);
@@ -460,7 +496,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   // Ice rules join the hash written out whenever the level has ice (as a defaulted weapon does), so retuning
   // ICE_DEFAULTS drops stars cast under the old ones; levels without ice hash as before, whatever physics.ice says.
   if (mats.includes(materialId('ice'))) geometry.physics = { ...geometry.physics, ice: iceOf(def.physics?.ice) };
-  geometry.parts = geometry.parts.map((pt) => (pt.kind === 'scenario' ? scenarioKey(pt) : pt.kind === 'piece' || pt.kind === 'run' ? placedKey(pt) : pt));
+  geometry.parts = geometry.parts.map((pt) => (pt.kind === 'scenario' ? scenarioKey(pt) : pt.kind === 'piece' || pt.kind === 'run' || pt.kind === 'ball' ? placedKey(pt) : pt));
   // A w- item the level gives no weapon of its own plays the built-in (rack.ts weaponOf): the built-in joins the
   // hash as if written out, so retuning one drops stars cast with it. Levels whose rack has none hash as before.
   const defaulted: Record<string, LevelWeapon> = {};
@@ -491,16 +527,18 @@ export function compileLevel(def: LevelDef): CompiledLevel {
  * A piece or run as the hash sees it: its fields in one fixed order and defaults (yaw 0, y 0, no omit) left out, so a
  * level hashes the same whether the build tool, a file or the URL made it.
  */
-function placedKey(pt: PiecePart | RunPart): Part {
+function placedKey(pt: PiecePart | RunPart | BallPart): Part {
   const tail = { material: pt.material, ...(pt.role !== undefined ? { role: pt.role } : {}), ...(pt.placed ? { placed: true as const } : {}) };
-  if (pt.kind === 'piece') return { kind: 'piece', at: pt.at, half: pt.half, ...(pt.yaw ? { yaw: pt.yaw } : {}), ...tail };
+  // tilt and pinned go between yaw and material, and only when set, so every piece made before them hashes as it did.
+  if (pt.kind === 'piece') return { kind: 'piece', at: pt.at, half: pt.half, ...(pt.yaw ? { yaw: pt.yaw } : {}), ...(pt.tilt ? { tilt: pt.tilt } : {}), ...(pt.pinned ? { pinned: true as const } : {}), ...tail };
+  if (pt.kind === 'ball') return { kind: 'ball', at: pt.at, radius: pt.radius, ...(pt.pinned ? { pinned: true as const } : {}), ...tail };
   return { kind: 'run', path: pt.path, pitch: pt.pitch, half: pt.half, ...(pt.y ? { y: pt.y } : {}), ...(pt.omit?.length ? { omit: [...pt.omit].sort((a, b) => a - b) } : {}), ...tail };
 }
 
 /** FNV-1a over the bytes of every body's pose and half-extents (f64). */
 function bodiesDigest(bodies: readonly BodyDesc[]): string {
   const f = new Float64Array(10 * bodies.length);
-  bodies.forEach((b, i) => { f.set(b.pos, 10 * i); f.set(b.rot, 10 * i + 3); f.set((b.shape as { half: Vec3 }).half, 10 * i + 7); });
+  bodies.forEach((b, i) => { f.set(b.pos, 10 * i); f.set(b.rot, 10 * i + 3); f.set(halfOf(b), 10 * i + 7); });
   const u = new Uint8Array(f.buffer);
   let a = 0x811c9dc5;
   for (let i = 0; i < u.length; i++) a = Math.imul(a ^ u[i]!, 0x01000193) >>> 0;
@@ -600,6 +638,12 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
   if (fz) issues.push({ code: 'freeze', message: fz });
   for (const message of chargeIssues(c)) issues.push({ code: 'charge', message });
   if (def.rack.includes(PLUNGER) && !(def.charges ?? []).some((ch) => (ch.arm ?? 'plunger') === 'plunger')) issues.push({ code: 'charge', message: 'the rack has a plunger, and the level no charge a plunger arms' });
+  if (def.objective.kind === 'bell') {
+    const o = def.objective;
+    if (m.crowns.length === 0) issues.push({ code: 'objective', message: 'a bell objective needs a bell (a crown) to ring' });
+    if (o.moved !== undefined && !(o.moved > 0)) issues.push({ code: 'objective', message: `bell moved must be above 0 h: ${o.moved}` });
+    if (o.region && ![0, 1, 2].every((k) => o.region!.min[k]! < o.region!.max[k]!)) issues.push({ code: 'objective', message: `bell region min must be under max on every axis: ${JSON.stringify(o.region)}` });
+  }
   if (def.objective.kind === 'hold') {
     if (scoringOf(def) !== 'outcome') issues.push({ code: 'objective', message: 'a hold objective needs outcome scoring (a par level ends at its clear)' });
     if (m.crowns.length === 0) issues.push({ code: 'objective', message: 'a hold objective needs a crown to keep up' });
@@ -611,13 +655,17 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
   // A turned body (a domino on a curve, a placed piece at a yaw) is boxed by its world AABB and its overlaps measured as oriented
   // boxes (placement.ts obbOverlap), so neighbours on a curve whose AABBs cross are not flagged; upright bodies are as before.
   const bodies = c.scene.bodies, turned = (i: number) => { const q = bodies[i]!.rot; return q[0] !== 0 || q[1] !== 0 || q[2] !== 0; };
+  // Pinned bodies are scenery bolted to the world (C8): two may interpenetrate (a ramp dipping into a shelf; contacts
+  // between pins do nothing), they need no support, and as infinite masses they set no mass ratio.
+  const pinned = (i: number) => bodies[i]!.pinned === true;
   const boxes = Array.from({ length: m.n }, (_, i) => (turned(i) ? obbAabb(obbOfBody(bodies[i]!)) : aabb(m, i)));
   // One pass at the wider margin; the support relation below needs a subset of these pairs.
   const pairs = nearPairs(boxes, 0.1 * h);
   for (const [i, j] of pairs) {
     const A = boxes[i]!, B = boxes[j]!;
     const depth = turned(i) || turned(j) ? obbOverlap(obbOfBody(bodies[i]!), obbOfBody(bodies[j]!)) : Math.min(...[0, 1, 2].map((k) => Math.min(A.hi[k]!, B.hi[k]!) - Math.max(A.lo[k]!, B.lo[k]!)));
-    if (depth > eps) issues.push({ code: 'overlap', message: `bodies ${i} and ${j} overlap by ${(depth / h).toFixed(3)} h`, bodies: [i, j] });
+    if (depth > eps && !(pinned(i) && pinned(j))) issues.push({ code: 'overlap', message: `bodies ${i} and ${j} overlap by ${(depth / h).toFixed(3)} h`, bodies: [i, j] });
+    if (pinned(i) || pinned(j)) continue;
     const ratio = Math.max(m.mass[i]! / m.mass[j]!, m.mass[j]! / m.mass[i]!);
     if (ratio > 10) issues.push({ code: 'mass-ratio', message: `bodies ${i} and ${j} touch with mass ratio ${ratio.toFixed(1)} > 10`, bodies: [i, j] });
   }
@@ -647,7 +695,7 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
   };
   for (let i = 0; i < m.n; i++) {
     const A = boxes[i]!;
-    if (A.lo[1]! < eps) continue;
+    if (A.lo[1]! < eps || pinned(i)) continue;
     let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
     for (const j of below[i]!) {
       const B = boxes[j]!;
@@ -666,9 +714,10 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
   // Nothing to bring down: the structure's energy over lying flat is under one common block falling one h.
   if (m.n > 0) {
     let pe0 = 0, floor = 0;
-    for (let i = 0; i < m.n; i++) { pe0 += peOf_mJ(m.mass[i]!, m.home[3 * i + 1]!); floor += peOf_mJ(m.mass[i]!, Math.min(m.half[3 * i]!, m.half[3 * i + 1]!, m.half[3 * i + 2]!)); }
+    for (let i = 0; i < m.n; i++) if (!pinned(i)) { pe0 += peOf_mJ(m.mass[i]!, m.home[3 * i + 1]!); floor += peOf_mJ(m.mass[i]!, Math.min(m.half[3 * i]!, m.half[3 * i + 1]!, m.half[3 * i + 2]!)); }
     const block = commonMass(m), least = peOf_mJ(block, h);
-    if (pe0 - floor < least) issues.push({ code: 'flat', message: `the structure holds ${((pe0 - floor) / 1000).toFixed(1)} J over lying flat, under one ${block.toFixed(1)} kg block falling 1 h (${(least / 1000).toFixed(1)} J): nothing to bring down` });
+    // A bell level brings nothing down: what it must do is ring the bell.
+    if (pe0 - floor < least && def.objective.kind !== 'bell') issues.push({ code: 'flat', message: `the structure holds ${((pe0 - floor) / 1000).toFixed(1)} J over lying flat, under one ${block.toFixed(1)} kg block falling 1 h (${(least / 1000).toFixed(1)} J): nothing to bring down` });
   }
 
   issues.push(...rackIssues(c, engine));
@@ -676,6 +725,11 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
 
   for (const i of m.crowns) {
     const x = m.home[3 * i]!, y = m.home[3 * i + 1]!, z = m.home[3 * i + 2]!;
+    if (def.objective.kind === 'bell') {
+      const r = def.objective.region, k = [x / h, y / h, z / h];
+      if (r && k.every((v, a) => v >= r.min[a]! && v <= r.max[a]!)) issues.push({ code: 'crown-start', message: `bell ${i} starts in its region, rung`, bodies: [i] });
+      continue;
+    }
     if (y < def.crownLine * h || x < c.lot.min[0] || x > c.lot.max[0] || z < c.lot.min[1] || z > c.lot.max[1]) issues.push({ code: 'crown-start', message: `crown ${i} starts already down`, bodies: [i] });
   }
   return issues;
