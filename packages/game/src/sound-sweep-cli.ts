@@ -10,7 +10,7 @@
 //   vol=0 edge=1       the viewer scenes: volume (dB over FULL_SCALE) and the block edge (m)
 // usage: tsx packages/game/src/sound-sweep-cli.ts from=dir out=dir name=tag [levels=L1,L2,L3|city|kapla] [options]
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { type AudioFrame, BLOCK, CollapseEngine, FULL_SCALE, SOUND_KNOBS, type SoundKnob, type SoundMaterial, soundMaterials, type SoundSet, tunedMaterial } from '@tb/audio';
+import { type AudioFrame, BLOCK, CollapseEngine, FULL_SCALE, SOUND_KNOBS, type SoundKnob, type SoundMaterial, soundMaterials, SOUND_SETS, type SoundSet, tunedMaterial } from '@tb/audio';
 import { compileLevel, LEVELS } from '@tb/keystone';
 import { AMMO_SLOT, gameSoundDb, slotSounds } from './sound-map.ts';
 
@@ -19,7 +19,7 @@ const KEYS = new Set(['from', 'out', 'name', 'levels', 'set', 'as', 'only', 'vol
 for (const k of Object.keys(kv)) if (!KEYS.has(k) && !k.startsWith('m.') && !k.startsWith('a.')) throw new Error(`unknown option ${k}`);
 if (!kv.from || !kv.out || !kv.name) throw new Error('from=, out= and name= are required');
 const set = (kv.set ?? 'real') as SoundSet;
-if (set !== 'real' && set !== 'classic') throw new Error(`set must be real or classic: ${set}`);
+if (!(SOUND_SETS as readonly string[]).includes(set)) throw new Error(`set must be one of ${SOUND_SETS.join(', ')}: ${set}`);
 const knobs = Object.fromEntries((['ring', 'click', 'grit', 'damping', 'pitch', 'spread', 'rough', 'dense'] as SoundKnob[]).map((k) => [k, kv[k] === undefined ? SOUND_KNOBS[k].def : Number(kv[k])])) as Record<SoundKnob, number>;
 const keyed = (p: string) => Object.fromEntries(Object.entries(kv).filter(([k]) => k.startsWith(p)).map(([k, v]) => [k.slice(2), Number.isNaN(Number(v)) ? v : Number(v)]));
 const over = keyed('m.'), ammoOver = keyed('a.');

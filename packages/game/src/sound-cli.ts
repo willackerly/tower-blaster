@@ -7,7 +7,7 @@
 // usage: tsx packages/game/src/sound-cli.ts [levels=L1,L2 wav=dir frames=dir (writes captures) from=dir (reads them) set=real|classic db=(the set's level)]
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
-import { type AudioFrame, BLOCK, CollapseEngine, FrameTap, FULL_SCALE, loudness, type SoundSet } from '@tb/audio';
+import { type AudioFrame, BLOCK, CollapseEngine, FrameTap, FULL_SCALE, loudness, SOUND_SETS, type SoundSet } from '@tb/audio';
 import { AMMO_KINDS, ammoBody, AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, LEVELS, runSession, type Shot } from '@tb/keystone';
 import type { PhysicsEngine } from '@tb/engine-api';
 import { eyeOf } from '@tb/render/camera';
@@ -17,7 +17,7 @@ import { viewOf } from './view.ts';
 const kv = Object.fromEntries(process.argv.slice(2).map((a) => a.split('=') as [string, string]));
 for (const k of Object.keys(kv)) if (!['levels', 'wav', 'frames', 'from', 'db', 'set'].includes(k)) throw new Error(`unknown option ${k}`);
 const set = (kv.set ?? 'real') as SoundSet;
-if (set !== 'real' && set !== 'classic') throw new Error(`set must be real or classic: ${set}`);
+if (!(SOUND_SETS as readonly string[]).includes(set)) throw new Error(`set must be one of ${SOUND_SETS.join(', ')}: ${set}`);
 const ids = (kv.levels ?? LEVELS.map((l) => l.id).join(',')).split(',');
 const SR = 48000;
 

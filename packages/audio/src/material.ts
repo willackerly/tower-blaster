@@ -148,7 +148,7 @@ const CAST_WALLS = [1, 0.9, 1.11, 0.95, 1.17, 0.86] as const;
  * into neighbours (contact damping: 2-15x a free body's). Each value was picked on a plateau of the
  * AudioSet judge's real-event share over the L1-L3 par lines (docs/sound.md, Realism), not a peak.
  */
-export const SOUND_MATERIALS = {
+export const REAL1_SOUND_MATERIALS = {
   /** Kapla: maritime pine, 117 x 23.4 x 7.8 mm (a plank's table already reaches 18 kHz; unchanged). */
   pine: CLASSIC_SOUND_MATERIALS.pine,
   /** Bright game brick: hollow acrylic (PMMA), as if 8 cm with 2.5 mm walls. */
@@ -173,10 +173,25 @@ export const SOUND_MATERIALS = {
   steel: { ...CLASSIC_SOUND_MATERIALS.steel, law: 'energy', eta: 0.002, roughDb: -12, denseDb: 0 },
 } as const satisfies Record<keyof typeof CLASSIC_SOUND_MATERIALS, SoundMaterial>;
 
-/** A named material set: 'real' (SOUND_MATERIALS, the default) or 'classic' (G6's). */
-export type SoundSet = 'real' | 'classic';
-export const SOUND_SETS = ['real', 'classic'] as const satisfies readonly SoundSet[];
-export const soundMaterials = (set: SoundSet = 'real'): Record<keyof typeof SOUND_MATERIALS, SoundMaterial> => (set === 'classic' ? CLASSIC_SOUND_MATERIALS : SOUND_MATERIALS);
+/**
+ * The sound materials (the "real" set, the default since 2026-11-07): REAL1_SOUND_MATERIALS with stone
+ * and ice matched to real recordings (docs/sound.md, Material identity, step 2c). Stone: discrete modes
+ * to overlap 1, each block its own pitch (natural stone varies ~15%), audible chips, and a landing that
+ * rolls from an edge onto a face (3.2 dB rms from 16 real stone knocks and impacts, whose own spread is
+ * 6.8). Ice: a burst of cracks over 80 ms on every hit, the same landing (Crack, Breaking; 2.5 dB from
+ * 39 real ice recordings). The step 2b sounds stay as set 'real1'.
+ */
+export const SOUND_MATERIALS = {
+  ...REAL1_SOUND_MATERIALS,
+  stone: { ...REAL1_SOUND_MATERIALS.stone, overlap: 1, jitter: 0.15, gritDb: 50, gritRate: 10, face: 0.6 },
+  ice: { ...REAL1_SOUND_MATERIALS.ice, jitter: 0.08, gritDb: 50, gritRate: 30, gritSpread: 0.08, face: 0.5 },
+} as const satisfies Record<keyof typeof CLASSIC_SOUND_MATERIALS, SoundMaterial>;
+
+/** A named material set: 'real' (SOUND_MATERIALS, the default), 'real1' (the real set before step 2c's stone and ice) or 'classic' (G6's). */
+export type SoundSet = 'real' | 'real1' | 'classic';
+export const SOUND_SETS = ['real', 'real1', 'classic'] as const satisfies readonly SoundSet[];
+export const soundMaterials = (set: SoundSet = 'real'): Record<keyof typeof SOUND_MATERIALS, SoundMaterial> =>
+  set === 'classic' ? CLASSIC_SOUND_MATERIALS : set === 'real1' ? REAL1_SOUND_MATERIALS : SOUND_MATERIALS;
 
 const POSITIVE = ['E', 'nu', 'rho', 'eta', 'R', 'mstar'] as const;
 

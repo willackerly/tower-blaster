@@ -11,11 +11,11 @@ import type { BodyDesc } from '@tb/engine-api';
  * Impacts by @tb/audio's collision sound with its current materials ('collapse', the default), with
  * G6's materials ('classic': smooth contacts, table modes only), or as the old pentatonic voices (audio.ts).
  */
-export type GameSoundMode = 'collapse' | 'classic' | 'synth';
-export const GAME_SOUND_MODES = ['collapse', 'classic', 'synth'] as const satisfies readonly GameSoundMode[];
+export type GameSoundMode = 'collapse' | 'real1' | 'classic' | 'synth';
+export const GAME_SOUND_MODES = ['collapse', 'real1', 'classic', 'synth'] as const satisfies readonly GameSoundMode[];
 
-/** The material set a collision-sound mode plays. */
-export const soundSetOf = (mode: GameSoundMode): SoundSet => (mode === 'classic' ? 'classic' : 'real');
+/** The material set a collision-sound mode plays: real1 is the real set before step 2c's stone and ice. */
+export const soundSetOf = (mode: GameSoundMode): SoundSet => (mode === 'classic' ? 'classic' : mode === 'real1' ? 'real1' : 'real');
 
 /** Keystone material name -> its sound in a set (same names in @tb/audio). */
 export function keystoneSounds(set: SoundSet = 'real'): Record<(typeof MATERIALS)[number]['name'], SoundMaterial> {

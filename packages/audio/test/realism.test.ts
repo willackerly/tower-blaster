@@ -8,7 +8,7 @@ import {
   BLOCK, cellOf, CLASSIC_SOUND_MATERIALS, CollapseEngine, contactTime, DENSE_BANDS, DENSE_LOOP, denseField, denseNoise, DV_EDGES,
   CLAMPED_PLATE, clickFilter, clickKernel, forceSpectrum, modalDensity, modalOverlap, radiatedClick, volume, loudness, mass, modes, parseSoundMaterial, plateTable, pulseSpectrum, ROUGH_T, roughTime, SOUND_MATERIALS, type SoundMaterial, VIB_SHARE,
 } from '@tb/audio';
-import { GRIT, gritGrains } from '@tb/audio';
+import { GRIT, GRIT_SHARE, gritGrains, REAL1_SOUND_MATERIALS, soundMaterials, SOUND_SETS } from '@tb/audio';
 import { db, frame, octaves, run, SR } from './helpers.ts';
 
 const REAL = SOUND_MATERIALS as Record<string, SoundMaterial>, CLASSIC = CLASSIC_SOUND_MATERIALS as Record<string, SoundMaterial>;
@@ -276,18 +276,19 @@ describe('step 2 options (off by default)', () => {
   });
 });
 
-describe('step 2c options (off by default): stone and ice from real recordings', () => {
+describe('step 2c options: stone and ice from real recordings (absent: as before; set real1 keeps the step 2b sounds)', () => {
+  const R1 = REAL1_SOUND_MATERIALS as Record<string, SoundMaterial>;
   it('discrete modes on a body with no table (its first mode past fmax) end: the count starts at 20 Hz, not 0', () => {
     // A 5 cm stone cube's first mode is past 18 kHz; from 0 the old step (x * 0.002) never moved and hung.
-    const m = { ...REAL.stone!, overlap: 1 }, t0 = Date.now(), md = modes(m, 0.05);
+    const m = { ...R1.stone!, overlap: 1 }, t0 = Date.now(), md = modes(m, 0.05);
     expect(Date.now() - t0).toBeLessThan(2000);
-    expect(modes(REAL.stone!, 0.05).freq.length).toBe(0);
+    expect(modes(R1.stone!, 0.05).freq.length).toBe(0);
     for (const f of md.freq) { expect(Number.isFinite(f)).toBe(true); expect(f).toBeGreaterThan(20); }
   });
 
   /** Grit alone: modes, click and field silenced, at a 25 cm block (the grains' mean delay is gritSpread there). */
   function gritEngine(over: Partial<SoundMaterial>, ringDb: number) {
-    const m: SoundMaterial = { ...REAL.ice!, ringDb, clickDb: -Infinity, denseDb: -Infinity, roughDb: -Infinity, gritDb: 40, ...over };
+    const m: SoundMaterial = { ...R1.ice!, ringDb, clickDb: -Infinity, denseDb: -Infinity, roughDb: -Infinity, gritDb: 40, ...over };
     const e = new CollapseEngine({ sampleRate: SR, seed: 3, fullScale: 1e6 });
     e.setMaterial(0, m, GRIT.refEdge); e.lowcut = 0; e.limiter.process = () => {};
     return { e, mono: run(e, 600, (b) => { if (b === 2) e.push(frame([], [[5, 1, 0, 0, 0.3]])); }).mono };
@@ -335,7 +336,7 @@ describe('step 2c options (off by default): stone and ice from real recordings',
   });
 
   it('face: contact time from Hertz (absent, 0) toward a flat face, T_hertz^(1 - face) T_face^face', () => {
-    const stone = REAL.stone!, dv = (Math.sqrt(2 * 9.81 * 0.05) * 1.35) / 2; // the knock: a 5 cm drop
+    const stone = R1.stone!, dv = (Math.sqrt(2 * 9.81 * 0.05) * 1.35) / 2; // the knock: a 5 cm drop
     const hertz = contactTime(stone, dv, 0.5);
     expect(hertz).toBeCloseTo(7.53e-3, 4);
     expect(contactTime({ ...stone, face: 0 }, dv, 0.5)).toBe(hertz);
@@ -345,14 +346,43 @@ describe('step 2c options (off by default): stone and ice from real recordings',
     expect(contactTime({ ...stone, face: 0.6 }, dv, 0.5)).toBeCloseTo(hertz ** 0.4 * flat ** 0.6, 12);
     // Still faster for harder hits, by (1 - face) of Hertz's dv^(-1/5).
     expect(contactTime({ ...stone, face: 0.6 }, 4 * dv, 0.5) / contactTime({ ...stone, face: 0.6 }, dv, 0.5)).toBeCloseTo(4 ** (-0.2 * 0.4), 9);
-    for (const face of [-0.1, 1.1]) expect(() => parseSoundMaterial({ face }, REAL.stone)).toThrow(/face/);
+    for (const face of [-0.1, 1.1]) expect(() => parseSoundMaterial({ face }, R1.stone)).toThrow(/face/);
   });
 
   it('rejects grit rates, spreads and ring shares that cannot be', () => {
-    for (const gritRate of [0, 0.05, 61]) expect(() => parseSoundMaterial({ gritRate }, REAL.ice)).toThrow(/gritRate/);
-    for (const gritSpread of [0, 0.0005, 0.3]) expect(() => parseSoundMaterial({ gritSpread }, REAL.ice)).toThrow(/gritSpread/);
-    for (const gritRing of [-0.1, 1.1]) expect(() => parseSoundMaterial({ gritRing }, REAL.ice)).toThrow(/gritRing/);
-    expect(parseSoundMaterial({ gritRate: 30, gritSpread: 0.08, gritRing: 0.5 }, REAL.ice)).toMatchObject({ gritRate: 30, gritSpread: 0.08, gritRing: 0.5 });
+    for (const gritRate of [0, 0.05, 61]) expect(() => parseSoundMaterial({ gritRate }, R1.ice)).toThrow(/gritRate/);
+    for (const gritSpread of [0, 0.0005, 0.3]) expect(() => parseSoundMaterial({ gritSpread }, R1.ice)).toThrow(/gritSpread/);
+    for (const gritRing of [-0.1, 1.1]) expect(() => parseSoundMaterial({ gritRing }, R1.ice)).toThrow(/gritRing/);
+    expect(parseSoundMaterial({ gritRate: 30, gritSpread: 0.08, gritRing: 0.5 }, R1.ice)).toMatchObject({ gritRate: 30, gritSpread: 0.08, gritRing: 0.5 });
+  });
+});
+
+describe('step 2c defaults (Will away 2026-11-06: the recommended picks, stone E and ice E)', () => {
+  it('the real set is real1 with stone and ice from the recordings; real1 and classic stay selectable', () => {
+    expect(SOUND_SETS).toEqual(['real', 'real1', 'classic']);
+    expect(soundMaterials('real1')).toBe(REAL1_SOUND_MATERIALS);
+    expect(soundMaterials()).toBe(SOUND_MATERIALS);
+    const R1 = REAL1_SOUND_MATERIALS as Record<string, SoundMaterial>;
+    for (const k of Object.keys(REAL)) if (k !== 'stone' && k !== 'ice') expect(REAL[k], k).toBe(R1[k]);
+    expect(REAL.stone).toEqual({ ...R1.stone, overlap: 1, jitter: 0.15, gritDb: 50, gritRate: 10, face: 0.6 });
+    expect(REAL.ice).toEqual({ ...R1.ice, jitter: 0.08, gritDb: 50, gritRate: 30, gritSpread: 0.08, face: 0.5 });
+    for (const m of [REAL.stone!, REAL.ice!]) expect(parseSoundMaterial({}, m)).toEqual(m);
+  });
+
+  it(`grit never radiates more than GRIT_SHARE (${GRIT_SHARE}) of an impact's kinetic energy; G6's grit is far under it`, () => {
+    const W = (m: SoundMaterial, edge: number, dv: number) => {
+      const e = new CollapseEngine({ sampleRate: SR, seed: 4, fullScale: 1 }); // Pa out
+      e.setMaterial(0, { ...m, ringDb: -Infinity, clickDb: -Infinity, denseDb: -Infinity, roughDb: -Infinity }, edge); e.lowcut = 0; e.limiter.process = () => {};
+      const { mono } = run(e, 600, (b) => { if (b === 2) e.push(frame([], [[dv, 1, 0, 0, 0]])); });
+      let E = 0; for (const v of mono) E += v * v / 2; // mono is L + R of a centred source: L^2 + R^2 = mono^2 / 2
+      return ((4 * Math.PI) / (1.2 * 343)) * (E / SR) / (0.5 * m.mstar * mass(m, edge) * dv * dv);
+    };
+    // Ice at 4 m/s would shed ~16% without the cap; with it, the share is GRIT_SHARE (Poisson and lognormal scatter).
+    const ice = W(REAL.ice!, 0.5, 4);
+    expect(ice).toBeLessThan(GRIT_SHARE * 1.5); expect(ice).toBeGreaterThan(GRIT_SHARE * 0.5);
+    // Soft hits are under the cap, so the burst is the rate's: about the same share at 0.7 m/s with and without it.
+    expect(W(REAL.ice!, 0.5, 0.7)).toBeLessThan(GRIT_SHARE);
+    expect(W(CLASSIC.stone!, 0.5, 4)).toBeLessThan(GRIT_SHARE / 100);
   });
 });
 

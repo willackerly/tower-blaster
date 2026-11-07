@@ -526,7 +526,17 @@ Fixed: `sparseModes` hung on a body with no mode table (a 5 cm stone cube, whose
 Page for Will: https://claude.ai/artifact/Rx7wFWSp5tVpMhauwwYpQ4 (stone A-E, ice now and B-E, and
 real recordings of each). His picks become the real set's defaults.
 
-Next: Will's picks, then a tower. The free-text describer (CLAP) still needs huggingface.co.
+Defaults (2026-11-07). Will, away for a while, delegated the picks, so the recommended takes are the
+real set: stone E (`overlap: 1, jitter: 0.15, gritDb: 50, gritRate: 10, face: 0.6`) and ice E
+(`jitter: 0.08, gritDb: 50, gritRate: 30, gritSpread: 0.08, face: 0.5`). The real set before this is
+the set `real1` (viewer `snd.set=real1`, game `keystone.sound=real1`); `classic` stays G6's.
+
+A loud crack burst grows as rate dv^3 against the impact's dv^2: ice at 4 m/s would radiate 16% of the
+impact's kinetic energy as grit. Grit is now capped at GRIT_SHARE (5%) of it (fewer grains of the same
+size past that); soft hits and G6's grit are far under the cap, so they play as before. L1-L5 keep
+their level: L1 still limits 1.1 dB, L2 (13 stone hits) peaks at 0.67 where it was 0.43.
+
+Next: a tower, then a level. The free-text describer (CLAP) still needs huggingface.co.
 
 ## Plan (each step lands with its test)
 
