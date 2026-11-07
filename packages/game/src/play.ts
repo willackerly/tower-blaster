@@ -18,12 +18,13 @@ import { Synth, type Voice, voicesFor } from './audio.ts';
 import { CollapseSound, type CollapseStatus } from './collapse-sound.ts';
 import { type GameSoundMode, soundSetOf } from './sound-map.ts';
 import { openingInsets, viewOf } from './view.ts';
+import { DOCK_PORTRAIT, DOCK_SIDEWAYS } from './ui.ts';
 import { outlineAreas, pixelCounts, type ScreenRect } from './sightlines.ts';
 import { ViewSun } from './light.ts';
 export { viewOf } from './view.ts';
 import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, roomAfter } from './engines.ts';
 import { type CardForward, hudHtml, meterTicks, type MeterTick, nextSelection, POWER_STEP, rackChips, resultHtml, starsText, tallyHtml } from './hud.ts';
-import type { Layout } from './layout.ts';
+import { hudInsets, type Layout, type ScreenInsets } from './layout.ts';
 import { type GoalLine, goalsHudHtml, goalsResultHtml } from './lot-hud.ts';
 import { duelHudHtml, duelResultHtml, handoffHtml, scoreFloatHtml } from './duel-hud.ts';
 import { arcBeads, duelMarks, duelView, joinOverlays, type Overlay, turnCue, turnCueText, TurnSwing } from './duel-view.ts';
@@ -129,6 +130,8 @@ export interface GameHandle {
    * end settled (levelEnd) and when the card itself showed; null until then. Docked, the card waits Layout.cardDelay after the end.
    */
   card: { place: 'dock' | 'center'; endedMs: number | null; shownMs: number | null };
+  /** The docked phone HUD's band the level's opening view kept clear of (screen shares, PT3b), or null when the HUD is not docked. */
+  openingHud: ScreenInsets | null;
   /**
    * Wall time of this level's load (engine build and pre-settle), and of each live step since, in ms;
    * moving: each live step's structure bodies in motion (Reductions.nMoving, what settle v2 counts);
@@ -328,7 +331,7 @@ function safetyLimiter(ctx: AudioContext): AudioNode {
 export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
-    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, hold: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0, impact: false, xray: false }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, card: { place: 'center', endedMs: null, shownMs: null }, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
+    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, hold: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0, impact: false, xray: false }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, card: { place: 'center', endedMs: null, shownMs: null }, openingHud: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
     fire: () => false, bank: () => false, skip: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, impact: null, select: () => false, dial: () => null, dialStep: () => null, startQuake: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, sightlines: async () => null, coverage: async () => 0, pullDrawn: null, frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], refreshMarks: () => {},
     state: none, asleep: () => ({ asleep: 0, of: 0 }), line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null, handoff: false, scoreFloat: '',
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
@@ -1069,7 +1072,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     spare = s;
     handle.spare = { level: def.id, settled: false };
     // The next level's opening view is searched now too (view.ts remembers it), not at the swap (B2's takes ~0.2 s).
-    void s.built.then((x) => { if (spare === s && x) { handle.spare = { level: def.id, settled: true }; if (!duel) viewOf(x.c, viewAspect(), undefined, undefined, undefined, { mode: feel.view, insets: openingInsets(viewAspect(), panelTimeline(x.c) !== null) }); } });
+    void s.built.then((x) => { if (spare === s && x) { handle.spare = { level: def.id, settled: true }; if (!duel) viewOf(x.c, viewAspect(), undefined, undefined, undefined, { mode: feel.view, insets: openingInsets(viewAspect(), panelTimeline(x.c) !== null), hud: dockedHud() }); } });
     handle.counts.prefetch = (handle.counts.prefetch ?? 0) + 1;
   }
   /**
@@ -1227,17 +1230,11 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // Rube Lab levels open with their plunger (the trapdoor's release): the HUD's Go button and key F fire it.
     opener = env.opener?.(c) ?? (c.def.rube ? RUBE_GO : null);
     if (!retry) {
-      // A duel's sides are what its view is about (duel-view.ts): it opens on the classic view, the turn view (when on) then swings to the side to fire.
-      orbit = viewOf(c, viewAspect(), undefined, undefined, undefined, { mode: duel ? 'classic' : feel.view, insets: openingInsets(viewAspect(), panelTimeline(c) !== null) });
       setPower(100);
       // The play area: the lot (where debris counts), grown a little, up to the structure's top.
       const half: Vec3 = [(c.lot.max[0] - c.lot.min[0]) / 2 + 2, c.height / 2 + 2, (c.lot.max[1] - c.lot.min[1]) / 2 + 2];
       renderer.setShadowBounds([(c.lot.min[0] + c.lot.max[0]) / 2, c.height / 2, (c.lot.min[1] + c.lot.max[1]) / 2], Math.hypot(...half), half);
     }
-    // A duel opens (and Same start reopens) on the first player's side, as each turn after does (duel-view.ts).
-    if (duel && feel.turnView) orbit = duelView(c, duel.def, duel.turn, viewAspect());
-    // The real look's sun counts from the opening view (light.ts), set as a level loads and kept by a retry.
-    if (!retry) viewSun.yaw = orbit.yaw;
     arcs = duel ? duel.def.sides.map((side) => arcBeads(c, side)) : [];
     regrowT = line ? null : 0;
     waiting = [];
@@ -1259,6 +1256,19 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     handle.grade = null;
     // After an undo the goals stand as at the kept shots' settle, as play would have judged them there.
     if (line?.length) judgeGoals();
+    if (!retry) {
+      // The opening view, once the level's HUD is drawn (its lot sheet and rows set above): docked on a phone, the view
+      // keeps clear of the HUD's measured band (PT3b), not the upright guess. A duel's sides are what its view is about
+      // (duel-view.ts): it opens on the classic view, framed as before; the turn view (when on) then swings to the side to fire.
+      // (A duel's HUD reads the view's yaw and is not measured: it keeps its framing.)
+      const hud = duel ? undefined : (drawHud(), dockedHud());
+      handle.openingHud = hud ?? null;
+      orbit = viewOf(c, viewAspect(), undefined, undefined, undefined, { mode: duel ? 'classic' : feel.view, insets: openingInsets(viewAspect(), panelTimeline(c) !== null), hud });
+    }
+    // A duel opens (and Same start reopens) on the first player's side, as each turn after does (duel-view.ts).
+    if (duel && feel.turnView) orbit = duelView(c, duel.def, duel.turn, viewAspect());
+    // The real look's sun counts from the opening view (light.ts), set as a level loads and kept by a retry.
+    if (!retry) viewSun.yaw = orbit.yaw;
     syncDuel();
     sync();
     phases.swap = performance.now() - ts;
@@ -2017,7 +2027,26 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   function quakeHud(d: QuakeDial): string {
     const key = `${c.hash}|${d.peak}|${d.hz}|${d.sec}|${d.axis}`;
     if (key !== traceFor) { traceFor = key; trace = seismogram(c, dialShot(d)); }
-    return quakePanelHtml(c, d, orbit.yaw, trace, !loading && regrowT === null && !ending && aimable() && driver.session.canFire(QUAKE));
+    // No view yet on a first load's measuring draw (loadNow, PT3b): the compass only turns with it, the panel's size is the same.
+    return quakePanelHtml(c, d, (orbit as Orbit | undefined)?.yaw ?? 0, trace, !loading && regrowT === null && !ending && aimable() && driver.session.canFire(QUAKE));
+  }
+
+  /**
+   * The docked phone HUD's band, screen shares (docs/game/phone-hud.md, PT3b), or undefined when the HUD is not docked
+   * (the desktop panel, Layout classic, a wide screen): upright the strip and the tray with what sits above it (the
+   * touch and pull hints, `.above`, the tray's width); sideways the rail's two groups, and the hints right of it at
+   * the top (ui.ts), a band down to their bottom. Boxes are picked by orientation so layout.ts hudInsets never reads
+   * a hint as a rail.
+   */
+  function dockedHud(): ScreenInsets | undefined {
+    if (!env.hud.classList.contains('kg-dock') || !document.body.classList.contains('kg-touch')) return undefined;
+    const upright = matchMedia(DOCK_PORTRAIT).matches;
+    if (!upright && !matchMedia(DOCK_SIDEWAYS).matches) return undefined;
+    const boxOf = (e: Element) => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; };
+    const boxes = [...env.hud.querySelectorAll(upright ? ':scope > .st, :scope > .tray, :scope > .tray > .above' : ':scope > .st, :scope > .tray')].map(boxOf);
+    const out = hudInsets(boxes, innerWidth, innerHeight), above = env.hud.querySelector(':scope > .tray > .above');
+    if (!upright && above) { const b = boxOf(above); if (b.w > 0 && b.h > 0) out.top = Math.max(out.top, Math.min(1, (b.y + b.h) / innerHeight)); }
+    return out;
   }
 
   function drawHud() {
