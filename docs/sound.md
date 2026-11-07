@@ -698,10 +698,12 @@ the other 11's ~120 ms):
 
 An inflated ball's stiffness is its air's, not its wall's: Hertz on the rubber gives a 3 ms contact,
 where high-speed video puts a basketball's at 10-15 ms; ecForContact solves the contact modulus for
-INFLATED_CONTACT. The inflated balls' wall modes are switched off (ringDb -Infinity): a shell this thin
-and soft puts its plate modes under 20 Hz, where the synth's resonators grew without bound (the beach
-ball's knock peaked at 0.9, 97% of its energy under 20 Hz, at the end of the clip). A guard in @tb/audio
-for modes under hearing is a follow-up. What is not modelled: a ball's air cavity (a basketball's
+INFLATED_CONTACT. A shell this thin and soft put its plate modes under 20 Hz, where the synth's
+resonators barely decay and drifted toward full scale (the beach ball's knock peaked at 0.9, 97% of its
+energy under 20 Hz, at the end of the clip). modes.ts now drops every mode under MIN_MODE_HZ (20 Hz) for
+every model; no Keystone material or ammo had one. The inflated balls' wall modes are off as well
+(ringDb -Infinity): a pressurised membrane is not a clamped plate, and the basketball's plates (now
+20-60 Hz) read as a murmur where without them it reads Knock. What is not modelled: a ball's air cavity (a basketball's
 "ping") and a preset's own size for a weapon shell (a shell takes the nearest ammo slot's size: B2's
 ram, 1 m across, sounds as the 0.5 m cannonball). The judge separates these less than it did stone
 from ice; the baseline here is silence.

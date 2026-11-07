@@ -13,7 +13,7 @@
   "packages/audio/test/grit.test.ts": 19.2,
   "packages/audio/test/ladder.test.ts": 0.7,
   "packages/audio/test/limiter.test.ts": 0.5,
-  "packages/audio/test/modes.test.ts": 0.2,
+  "packages/audio/test/modes.test.ts": 0.4,
   "packages/audio/test/options.test.ts": 0.3,
   "packages/audio/test/realism.test.ts": 11.6,
   "packages/audio/test/tap.test.ts": 0.1,
