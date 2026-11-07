@@ -674,6 +674,38 @@ not add up coherently) and cached by the Synth: building one is a few ms on a CI
 carries only the reach, not the blast's impulse, so two weapons of one reach sound alike.
 `keystone.blastsound=none` brings the old silence back.
 
+## Everything spawned sounds (A6, 2026-11-07)
+
+Before this, a body spawned during a level was heard only if it was Keystone's own steel or iron ammo
+or an ice piece. The rack's real-world presets, every weapon's shell (B1-B3's bomb, B2's ram, the
+firework, the default w-grenade: their densities are scaled to the level's blocks, so they are neither
+steel nor iron) and Mason's Trial probes were silent. sound-map.ts soundSlotOf now goes, for a spawned body:
+ice piece; rack preset (a sphere at a preset's real diameter and its density x MODEL_DENSITY, presetOf);
+Keystone ammo; a structure material's density (a probe) as that material; anything else as the steel
+ammo of its shape, a metal casing. Nothing spawned is silent.
+
+Each preset has its own slot (PRESET_SLOT + k, at its real diameter; 6 slots, ~5 ms to build next to
+the other 11's ~120 ms):
+
+| preset | body model | judge, knock (clatter) |
+|---|---|---|
+| beach ball | vinyl shell, 0.25 kg wall, inflated contact 25 ms | Door, Knock, Tap (wood .78) |
+| basketball | rubber shell, 0.62 kg wall, inflated contact 12 ms | Knock .54, Whack, Door, Thump (wood .91) |
+| bowling ball | solid polyester resin, E 3.5 GPa, loss 0.02 | Sound effect, Tick (no class over .2) |
+| cannonball (24-pounder) | solid cast iron | Tick, Sound effect |
+| wrecking ball | solid steel, 0.9 m | Chink .70, Glass, Ding (metal .80 on clatter): it rings, as the steel ammo does |
+| boulder | the level's stone at 6.7 m, grit and all | Music, Door (clatter: Plop, Crack; mineral .41) |
+
+An inflated ball's stiffness is its air's, not its wall's: Hertz on the rubber gives a 3 ms contact,
+where high-speed video puts a basketball's at 10-15 ms; ecForContact solves the contact modulus for
+INFLATED_CONTACT. The inflated balls' wall modes are switched off (ringDb -Infinity): a shell this thin
+and soft puts its plate modes under 20 Hz, where the synth's resonators grew without bound (the beach
+ball's knock peaked at 0.9, 97% of its energy under 20 Hz, at the end of the clip). A guard in @tb/audio
+for modes under hearing is a follow-up. What is not modelled: a ball's air cavity (a basketball's
+"ping") and a preset's own size for a weapon shell (a shell takes the nearest ammo slot's size: B2's
+ram, 1 m across, sounds as the 0.5 m cannonball). The judge separates these less than it did stone
+from ice; the baseline here is silence.
+
 ## Plan (each step lands with its test)
 
 1. S1 `@tb/audio` material config and mode derivation. Done (#93).
