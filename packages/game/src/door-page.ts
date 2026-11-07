@@ -7,8 +7,7 @@ import { type CompiledLevel, compileLevel, isTrial, type LevelDef } from '@tb/ke
 import { type DoorDuel, DOOR_CSS, doorHtml, doorLevels, type DoorLevel } from './door.ts';
 import type { GameHandle } from './play.ts';
 import type { ProgressStore } from './progress.ts';
-import { QUALITY_SETTINGS, type QualitySetting } from './quality.ts';
-import type { Settings, SettingsStore } from './settings.ts';
+import { doorChange, type Settings, type SettingsStore } from './settings.ts';
 
 export interface DoorPage {
   show(): void;
@@ -87,6 +86,8 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
     if (!b) return;
     const act = b.dataset.act, arg = b.dataset.arg ?? '';
     if (act !== 'reset') armedReset = false;
+    const change = doorChange(act, arg, o.settings.current);
+    if (change) { set(change); return; }
     switch (act) {
       case 'level': pick(Number(arg)); break;
       case 'duel':
@@ -108,17 +109,6 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
         draw();
         if (advanced) o.root.querySelector('.advanced')?.scrollIntoView({ block: 'nearest' });
         break;
-      case 'sound': set({ sound: !o.settings.current.sound }); break;
-      case 'look': set({ look: arg }); break;
-      case 'sharp': set({ sharp: arg === '1' ? 1 : 2 }); break;
-      case 'quality': if ((QUALITY_SETTINGS as readonly string[]).includes(arg)) set({ quality: arg as QualitySetting }); break;
-      case 'camera': set({ camera: arg === 'dynamic' ? 'dynamic' : 'still' }); break;
-      case 'rapid': set({ rapid: arg === 'on' }); break;
-      case 'duelview': set({ duelView: arg === 'on' }); break;
-      case 'handoff': set({ handoff: arg === 'on' }); break;
-      case 'launch': set({ launch: arg === 'level' ? 'level' : 'high' }); break;
-      case 'marks': set({ marks: arg === 'on' }); break;
-      case 'layout': set({ layout: arg === 'classic' ? 'classic' : 'docked' }); break;
       case 'reset':
         if (armedReset) { o.progress.reset(); armedReset = false; } else armedReset = true;
         draw();
