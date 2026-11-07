@@ -1581,10 +1581,22 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     banner('The bell rang!');
   }
 
+  /** The camera's distance from a blast on body b (m), or null when it has no body to stand at (the sound takes REF_DIST). */
+  function blastDistOf(b: number): number | null {
+    const s = driver.snapshot;
+    if (!(b >= 0 && b < s.count)) return null;
+    const e = eyeOf(orbit);
+    return Math.hypot(s.pos[3 * b]! - e[0], s.pos[3 * b + 1]! - e[1], s.pos[3 * b + 2]! - e[2]);
+  }
+
   function onFeedback(fb: Feedback[]) {
     for (const f of fb) {
       handle.counts[f.t] = (handle.counts[f.t] ?? 0) + 1;
-      voices.push(...voicesFor(f, { impacts: !collapse, bell: c.def.objective.kind === 'bell', launch: f.t === 'fired' ? launchShapeOf(driver.bodies[f.body]) : null, launchSound: feel.launchSound }));
+      voices.push(...voicesFor(f, {
+        impacts: !collapse, bell: c.def.objective.kind === 'bell',
+        launch: f.t === 'fired' ? launchShapeOf(driver.bodies[f.body]) : null, launchSound: feel.launchSound,
+        blastDist: f.t === 'blast' ? blastDistOf(f.body) : null, blastSound: feel.blastSound,
+      }));
       switch (f.t) {
         case 'fired':
           juice.kick(f.ammo === 'cannonball' ? 0.05 : 0.03);

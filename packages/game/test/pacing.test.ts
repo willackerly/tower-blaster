@@ -23,7 +23,7 @@ const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 describe('pace feel', () => {
   it('juice and every camera motion are off unless the URL asks for them; the valve and the tail skip are on; every frame is drawn', () => {
     expect(paceFeel(new URLSearchParams(''))).toEqual(DEFAULT_FEEL);
-    expect(DEFAULT_FEEL).toEqual({ hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, handoff: true, duelLead: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', balls: 'painted', marks: true, view: 'goals', impact: true, xray: 'off', fx: 'damage', spent: true, sleepTint: false, sun: 'view', coats: true, pullAnim: true, frozenLook: true, dudNote: true, frozenAim: true, chorusView: 'grid', modeUi: true, launchSound: 'whump' });
+    expect(DEFAULT_FEEL).toEqual({ hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, handoff: true, duelLead: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', balls: 'painted', marks: true, view: 'goals', impact: true, xray: 'off', fx: 'damage', spent: true, sleepTint: false, sun: 'view', coats: true, pullAnim: true, frozenLook: true, dudNote: true, frozenAim: true, chorusView: 'grid', modeUi: true, launchSound: 'whump', blastSound: 'boom' });
     // Impact effects follow the damage by default (PT2); keystone.fx=classic restores the old look. Spent ammo fades (PT19), off by keystone.spent=0.
     expect(paceFeel(new URLSearchParams('?keystone.fx=classic'))).toEqual({ ...DEFAULT_FEEL, fx: 'classic' });
     expect(paceFeel(new URLSearchParams('?keystone.spent=0'))).toEqual({ ...DEFAULT_FEEL, spent: false });
