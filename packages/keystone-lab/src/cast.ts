@@ -11,7 +11,7 @@
 // the best line. T2 = median of the competent ends, T3 = lower quartile of the
 // nudge cloud, both rounded toward easier to two significant figures.
 import type { Vec3 } from '@tb/engine-api';
-import { aimAt, castPlay, checkStars, type CastPlay, type CastSample, type CompiledLevel, compileLevel, isLaunchItem, type LevelDef, nudgedLevel, type RackItem, readShots, sampleValue, type Shot, type StarMetric, type StarsDef, writeShots } from '@tb/keystone';
+import { aimAt, castPlay, checkStars, lowerIsBetter, type CastPlay, type CastSample, type CompiledLevel, compileLevel, isLaunchItem, type LevelDef, nudgedLevel, type RackItem, readShots, sampleValue, type Shot, type StarMetric, type StarsDef, writeShots } from '@tb/keystone';
 import { type EngineSpec, engineSubsteps, makeEngine } from './engines.ts';
 import { COMPASS, lineOf, MAX_SNAPS, plungerCharges, rowRanks } from './fuse-search.ts';
 import { quantile } from './probe.ts';
@@ -293,6 +293,7 @@ export function nudgeLine(shots: readonly Shot[], r: () => number): Shot[] {
     if (s.ammo === 'cue') return { ...s, power: Math.max(0, Math.min(100, s.power + randInt(r, -3, 3))) };
     if (s.ammo === 'pull') return s; // a pull names a block: there is no hand noise in which one
     if (s.ammo === 'plunger') return s; // a timeline is exact steps: no hand noise either
+    if (s.ammo === 'quake') return s; // a quake is dialled in on sliders: no hand noise
     return { ...s, yaw: s.yaw + randInt(r, -6, 6), power: Math.max(0, Math.min(100, s.power + randInt(r, -3, 3))) };
   });
 }
@@ -364,7 +365,7 @@ const castLine = (phase: CastLine['phase'], l: Noisy, p: CastPlay): CastLine => 
 
 // ---- Metrics, quantiles, thresholds ----
 
-export const higherBetter = (metric: StarMetric): boolean => metric !== 'skyline';
+export const higherBetter = (metric: StarMetric): boolean => !lowerIsBetter(metric);
 /** A metric value turned so that larger is better. */
 const good = (metric: StarMetric, v: number) => (higherBetter(metric) ? v : -v);
 

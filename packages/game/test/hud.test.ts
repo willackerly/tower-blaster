@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { B1, B2, compileLevel, levelGoldLine, L1, L2, L3, L4, L5, levelScore, outcomeScore, RL1, type ShotOutcome, U3 } from '@tb/keystone';
 import { HOW_TO_PLAY } from '../src/door.ts';
 import { GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, TOUCH_HELP } from '../src/ui.ts';
-import { BANK_BUTTON, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs } from '../src/hud.ts';
+import { BANK_BUTTON, BANK_QUIET, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs } from '../src/hud.ts';
 
 describe('rack', () => {
   it('groups by kind in first-seen order with counts and keys', () => {
@@ -31,7 +31,7 @@ describe('formatting', () => {
   it('the HUD hides the power bar for an anvil and flags an unreachable aim', () => {
     const base = { level: L2, strokes: 0, crownsDown: 1, crownsTotal: 6, heritageBroken: 0, heritageTotal: 36, power: 60, leverage: { round: 0, shot: 0 }, phase: 'aiming', reachable: null };
     const marble = hudHtml({ ...base, chips: rackChips(L2.rack, L2.rack, 'marble') });
-    expect(marble).toMatch(/W1-2 · Lintel/);
+    expect(marble).toMatch(/L2 · Lintel/);
     expect(marble).toMatch(/1 \/ 6/);
     expect(marble).toMatch(/intact/);
     expect(marble).toMatch(/width:60%/);
@@ -138,7 +138,11 @@ describe('formatting', () => {
     expect(html).toMatch(/Shot 1/);
     expect(html).toMatch(/37%/);
     expect(html).toMatch(/bring 40% down</);
-    expect(html).toContain(BANK_BUTTON);
+    // Before the objective is met, Bank is the quiet outline (PT18: banking then ends the level with no star); once met, the primary.
+    expect(html).toContain(BANK_QUIET);
+    expect(html).not.toContain(BANK_BUTTON);
+    expect(hudHtml({ ...base, collapse: 0.5, met: true, canBank: true })).toContain(BANK_BUTTON);
+    expect(BANK_QUIET).toMatch(/class="bank quiet"/);
     expect(html).not.toMatch(/Par|Crowns/);
     expect(hudHtml({ ...base, collapse: 0.5, met: true, canBank: false })).toMatch(/bring 40% down ✓/);
     expect(hudHtml({ ...base, collapse: 0.5, met: true, canBank: false })).not.toContain('data-act="bank"');

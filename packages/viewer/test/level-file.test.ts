@@ -67,12 +67,17 @@ describe('level files', () => {
     expect(bad({ parts: [{ kind: 'ball', at: [0, 0, 0], radius: -1, material: 'stone' }] })).toThrow(/parts\[0\]\.radius/);
     expect(bad({ objective: { kind: 'bell', region: { min: [0, 0], max: [1, 1, 1] } } })).toThrow(/objective\.region\.min/);
     expect(bad({ charges: [{ host: 0, weapon: 'release', arm: 'later' }] })).toThrow(/charges\[0\]\.arm/);
+    // The parts par lives on the build block (any build level may score on parts); rube is a plain marker.
+    expect(RL1.build?.par).toBe(2);
+    expect(bad({ build: { ...RL1.build, par: 0 } })).toThrow('level.build.par must be 1 or more');
+    expect(bad({ build: { ...RL1.build, par: 1.5 } })).toThrow(/level.build.par must be a whole number/);
+    expect(bad({ rube: { partsPar: 2 } })).toThrow('level.rube must be true');
   });
 
   it('reads racks and solutions holding presets and weapons (p-, w-)', () => {
     const d: LevelDef = { ...structuredClone(L2), rack: ['p-wreckingball', 'w-grenade', 'cannonball'], solutions: { par: [{ ammo: 'w-grenade', az: 540, y: 8, yaw: 0, pitch: 300, power: 80 }] } };
     expect(parseLevelDef(JSON.parse(levelJson(d)))).toEqual(d);
-    expect(() => parseLevelDef({ ...d, rack: ['p-nuke'] })).toThrow(/level.rack\[0\] must be one of marble, cannonball, cue, drop, pull, plunger, p-<preset> \(beachball/);
+    expect(() => parseLevelDef({ ...d, rack: ['p-nuke'] })).toThrow(/level.rack\[0\] must be one of marble, cannonball, cue, drop, pull, plunger, quake, p-<preset> \(beachball/);
   });
 
   it('reads back the outcome fields: scoring, cast stars, the collapse objective and a footprint limit on any objective', () => {

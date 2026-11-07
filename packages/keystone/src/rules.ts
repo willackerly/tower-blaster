@@ -354,6 +354,15 @@ export function heritageBroken(c: CompiledLevel, p: Vec3, q: Quat, home: Vec3): 
   return Math.hypot(p[0] - home[0], p[1] - home[1], p[2] - home[2]) > HERITAGE_MOVE * h || quatAngle(q) > HERITAGE_TILT;
 }
 
+/**
+ * The 'standing' heritage rule (LevelDef.heritage, Aftershock's protected towers), judged at a settle: fallen if it
+ * has dropped more than the heritage tolerance below home or tilts past it. Sideways travel does not count: a tower
+ * that slid on the ground and stands, stands.
+ */
+export function heritageFallen(c: CompiledLevel, p: Vec3, q: Quat, home: Vec3): boolean {
+  return home[1] - p[1] > HERITAGE_MOVE * c.frame.unit || quatAngle(q) > HERITAGE_TILT;
+}
+
 /** Settled height: the top of the highest histogram bin holding at least 3 bodies (strays don't count). */
 export function skyline(hist: Uint32Array, height: number): number {
   for (let b = hist.length - 1; b >= 0; b--) if (hist[b]! >= 3) return ((b + 1) * height) / hist.length;
@@ -385,9 +394,16 @@ export const leverage = (dPE_mJ: number, ke: number) => (ke > 0 ? Math.max(0, dP
  * read this one function (docs/game/scoring.md). One shot: its own leverage.
  */
 export function roundLeverage(shots: readonly Pick<ShotOutcome, 'ke' | 'yield' | 'dPE_mJ'>[]): number {
-  let fired = 0, released = 0;
-  for (const o of shots) { fired += o.ke + o.yield; released += o.dPE_mJ; }
-  return leverage(released, fired);
+  let released = 0;
+  for (const o of shots) released += o.dPE_mJ;
+  return leverage(released, energyFired(shots));
+}
+
+/** The energy fired over `shots`, J (each one's ke + yield): what roundLeverage divides by, and the energy star metric. */
+export function energyFired(shots: readonly Pick<ShotOutcome, 'ke' | 'yield'>[]): number {
+  let fired = 0;
+  for (const o of shots) fired += o.ke + o.yield;
+  return fired;
 }
 
 /** The tier of leverage L against gold line `line`: Brute under it, Clean from it, Elegant from 3x, Keystone from 8x. */
@@ -452,7 +468,7 @@ export interface LevelScore {
   gold?: boolean;
   /** Stars the broken heritage cost (heritageStarsLost): present, at least 1, only when it cost any. */
   heritageStarsLost?: number;
-  /** Rube Lab levels (LevelDef.rube): the build's cost and the level's parts par. Absent elsewhere. */
+  /** Levels with a parts par (BuildDef.par: Rube Lab, Lay levels): the build's cost and the par. Absent elsewhere. */
   parts?: { used: number; par: number };
   /** Bullet Time levels (LevelDef.freeze): freezes spent (freezesUsed) of the level's budget. Absent elsewhere. */
   freezes?: { used: number; total: number };
@@ -504,24 +520,25 @@ export function stampOf(strokes: number, par: number): string {
 }
 
 /**
- * Stars for a Rube Lab level (docs/game/rube-lab.md, scoring): 3 at or under the parts par (what the bot's
- * cheapest robust clear cost), 2 within half again, 1 for any clear; 0 uncleared. Binary clear, no cast.
+ * Stars for a level scored on its parts (BuildDef.par; Rube Lab, docs/game/rube-lab.md, and any build level
+ * that names a par): 3 at or under the parts par (what the bot's cheapest robust clear cost), 2 within half
+ * again, 1 for any clear; 0 uncleared. Binary clear, no cast.
  */
-export function rubeStars(cleared: boolean, spent: number, partsPar: number): 0 | 1 | 2 | 3 {
+export function partsStars(cleared: boolean, spent: number, partsPar: number): 0 | 1 | 2 | 3 {
   if (!cleared) return 0;
   if (spent <= partsPar) return 3;
   if (spent <= Math.ceil(1.5 * partsPar)) return 2;
   return 1;
 }
 
-/** A Rube Lab level's stamp: PARTS PAR at or under the parts par, else +N PARTS. */
-export const rubeStamp = (spent: number, partsPar: number) => (spent <= partsPar ? 'PARTS PAR' : `+${spent - partsPar} PARTS`);
+/** A parts-par level's stamp: PARTS PAR at or under the parts par, else +N PARTS. */
+export const partsStamp = (spent: number, partsPar: number) => (spent <= partsPar ? 'PARTS PAR' : `+${spent - partsPar} PARTS`);
 
 /**
  * A level's score at its end. `spent`: the build's cost (build.ts placedCost), read on a Rube Lab level
- * (def.rube): there the stars are rubeStars on it, less one for any heritage broken (never under one),
- * the stamp is rubeStamp, the score carries `parts`, and there is no gold (a contraption's one plunger
- * is not a stroke to beat).
+ * on a level with a parts par (def.build.par): there the stars are partsStars on it, less one for any
+ * heritage broken (never under one), the stamp is partsStamp, the score carries `parts`, and there is no
+ * gold (a contraption's one plunger is not a stroke to beat).
  */
 export function levelScore(def: LevelDef, shots: ShotOutcome[], cleared: boolean, structureCount: number, spent = 0): LevelScore {
   const s = shots.length, par = parWithFreezes(def, shots);
@@ -540,11 +557,12 @@ export function levelScore(def: LevelDef, shots: ShotOutcome[], cleared: boolean
     const out = shots[s - 1]!.outOfLot, allowance = Math.floor(def.objective.footprintMax * structureCount);
     if (out > allowance) lines.push({ label: 'Footprint', value: -20 * (out - allowance) });
   }
-  if (def.rube) {
-    const base = rubeStars(cleared, spent, def.rube.partsPar), stars = (base > 1 && broken ? base - 1 : base) as 0 | 1 | 2 | 3;
+  const pp = def.build?.par;
+  if (pp !== undefined) {
+    const base = partsStars(cleared, spent, pp), stars = (base > 1 && broken ? base - 1 : base) as 0 | 1 | 2 | 3;
     return {
-      lines, total: floorTotal(lines), stars, stamp: cleared ? rubeStamp(spent, def.rube.partsPar) : 'INCOMPLETE', leverage: L,
-      parts: { used: spent, par: def.rube.partsPar }, ...(base - stars > 0 ? { heritageStarsLost: base - stars } : {}),
+      lines, total: floorTotal(lines), stars, stamp: cleared ? partsStamp(spent, pp) : 'INCOMPLETE', leverage: L,
+      parts: { used: spent, par: pp }, ...(base - stars > 0 ? { heritageStarsLost: base - stars } : {}),
     };
   }
   const gold = cleared && s <= par && broken === 0 && L >= (levelGoldLine(def) ?? DEFAULT_GOLD); // the line levelTier names tiers from

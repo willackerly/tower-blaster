@@ -59,9 +59,8 @@ export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   if (o.build !== undefined) def.build = build(o.build, `${where}.build`);
   if (o.charges !== undefined) def.charges = arr(o.charges, `${where}.charges`).map((c, i) => charge(c, `${where}.charges[${i}]`));
   if (o.rube !== undefined) {
-    const r = object(o.rube, `${where}.rube`);
-    only(r, ['partsPar'], `${where}.rube`);
-    def.rube = { partsPar: int(r.partsPar, `${where}.rube.partsPar`) };
+    if (o.rube !== true) throw new Error(`${where}.rube must be true`);
+    def.rube = true;
   }
   return def;
 }
@@ -104,7 +103,7 @@ function physics(v: unknown, where: string): PhysicsBlock {
 /** A level's build rules (@tb/keystone BuildDef). */
 function build(v: unknown, where: string): BuildDef {
   const o = object(v, where);
-  only(o, ['budget', 'pieces', 'brush', 'material'], where);
+  only(o, ['budget', 'pieces', 'brush', 'material', 'par'], where);
   const b: BuildDef = {};
   if (o.budget !== undefined) {
     const n = int(o.budget, `${where}.budget`);
@@ -114,6 +113,11 @@ function build(v: unknown, where: string): BuildDef {
   if (o.pieces !== undefined) b.pieces = arr(o.pieces, `${where}.pieces`).map((x, i) => oneOf(x, CATALOG_NAMES, `${where}.pieces[${i}]`));
   if (o.brush !== undefined) b.brush = bool(o.brush, `${where}.brush`);
   if (o.material !== undefined) b.material = oneOf(o.material, MATERIAL_NAMES, `${where}.material`) as MaterialName;
+  if (o.par !== undefined) {
+    const n = int(o.par, `${where}.par`);
+    if (n < 1) throw new Error(`${where}.par must be 1 or more`);
+    b.par = n;
+  }
   return b;
 }
 
