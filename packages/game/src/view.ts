@@ -6,6 +6,7 @@ import type { Vec3 } from '@tb/engine-api';
 import type { CompiledLevel } from '@tb/keystone';
 import { DEFAULT_FRAMING, EYE_ABOVE_GROUND, eyeDistance, frame, type Framing, type Orbit, viewProj } from '@tb/render/camera';
 import type { OpeningView } from './options/openview.ts';
+import { compassArrow } from './fuse-timeline.ts';
 import { idRaster, pixelCounts, type ScreenRect, seen } from './sightlines.ts';
 
 /** The share of an upright phone's screen height the HUD takes at the top (the compact touch HUD with its opener and lot sheet line: about 300 of 844 px, plus a margin). */
@@ -17,9 +18,18 @@ export const PORTRAIT_HUD_SHARE = 0.4;
  */
 export const FUSE_PANEL_SHARE = 0.35;
 
-/** The insets a level's own panels add to defaultInsets: upright, the fuse panel's band when the level shows it. */
-export function openingInsets(aspect: number, fusePanel: boolean): Partial<Insets> | undefined {
-  return aspect < 1 && fusePanel ? { bottom: FUSE_PANEL_SHARE } : undefined;
+/** The fuse panel's width on a wide screen with its margins, px (fuse-panel.ts: 300 px wide, 12 px from the right; 8 px to spare). */
+export const FUSE_PANEL_PX = 320;
+
+/**
+ * The insets a level's own panels add to defaultInsets, as fitBox counts them: upright, the fuse panel's band when the
+ * level shows it; wide (PT24: F1's yard opened under the panel), its column down the right side of a `screenW` px
+ * screen, as the part of the framed middle square it covers (fitShares).
+ */
+export function openingInsets(aspect: number, fusePanel: boolean, screenW = 1280): Partial<Insets> | undefined {
+  if (!fusePanel) return undefined;
+  if (aspect < 1) return { bottom: FUSE_PANEL_SHARE };
+  return { right: fitShares({ ...NO_INSETS, right: Math.min(0.5, FUSE_PANEL_PX / screenW) }, aspect).right };
 }
 
 /** Free sky kept over the structure on a wide screen, a share of the height (PT14: T-S1's top ran to the screen's edge). */
@@ -71,6 +81,18 @@ export function structureBox(c: CompiledLevel): { min: Vec3; max: Vec3 } {
   return { min, max };
 }
 
+/**
+ * What an opening view frames: the structure's box, and on a fold level the lot too (the yard the building is to
+ * land in) and the ground compass beside it (fuse-timeline.ts compassArrow), from the ground up (PT24: F1 opened on
+ * the tower with its yard off the screen's edge or under the panel).
+ */
+export function framedBox(c: CompiledLevel): { min: Vec3; max: Vec3 } {
+  const { min, max } = structureBox(c);
+  if (c.def.objective.kind !== 'fold') return { min, max };
+  const a = compassArrow(c), xs = [c.lot.min[0], c.lot.max[0], a.tail[0], a.tip[0]], zs = [c.lot.min[1], c.lot.max[1], a.tail[1], a.tip[1]];
+  return { min: [Math.min(min[0], ...xs), 0, Math.min(min[2], ...zs)], max: [Math.max(max[0], ...xs), max[1], Math.max(max[2], ...zs)] };
+}
+
 /** A view direction: yaw and pitch in degrees, as Framing has them. */
 export type Direction = Pick<Framing, 'yaw' | 'pitch'>;
 
@@ -97,7 +119,7 @@ export interface ViewOptions { insets?: Partial<Insets>; hud?: Insets; mode?: Op
  */
 export function viewOf(c: CompiledLevel, aspect = 1, face?: Direction, focus?: Vec3, only?: ArrayLike<number>, opts: ViewOptions = {}): Orbit {
   if (face) return faceView(c, aspect, face, focus, only);
-  const { min, max } = structureBox(c);
+  const { min, max } = framedBox(c);
   const ins = joinInsets(defaultInsets(aspect, opts.hud), opts.insets);
   const dir = opts.mode === 'classic' ? { yaw: baseYaw(c), pitch: DEFAULT_FRAMING.pitch } : openingDirection(c, aspect, ins, opts.hud ? 'docked' : 'panel');
   return { ...fitBox(min, max, dir, aspect, ins), floor: EYE_ABOVE_GROUND };
@@ -272,7 +294,7 @@ export function searchSize(aspect: number, px = SEARCH_PX): { width: number; hei
 
 /** Score one direction: fit it, rasterize the structure at search size, count what the screen (less the HUD) shows. */
 export function scoreView(c: CompiledLevel, dir: Direction, aspect: number, insets: Insets, hud: HudShape = 'panel', rasterPx = SEARCH_PX): ViewScore {
-  const { min, max } = structureBox(c), size = searchSize(aspect, rasterPx);
+  const { min, max } = framedBox(c), size = searchSize(aspect, rasterPx);
   const o = { ...fitBox(min, max, dir, size.aspect, insets), floor: EYE_ABOVE_GROUND }, m = viewProj(o, size.aspect);
   const covered = hudRects(size.aspect, insets, hud);
   const r = idRaster(c, m, size.width, size.height), px = pixelCounts(r, c.meta.n, covered);
