@@ -1,6 +1,8 @@
 # Settle v4 as the outcome default (agent playtest PT6, PT6b)
 
-**Status.** Outcome levels settle by v4 since PT6b. Par levels keep v1. B1 to B3 pin v3 (`settle: 'v3'` in `big-levels.ts`) until a v4 recast of their stars on Metal.
+**Status.** Outcome levels settle by v4 since PT6b. Par levels keep v1. The levels with cast stars pin v3 until a v4 recast:
+- B1 to B3 (`settle: 'v3'` in `big-levels.ts`), cast on Metal;
+- F1 to F5 (`fuse-levels.ts shipped`), cast on the reference.
 
 ## The rule
 
@@ -14,10 +16,10 @@ Like every rule, v4 also holds while the ammo is still in flight (PT10, `ammoInF
 
 The settle rule is part of the level hash, because it decides the step at which the next shot fires. So changing the default moves the hash of every outcome level that does not name its rule:
 
-- **Moved:** every `T-*` trial and U1 to U3 (34 levels at af0a0a4). None of them has cast stars or a hash-pinned record, so nothing visible is lost.
-- **Kept:** L1 to L5 (par, v1), and B1 to B3, which now name `settle: 'v3'`. Their Metal casts (stars.json), their showcase lines and the B1 opener all stand unchanged.
+- **Moved:** every `T-*` trial and U1 to U3 (34 levels). None of them has cast stars or a hash-pinned record, so nothing visible is lost.
+- **Kept:** the par levels (L1 to L5, the Rube Lab), B1 to B3 and F1 to F5. The B and F levels now name `settle: 'v3'`, so their casts (stars.json), showcase lines and the B1 opener all stand unchanged.
 
-Moving B1 to B3 to v4 means dropping their pin and recasting them on Metal under v4, with the same procedure as their level docs (about 55 min for B1, about 3.5 h for B2, and two seeds plus the extension for B3). That is a Mac job, roadmap row PT6b.
+F1 to F5 were cast on the f64 reference, so their v4 recast can run in the cloud. Moving B1 to B3 to v4 means dropping their pin and recasting them on Metal under v4, with the same procedure as their level docs (about 55 min for B1, about 3.5 h for B2, and two seeds plus the extension for B3). That is a Mac job, roadmap row PT6b.
 
 ## Alternatives considered
 
