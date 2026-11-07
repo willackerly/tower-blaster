@@ -242,7 +242,7 @@ export const HOW_TO_PLAY: readonly HowMode[] = [
     'Ring the bell to clear it; the fewer parts you use, the more stars.',
   ] },
   { id: 'fuse', title: 'Fuse & Fold', lines: [
-    'Set when each charge goes off on the timeline, then press the plunger.',
+    'Set when each charge goes off, on the timeline or by the length of a domino fuse you lay to it, then press the plunger.',
     'Fold the building down into its own lot without touching its neighbours.',
   ] },
   { id: 'aftershock', title: 'Aftershock', lines: [

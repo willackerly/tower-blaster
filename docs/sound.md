@@ -612,6 +612,33 @@ What the level found:
   an explosion, which is what the limiter is there for; a listening item for Will.
 - The real set reads as breaking where real1 read as glass and music on every ice level.
 
+## Launch (A10, 2026-11-07)
+
+The launch cue was a sine gliding down an octave (70 Hz for a cannonball, 110 for the rest): the judge
+heard it as Beep, Music and Sound effect (real share 0.11-0.17). It is now a gas launcher's whump, made
+from the fired body's own size and speed (launch-sound.ts; the launcher stands behind the camera, so it
+is heard close):
+
+- **Barrel**: closed at the breech, open at the muzzle, `BARREL_CALIBRES` (6) shot diameters long. It
+  rings at its odd quarter-wave partials f_k = (2k - 1) c / (4 (L + 0.61 r)) with Q 3 (a wide open end
+  radiates them away in a few cycles), struck as the gas behind the shot vents. A cannonball's barrel
+  (3 m) sits at 27/82/136/190 Hz, a marble's (1.2 m) at 68/204/340/476 Hz.
+- **Muzzle blast**: one Friedlander pulse, its positive phase the cube root of the gas's energy
+  (Hopkinson-Cranz scaling; the gas holds ke (1/0.3 - 1) once the shot takes its 30%): 2.0 ms for a
+  cannonball at 15 m/s, 1.0 ms for a marble at 20.
+- **Chuff**: the gas leaves the bore choked (at the speed of sound), so its turbulence peaks at Strouhal
+  0.2, f = 0.2 c / d (137 Hz for a cannonball, 343 Hz for a marble), broadband (Q 0.7: a narrow band read
+  as a struck bell), venting over four barrel transits (35 ms and 14 ms).
+- Mixed 0.3 / 0.3 / 0.4 by energy; peak 0.35 at 100 kJ, rising as ke^0.1 within 0.2-0.5.
+
+Judged (tools/sound-judge): the marble's whump reads Plop, Door, Whack (real share 0.68-0.69); the
+cannonball's reads 0.79-0.80 real but as Ding, Chink and Clang. YAMNet hears nothing under 125 Hz,
+where the barrel and the blast are (either alone it calls silence), so for a cannonball it judges only
+the chuff's upper half; every mix and band width tried (Q 0.3-1.5) kept that label. So the judge can
+rank the whump against the glide but cannot tune a cannonball's. Real launch recordings (mortar, air
+cannon, potato cannon) are the next reference (A10b). A drop (released, not launched) and the cue (pushed)
+keep the glide. `keystone.launchsound=glide` brings the old cue back.
+
 ## Plan (each step lands with its test)
 
 1. S1 `@tb/audio` material config and mode derivation. Done (#93).
