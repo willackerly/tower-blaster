@@ -10,7 +10,11 @@ import { AVBD_GAP_SLOP, AVBD_ITERATIONS, compileLevel, SERIES } from '@tb/keysto
 import { AvbdReferenceEngine } from '@tb/physics-ref';
 import { loadReport, REST_BOUND_M } from '../src/index.ts';
 
-const REF_MAX = process.env.PHYSICS_GPU_SLOW === '1' ? 2000 : 160;
+const SLOW = process.env.PHYSICS_GPU_SLOW === '1';
+const REF_MAX = SLOW ? 2000 : 160;
+/** A level's case timeout: CI's levels take under a minute; with PHYSICS_GPU_SLOW=1, T-S3 (1,000 bodies) took 667 s
+ * on a runner (nightly run 42394058839), about 0.67 s a body, so a slow case gets 1.5 s a body over the 180 s. */
+const timeout = (n: number) => 180_000 + (SLOW ? 1500 * n : 0);
 export const PARTS = 3;
 const levels = SERIES.flat().map((def) => ({ def, c: compileLevel(def) }));
 
@@ -22,7 +26,7 @@ export function refStabilitySuite(part: number): void {
       const r = await loadReport(new AvbdReferenceEngine({ iterations: AVBD_ITERATIONS, gapSlop: AVBD_GAP_SLOP }), c);
       expect(r.settle.fell, `bodies that fell in the pre-settle (most moved ${r.settle.maxMove.toFixed(3)} m)`).toBe(0);
       expect(r.maxMove).toBeLessThan(REST_BOUND_M);
-    }, 180_000);
+    }, timeout(c.meta.n));
     if (part === 1) it('names the levels too big for the reference here', () => {
       const big = levels.filter((l) => l.c.meta.n > REF_MAX).map((l) => l.def.id);
       if (big.length) console.log(`on the GPU solver and Rapier only (reference up to ${REF_MAX} bodies): ${big.join(', ')}`);
