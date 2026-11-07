@@ -1,7 +1,7 @@
 // HUD and result card. Formatting is pure and tested; the DOM side only
 // writes strings into fixed elements. Level text is authored in this repo,
 // but everything still goes through esc().
-import { castStars, type CompiledLevel, DEFAULT_GOLD, isTrial, itemRef, type LevelDef, type LevelScore, levelGoldLine, levelTier, type Objective, type RackItem, scoringOf, TIER_NAMES, TRIAL_LEVELS } from '@tb/keystone';
+import { castStars, chorusOf, type CompiledLevel, DEFAULT_GOLD, isTrial, itemRef, type LevelDef, type LevelScore, levelGoldLine, levelTier, type Objective, type RackItem, scoringOf, TIER_NAMES, TRIAL_LEVELS } from '@tb/keystone';
 import { PROJECTILE_PRESETS } from '@tb/weapons';
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -200,6 +200,18 @@ export const launchRow = (m: number) => `<div class="row"><span>Height <kbd>W</k
 export const pct = (x: number) => `${Math.floor(100 * x)}%`;
 
 /** What the objective asks, in a few words. */
+/**
+ * A Chorus level's objective (chorus.ts): what clears one world, and in how many worlds. World 0's own
+ * objective check is not the round's, so the HUD row shows this with no tick.
+ */
+export function chorusObjectiveText(d: LevelDef): string | null {
+  const ch = chorusOf(d);
+  return ch ? `${chorusWorldClear(ch.need)} in each of ${ch.worlds} worlds` : null;
+}
+
+/** What clears one Chorus world: every crown down, or `need` of them. */
+export const chorusWorldClear = (need: number | null): string => (need === null ? 'fell every crown' : `fell ${need} crown${need === 1 ? '' : 's'}`);
+
 export function objectiveText(o: Objective): string {
   switch (o.kind) {
     case 'crowns': return 'fell every crown';
@@ -345,7 +357,7 @@ export function hudHtml(s: HudState, sheet = ''): string {
     : outcome
     ? `<div class="row"><span>Shot ${s.strokes}</span>${d.objective.kind === 'hold' ? `<span>Pulled <b class="down${(s.pulled ?? 0) > 0 ? '' : ' none'}">${pct(s.pulled ?? 0)}</b></span>` : `<span>Down <b class="down${(s.collapse ?? 0) > 0 ? '' : ' none'}">${pct(s.collapse ?? 0)}</b></span>`}</div>
     ${s.ticks?.length ? meterHtml(d.objective.kind === 'hold' ? s.pulled ?? 0 : s.collapse ?? 0, s.ticks, d.objective.kind === 'hold' ? 'pulled' : 'down') : ''}
-    <div class="row obj"><span>Objective</span><span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span></div>`
+    <div class="row obj"><span>Objective</span>${chorusObjectiveText(d) !== null ? `<span>${esc(chorusObjectiveText(d)!)}</span>` : `<span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span>`}</div>`
     : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>${d.objective.kind === 'collapse' ? parCollapseRow(d.objective.min, s) : ''}${d.push?.length && s.strokes === 0 ? `<div class="hint small push-hint">${PUSH_HINT}</div>` : ''}`;
   const fz = s.freezes;
   const freezes = fz ? `<div class="row"><span>Freezes</span><span class="${fz.left ? '' : 'spent'}">${fz.left} / ${fz.total}</span></div>` : '';
@@ -424,7 +436,7 @@ export function masonStarsHtml(score: LevelScore, delay = 0): string {
 }
 
 export function goldHtml(level: LevelDef, score: LevelScore, delay = 0): string {
-  if (scoringOf(level) !== 'par' || score.stars === 0) return '';
+  if (scoringOf(level) !== 'par' || score.stars === 0 || score.worlds) return '';
   const line = fmtLeverage(level.lGold ?? DEFAULT_GOLD);
   return score.gold
     ? `<div class="gold got" style="animation-delay:${delay}s">◆ Gold leverage (${line} or more)</div>`
@@ -493,12 +505,14 @@ export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: n
   // A line that costs points (heritage, footprint) is red end to end: its own red line, never netted into another.
   const lines = score.lines.map((l, i) => `<div class="line${l.value < 0 ? ' bad' : ''}" style="animation-delay:${0.15 + 0.22 * i}s"><span>${esc(l.label)}</span><span class="${l.value < 0 ? 'bad' : ''}">${fmtPoints(l.value)}</span></div>`).join('');
   const after = 0.15 + 0.22 * score.lines.length;
+  // Scored on many worlds (Chorus; Mason's Trial shows its count in masonSub): the count is the result; world 0's leverage is information, with no tier.
+  const worlds = score.worlds && !score.mason ? ` · ${score.worlds.cleared} of ${score.worlds.of} worlds cleared` : '';
   const fz = score.freezes ? ` · freezes used ${score.freezes.used}/${score.freezes.total}` : '';
   const lost = score.heritageStarsLost ? `<div class="lost bad" style="animation-delay:${after + 0.7}s">Heritage cracked: ${score.heritageStarsLost} star${score.heritageStarsLost === 1 ? '' : 's'} lost</div>` : '';
   return `<div class="c1">
     <div class="name">${esc(playerName(level))}</div>
     ${level.custom ? `<div class="sub custom">${CUSTOM_NOTE}</div>` : ''}
-    <div class="sub">${shotsText}${'outcome' in score ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''}${score.mason ? '' : ` · <span title="${esc(LEVERAGE_MEANS)}">${leverageWords(score.leverage, level)}</span>`}${fz}</div>
+    <div class="sub">${shotsText}${'outcome' in score ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''}${worlds}${score.mason ? '' : ` · <span title="${esc(LEVERAGE_MEANS)}">${score.worlds ? `leverage ${fmtLeverage(score.leverage)}` : leverageWords(score.leverage, level)}</span>`}${fz}</div>
     ${lines}
     <div class="line total" style="animation-delay:${after}s" title="The lines' sum, never below 0"><span>Total</span><span>${fmtPoints(score.total)}</span></div>
     </div><div class="c2">

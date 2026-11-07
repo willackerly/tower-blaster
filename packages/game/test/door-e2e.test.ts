@@ -7,7 +7,7 @@
 // every series is listed, and a trial picked from the Trials toggle loads in
 // place (no page load), with N and P walking the trials only.
 import { describe, expect, it } from 'vitest';
-import { AFTERSHOCK_LEVELS, B1, FUSE_LEVELS, L1, MASON_LEVELS, type Shot, TRIAL_LEVELS, WAVE_LEVELS, writeShots } from '@tb/keystone';
+import { AFTERSHOCK_LEVELS, B1, CHORUS_LEVELS, FUSE_LEVELS, L1, MASON_LEVELS, type Shot, TRIAL_LEVELS, WAVE_LEVELS, writeShots } from '@tb/keystone';
 import { DEFAULT_SETTINGS, doorChange, type Settings } from '../src/settings.ts';
 import { gamePage } from './page.ts';
 
@@ -33,8 +33,8 @@ describe('front door', () => {
     if (!o) return ctx.skip();
     const { page, errors } = o;
     expect(await page.evaluate(() => window.__door.open)).toBe(true);
-    // Every rated level (B1-B3, L1-L5, U1-U3, RL1-RL5, F1 on, A1 on, W3 on, MT1 on); the trials wait behind their toggle.
-    expect(await page.locator('.kg-door .card:not(.duel)').count()).toBe(16 + FUSE_LEVELS.length + AFTERSHOCK_LEVELS.length + WAVE_LEVELS.length + MASON_LEVELS.length);
+    // Every rated level (B1-B3, L1-L5, U1-U3, RL1-RL5, F1 on, A1 on, W3 on, MT1 on, CH1 on); the trials wait behind their toggle.
+    expect(await page.locator('.kg-door .card:not(.duel)').count()).toBe(16 + FUSE_LEVELS.length + AFTERSHOCK_LEVELS.length + WAVE_LEVELS.length + MASON_LEVELS.length + CHORUS_LEVELS.length);
     expect(await page.locator('.kg-door [data-act="trials"]').innerText()).toBe(`TRIALS · UNRATED (${TRIAL_LEVELS.length}) ▸`);
     expect(await page.locator('.kg-door .card.duel').count()).toBe(2);
     expect(await page.locator('.kg-door .play').innerText()).toBe('Play · Long Wall');
@@ -71,8 +71,8 @@ describe('front door', () => {
     expect(await page.evaluate(() => window.__door.open)).toBe(false);
     await page.keyboard.press('Escape');
     expect(await page.evaluate(() => window.__door.open)).toBe(true);
-    // Every series, the slice first: B1 to B3, L1 to L5, U1 to U3, RL1 to RL5, then Fuse & Fold, Aftershock, Wavefront and Mason's Trial; L1 is the loaded one.
-    expect(await page.locator('.kg-door .card:not(.duel) .id').allInnerTexts()).toEqual(['B1', 'B2', 'B3', 'L1', 'L2', 'L3', 'L4', 'L5', 'U1', 'U2', 'U3', 'RL1', 'RL2', 'RL3', 'RL4', 'RL5', ...FUSE_LEVELS.map((d) => d.id), ...AFTERSHOCK_LEVELS.map((l) => l.id), ...WAVE_LEVELS.map((l) => l.id), ...MASON_LEVELS.map((l) => l.id)]);
+    // Every series, the slice first: B1 to B3, L1 to L5, U1 to U3, RL1 to RL5, then Fuse & Fold, Aftershock, Wavefront, Mason's Trial and Chorus; L1 is the loaded one.
+    expect(await page.locator('.kg-door .card:not(.duel) .id').allInnerTexts()).toEqual(['B1', 'B2', 'B3', 'L1', 'L2', 'L3', 'L4', 'L5', 'U1', 'U2', 'U3', 'RL1', 'RL2', 'RL3', 'RL4', 'RL5', ...FUSE_LEVELS.map((d) => d.id), ...AFTERSHOCK_LEVELS.map((l) => l.id), ...WAVE_LEVELS.map((l) => l.id), ...MASON_LEVELS.map((l) => l.id), ...CHORUS_LEVELS.map((l) => l.id)]);
     expect(await page.locator('.kg-door .card.current .id').innerText()).toBe('L1');
     await page.keyboard.press('Escape');
     expect(await page.evaluate(() => window.__door.open)).toBe(false);

@@ -8,28 +8,39 @@ import { type BrowserCastPlayer, openBrowserCastPlayer } from '../src/cast-brows
 import { build } from '../src/rube.ts';
 import { steps } from '../src/lay.ts';
 import { LAY_SOLUTIONS } from '../src/lay-solutions.ts';
+import { SLOW } from './wave-gpu.ts';
 
 const MINUTES = 60_000;
 
-/**
- * Registers the GPU test of Lay levels `defs`, playing the first `solutions` of each level's authored solutions (all
- * by default). With `maxSteps`, a run stops there and is judged on its bells alone (every one rung by then), not on
- * the session's clear: W6 rings its last bell at about 2,100 steps on SwiftShader but its fallen field does not come
- * quiet before the 60 s window (3,600 steps), and the whole window costs CI over 6 minutes. `bare: false` skips the
- * nothing-built run (the Rapier test has it) where a file's time is short.
- */
-export function layGpuSuite(defs: readonly LevelDef[], solutions = Infinity, maxSteps?: number, bare = true): void {
-  let player: BrowserCastPlayer | null = null;
-  beforeAll(async () => {
-    try {
-      player = await openBrowserCastPlayer({ ...(process.env.TB_CHANNEL ? { channel: process.env.TB_CHANNEL } : {}) });
-    } catch (e) {
-      if (requireWebGPU()) throw e;
-    }
-  }, 3 * MINUTES);
-  afterAll(async () => { await player?.close(); });
+export interface LayGpuOpts {
+  /** How many of each level's authored solutions to play (all by default). */
+  solutions?: number;
+  /**
+   * Stop each run here and judge it on its bells alone (every one rung by then), not on the session's clear: W6 rings
+   * its last bell at about 2,100 steps on SwiftShader but its fallen field does not come quiet before the 60 s window
+   * (3,600 steps), and the whole window costs CI over 6 minutes.
+   */
+  maxSteps?: number;
+  /** Also play the level with nothing built (default true; the Rapier tests have it, so a file short of time skips it). */
+  bare?: boolean;
+  /** Only with SLOW (wave-gpu.ts): a real GPU or PHYSICS_GPU_SLOW=1. On a PR the file is registered skipped. */
+  slow?: boolean;
+}
 
-  describe('Wavefront Lay levels on the GPU solver', () => {
+/** Registers the GPU test of Lay levels `defs` (lay-solutions.ts). */
+export function layGpuSuite(defs: readonly LevelDef[], opts: LayGpuOpts = {}): void {
+  const { solutions = Infinity, maxSteps, bare = true } = opts;
+  describe.skipIf(opts.slow === true && !SLOW)('Wavefront Lay levels on the GPU solver', () => {
+    let player: BrowserCastPlayer | null = null;
+    beforeAll(async () => {
+      try {
+        player = await openBrowserCastPlayer({ ...(process.env.TB_CHANNEL ? { channel: process.env.TB_CHANNEL } : {}) });
+      } catch (e) {
+        if (requireWebGPU()) throw e;
+      }
+    }, 3 * MINUTES);
+    afterAll(async () => { await player?.close(); });
+
     it.for(defs.map((d) => d.id))('%s: the authored solutions ring every bell, nothing built rings none, pins hold', { timeout: 15 * MINUTES }, async (id, ctx) => {
       if (!player) return ctx.skip();
       expect(player.engine).toBe('gpu');

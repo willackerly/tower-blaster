@@ -87,33 +87,5 @@ export function slope(xs: readonly number[], ys: readonly number[]): number {
   return sxx > 0 ? sxy / sxx : NaN;
 }
 
-/**
- * Two-sample Kolmogorov-Smirnov test: the largest gap D between the samples' empirical CDFs, and its p-value
- * from the asymptotic Kolmogorov distribution with Stephens' small-sample correction
- * (sqrt(ne) + 0.12 + 0.11 / sqrt(ne), ne = n m / (n + m)); Numerical Recipes' probks.
- */
-export function ks2(a: readonly number[], b: readonly number[]): { D: number; p: number } {
-  const x = [...a].sort((p, q) => p - q), y = [...b].sort((p, q) => p - q);
-  let i = 0, j = 0, D = 0;
-  while (i < x.length && j < y.length) {
-    const v = Math.min(x[i]!, y[j]!);
-    while (i < x.length && x[i]! <= v) i++;
-    while (j < y.length && y[j]! <= v) j++;
-    D = Math.max(D, Math.abs(i / x.length - j / y.length));
-  }
-  const ne = (x.length * y.length) / (x.length + y.length), lam = (Math.sqrt(ne) + 0.12 + 0.11 / Math.sqrt(ne)) * D;
-  return { D, p: kolmogorovQ(lam) };
-}
-
-/** Q_KS(lambda) = 2 sum_{k>=1} (-1)^(k-1) exp(-2 k^2 lambda^2), 1 near 0. */
-export function kolmogorovQ(lam: number): number {
-  if (lam < 1e-3) return 1;
-  let sum = 0, prev = 0;
-  for (let k = 1; k <= 100; k++) {
-    const term = 2 * (k % 2 ? 1 : -1) * Math.exp(-2 * k * k * lam * lam);
-    sum += term;
-    if (Math.abs(term) <= 1e-10 * Math.abs(prev) || Math.abs(term) < 1e-12) return Math.min(1, Math.max(0, sum));
-    prev = term;
-  }
-  return 1;
-}
+// The two-sample KS test moved to @tb/metrics (stats.ts) so Chorus's verify (keystone-lab) shares it.
+export { kolmogorovQ, ks2 } from '@tb/metrics';

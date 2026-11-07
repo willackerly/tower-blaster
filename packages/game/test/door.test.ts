@@ -1,6 +1,6 @@
 // The front door's formatting (door.ts) and the settings it edits (settings.ts): pure.
 import { describe, expect, it } from 'vitest';
-import { isTrial, AFTERSHOCK_LEVELS, B1, B2, B3, BIG_LEVELS, compileLevel, FUSE_LEVELS, L1, L3, type LevelDef, LEVELS, MASON_LEVELS, MT4, RL1, RUBE_LEVELS, SERIES, type Shot, TRIAL_LEVELS, U1, U2, UNDERCUT_LEVELS, WAVE_LEVELS } from '@tb/keystone';
+import { isTrial, AFTERSHOCK_LEVELS, B1, B2, B3, BIG_LEVELS, CHORUS_LEVELS, compileLevel, FUSE_LEVELS, L1, L3, type LevelDef, LEVELS, MASON_LEVELS, MT4, RL1, RUBE_LEVELS, SERIES, type Shot, TRIAL_LEVELS, U1, U2, UNDERCUT_LEVELS, WAVE_LEVELS } from '@tb/keystone';
 import { bestText, BULLET_TIME_HOW, MASON_HOW, doorHtml, doorLevels, doorMode, doorOnLoad, nextLevel, openerFor, preaimMode, rackText, seriesTitle, starTargets, thresholdText, TRIALS_BLURB } from '../src/door.ts';
 // PT18's own names, on a line of their own so the line above merges as main's.
 import { DOOR_CSS, HOW_TO_PLAY, howModeOf, SIEGE_TABLE_HOW } from '../src/door.ts';
@@ -57,6 +57,8 @@ describe('door text', () => {
   });
   it('star targets: objective, then the cast T2 and T3; uncast levels the objective alone; heritage named for three stars', () => {
     expect(starTargets(compileLevel(B1), B1.stars)).toEqual({ targets: ['Bring 40% down', '70% down', '94% down'], short: ['40%', '70%', '94%'], cast: true });
+    // Chorus (chorus.ts): fixed thresholds on the worlds cleared, so it counts as cast.
+    expect(starTargets(compileLevel(CHORUS_LEVELS[0]!), undefined)).toEqual({ targets: ['Clear 32 of 64 worlds (fell every crown in each)', '…48 of 64', '…60 of 64'], short: ['32/64', '48/64', '60/64'], cast: true });
     const b2 = starTargets(compileLevel(B2), B2.stars);
     expect(b2.targets).toEqual(['Fell every crown', '770 points', '3,000 points, heritage intact']);
     expect(b2.short).toEqual(['all crowns', '770', '3,000']);
@@ -72,6 +74,7 @@ describe('door text', () => {
     expect(doorLevels([MT4], () => null)[0]!.rack).toBe('budget 10');
     expect(HOW_TO_PLAY.find((h) => h.id === 'mason')!.lines).toContain(MASON_HOW);
     expect(howModeOf(MT4)).toBe('mason');
+    expect(howModeOf(CHORUS_LEVELS[0]!)).toBe('chorus');
     // A parts-par level (Rube Lab): parts, not shots.
     expect(starTargets(compileLevel(RL1), undefined).targets.slice(1)).toEqual([`…with ${Math.ceil(1.5 * RL1.build!.par!)} parts or fewer`, `…with ${RL1.build!.par} part${RL1.build!.par === 1 ? '' : 's'} or fewer (parts par)`]);
   });
@@ -117,12 +120,12 @@ describe('door levels', () => {
     const all = GAME_SERIES.flat(), compiled: string[] = [];
     const compile = (d: (typeof all)[number]) => { compiled.push(d.id); return compileLevel(d); };
     const closed = doorLevels(all, () => null, compile, (d) => d.id.startsWith('T-'));
-    expect(compiled).toEqual([...BIG_LEVELS, ...LEVELS, ...UNDERCUT_LEVELS, ...RUBE_LEVELS, ...FUSE_LEVELS, ...AFTERSHOCK_LEVELS, ...WAVE_LEVELS, ...MASON_LEVELS].map((d) => d.id));
+    expect(compiled).toEqual([...BIG_LEVELS, ...LEVELS, ...UNDERCUT_LEVELS, ...RUBE_LEVELS, ...FUSE_LEVELS, ...AFTERSHOCK_LEVELS, ...WAVE_LEVELS, ...MASON_LEVELS, ...CHORUS_LEVELS].map((d) => d.id));
     // A card's data-arg is its index in the page's whole list, skipped trials or not.
     expect(closed.map((l) => l.index)).toEqual(compiled.map((_, i) => i));
     const shut = doorHtml({ levels: closed, current: 3, settings: DEFAULT_SETTINGS, howTo: false, advanced: false, trials: { count: TRIAL_LEVELS.length, open: false } });
-    expect([...shut.matchAll(/<h2 class="series-head">([^<]*)</g)].map((x) => x[1])).toEqual(['Spectacle', 'Chamber', 'Undercut', 'Rube Lab', 'Fuse &#38; Fold', 'Aftershock', 'Wavefront', 'Mason&#39;s Trial']);
-    expect(shut.match(/class="card[ "]/g)).toHaveLength(11 + RUBE_LEVELS.length + FUSE_LEVELS.length + AFTERSHOCK_LEVELS.length + WAVE_LEVELS.length + MASON_LEVELS.length);
+    expect([...shut.matchAll(/<h2 class="series-head">([^<]*)</g)].map((x) => x[1])).toEqual(['Spectacle', 'Chamber', 'Undercut', 'Rube Lab', 'Fuse &#38; Fold', 'Aftershock', 'Wavefront', 'Mason&#39;s Trial', 'Chorus']);
+    expect(shut.match(/class="card[ "]/g)).toHaveLength(11 + RUBE_LEVELS.length + FUSE_LEVELS.length + AFTERSHOCK_LEVELS.length + WAVE_LEVELS.length + MASON_LEVELS.length + CHORUS_LEVELS.length);
     expect(shut).toContain(`data-act="trials" class="series-head trials-head" aria-expanded="false">Trials · unrated (${TRIAL_LEVELS.length}) ▸</button>`);
     expect(shut).not.toContain(TRIALS_BLURB.slice(0, 20));
     expect(shut).toContain('class="card current" data-act="level" data-arg="3"');
@@ -337,7 +340,7 @@ describe('the door for a newcomer (PT37, agent playtest 2)', () => {
     expect(ask).not.toContain('<button data-act="reset">');
   });
   it('How to play: a page per mode, one or two lines each, opening on the mode of the level behind the door', () => {
-    expect(HOW_TO_PLAY.map((h) => h.id)).toEqual(['basics', 'chamber', 'spectacle', 'bullet', 'undercut', 'rube', 'fuse', 'aftershock', 'wavefront', 'mason', 'siege']);
+    expect(HOW_TO_PLAY.map((h) => h.id)).toEqual(['basics', 'chamber', 'spectacle', 'bullet', 'undercut', 'rube', 'fuse', 'aftershock', 'wavefront', 'mason', 'chorus', 'siege']);
     for (const h of HOW_TO_PLAY) {
       expect(h.lines.length, h.id).toBeGreaterThanOrEqual(1);
       expect(h.lines.length, h.id).toBeLessThanOrEqual(2);

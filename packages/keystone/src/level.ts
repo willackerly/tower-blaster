@@ -4,7 +4,7 @@
 // hash pins the exact scene a recorded solution was made against.
 import { type BodyDesc, massOf, quantiseVec3, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { DEFAULT_GAP, DEFAULT_UNIT, encodeTag, GRAVITY, MATERIALS, materialId, type MaterialName, type Role, ROLES } from './materials.ts';
-import { checkRunWindow, peOf_mJ, SETTLE_RULES, type SettleRule } from './rules.ts';
+import { checkEnd, checkRunWindow, type LevelEnd, peOf_mJ, SETTLE_RULES, type SettleRule } from './rules.ts';
 import { type Arm, armLoad, chargeIssues, levelArm, rackArms } from './arsenal.ts';
 import { loadIssues, loadTier } from '@tb/weapons';
 import { chargeWeaponOf, isLaunchItem, isRackItem, itemRef, type LevelWeapon, PLUNGER, QUAKE, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY, weaponOf } from './rack.ts';
@@ -13,6 +13,7 @@ import { type ScenarioPart, scenarioBodies, scenarioKey } from './scenario-part.
 import { ammoBody, type LauncherDef, launcherPos, type Shot, type ShotFrame } from './shots.ts';
 import { checkIce, type IceBlock, IceBreaker, iceOf } from './ice.ts';
 import type { BuildDef } from './build.ts';
+import { type ChorusDef, chorusIssues } from './chorus.ts';
 import { masonIssues, type MasonDef } from './mason.ts';
 import { obbAabb, obbOfBody, obbOverlap, pieceQuat } from './placement.ts';
 import { runPoses } from './stroke.ts';
@@ -235,6 +236,13 @@ export interface LevelDef {
    */
   runWindow?: number;
   /**
+   * The level's own end condition (agent playtest PT32, rules.ts LevelEnd): `{ on: 'rung', after }` settles a shot
+   * `after` seconds after every bell of its bell objective has rung (Rube Lab: 1.5 s), however much is still rolling.
+   * It is part of the settle rule (settleUpdate's `done`): never before SETTLE_MIN, restarted by a flight or a hold,
+   * and the cap still ends a run that never rings. Absent: the settle rule alone. Part of the hash when given.
+   */
+  end?: LevelEnd;
+  /**
    * Bullet Time (C2, docs/game/undercut-bullet-time.md): the most shots that may go in while another
    * runs, each cutting it (rapid fire, Session.fire); 0 allows none. Absent: no limit. The game lets
    * the player freeze the world to aim them; a freeze costs nothing until a shot goes in. Part of the
@@ -283,6 +291,11 @@ export interface LevelDef {
    * apply (the game's CUSTOM_NOTE). Not part of the hash: the overrides already are.
    */
   custom?: boolean;
+  /**
+   * Chorus (M9, chorus.ts, docs/game/chorus.md): the level's one shot is fired into this many jittered copies of it
+   * at once, and the score is how many of them clear. Part of the hash (worlds, jitter, seed and stars all are).
+   */
+  chorus?: ChorusDef;
 }
 
 /** A charge on the structure (LevelDef.charges; arsenal.ts levelCharges resolves it). */
@@ -512,6 +525,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   if (def.settle !== undefined) checkSettle(def.settle);
   if (def.levPoints !== undefined) checkLevPoints(def.levPoints);
   if (def.runWindow !== undefined) checkRunWindow(def.runWindow);
+  if (def.end !== undefined) checkEnd(def.end, def.objective.kind);
   if (def.quake !== undefined) checkQuakeRules(def.quake);
   if (def.heritage !== undefined && def.heritage !== 'pose' && def.heritage !== 'standing') throw new Error(`heritage must be pose or standing: ${String(def.heritage)}`);
   const h = unitOf(def), p = pitchOf(def) * h;
@@ -673,7 +687,7 @@ function bodiesDigest(bodies: readonly BodyDesc[]): string {
 }
 
 export interface Issue {
-  code: 'count' | 'capacity' | 'launcher' | 'overlap' | 'unsupported' | 'mass-ratio' | 'ammo-ratio' | 'dud' | 'tunnelling' | 'crown-start' | 'rack' | 'weapon' | 'empty' | 'watched' | 'flat' | 'objective' | 'freeze' | 'charge' | 'mason';
+  code: 'count' | 'capacity' | 'launcher' | 'overlap' | 'unsupported' | 'mass-ratio' | 'ammo-ratio' | 'dud' | 'tunnelling' | 'crown-start' | 'rack' | 'weapon' | 'empty' | 'watched' | 'flat' | 'objective' | 'freeze' | 'charge' | 'chorus' | 'mason';
   message: string;
   bodies?: number[];
   /** Legal but worth knowing (a dud item): the level still plays as authored. */
@@ -769,6 +783,7 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
   if (!def.mason && (size || def.par < 1 || def.par > def.rack.length)) issues.push({ code: 'rack', message: `rack of ${def.rack.length} with par ${def.par}: need 1 <= par <= rack, at most ${MAX_RACK} fired items and ${MAX_PULLS} pulls${size ? ` (${size})` : ''}` });
   const fz = def.freeze === undefined ? null : freezeProblem(def.freeze);
   if (fz) issues.push({ code: 'freeze', message: fz });
+  issues.push(...chorusIssues(def, m.material));
   for (const message of chargeIssues(c)) issues.push({ code: 'charge', message });
   if (def.rack.includes(PLUNGER) && !(def.charges ?? []).some((ch) => (ch.arm ?? 'plunger') === 'plunger')) issues.push({ code: 'charge', message: 'the rack has a plunger, and the level no charge a plunger arms' });
   // A retrofit (a quake level with a build block, M7b) may have nothing to bring down: its towers are all to save.

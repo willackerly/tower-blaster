@@ -190,6 +190,17 @@ There is no note in a duel (its turn has its own float), and none after the roun
 - `packages/game/test/dud-e2e.test.ts` runs the game page on L2. A marble wide of the lintel floats "Nothing moved:
   try the cannonball", a retry clears it, and `keystone.dudnote=0` floats nothing.
 
+## Chorus worlds cleared (M9)
+
+A Chorus level (`LevelDef.chorus`, docs/game/chorus.md) fires its one shot into K jittered worlds (64 by
+default), and the Driver replaces the round's levelEnd score with `chorusScore`: one line, "Worlds cleared
+(c of K)", worth `floor(3000 c / K)` through `floorTotal`; stars from fixed thresholds on the count (32, 48
+and 60 of 64, or the level's `chorus.stars`, which are in the level hash with `chorus.need`); the stamp
+"c/K CLEAR"; cleared means at least one star. It scores the fraction of worlds, never world 0 alone. A
+world with cracked heritage does not clear, so heritage has no red line and takes no stars. World 0's
+leverage is kept for the HUD only: `gold` is false and the card shows no tier. The card reads the generic
+`LevelScore.worlds = { cleared, of, thresholds }` ("c of K worlds cleared"), which Mason's Trial shares.
+
 ## Heritage on outcome levels (PT28)
 
 Agent playtest round 2 (`docs/game/agent-playtest-2.md`, PT28) found B2 "Spare the Cathedral" stamping a gold
