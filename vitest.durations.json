@@ -134,7 +134,7 @@
   "packages/game/test/sightlines.test.ts": 0.1,
   "packages/game/test/skip-e2e.test.ts": 11.1,
   "packages/game/test/sleep-gpu.test.ts": 60.4,
-  "packages/game/test/sound-map.test.ts": 3.1,
+  "packages/game/test/sound-map.test.ts": 3.9,
   "packages/game/test/touch-e2e.test.ts": 18.4,
   "packages/game/test/touch.test.ts": 0,
   "packages/game/test/undo-cost.test.ts": 0,
