@@ -50,7 +50,9 @@ export function gamePage(): GamePage {
       const errors: string[] = [];
       page.on('pageerror', (e) => errors.push(e.message));
       await page.goto(url(search));
-      await page.waitForFunction(() => window.__game?.status !== 'loading', undefined, { timeout, polling: 250 });
+      // __game is set when main.ts runs: until then (or across a reload, as Vite's dependency optimizer does on a
+      // cold cache) it is undefined, which must not read as "done loading".
+      await page.waitForFunction(() => window.__game !== undefined && window.__game.status !== 'loading', undefined, { timeout, polling: 250 });
       const st = await page.evaluate(() => ({ s: window.__game.status, e: window.__game.error }));
       if (st.s === 'error' && /WebGPU|adapter/.test(st.e ?? '') && !requireWebGPU()) { await page.close(); return null; }
       expect(st).toEqual({ s: 'running', e: undefined });
