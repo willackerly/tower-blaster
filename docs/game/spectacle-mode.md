@@ -42,7 +42,7 @@ Exactly one objective per level; meeting it is the first star.
 | `skyline` `{ maxH, footprintMax? }` | settled skyline height at most `maxH` h | yes |
 | `collapse` `{ min }` | collapse fraction D (section 4) at least `min` | new |
 
-Constraints (optional, any level): **heritage** (sticky break at 0.3 h or 15 degrees, as today; any break caps the level at one star) and **footprint** (fraction of structure bodies outside the lot grown by 0.5 h at most `footprintMax`; the excess costs points, not stars).
+Constraints (optional, any level): **heritage** (sticky break at 0.3 h or 15 degrees, as today; any break costs one star at every tier, down to none, and the stamp reads HERITAGE LOST: PT28, docs/game/scoring.md) and **footprint** (fraction of structure bodies outside the lot grown by 0.5 h at most `footprintMax`; the excess costs points, not stars).
 
 **Crown budget.** At most 64 crowns plus heritage bodies per level, because they are read as watched bodies every step and the 100k path reads at most 64 (design section 7). Big structures are judged by reductions (collapse, skyline, footprint), not by watching thousands of bodies. Validator issue `watched`.
 
@@ -95,7 +95,7 @@ The weights make collapse the dominant line on big levels, keep leverage as the 
 ### Stars
 
 - **Star metric.** Each outcome level names one: `collapse` (D, default), `crowns` (crowns down), `skyline` (end height over start height, lower is better) or `score` (the tally total). `keystone.stars=<metric>` overrides it; thresholds that were not cast for that metric show as "uncast".
-- One star: the objective met. Two stars: metric at least T2. Three stars: metric at least T3, and no heritage broken.
+- One star: the objective met. Two stars: metric at least T2. Three stars: metric at least T3. Any heritage broken then takes one star off, down to none (PT28, 2026-11-07; it took only the third before).
 - **Beat the bot** (a badge, the successor of the Ace): metric above the best value any bot play reached when the level was cast.
 - **Official runs.** Stars and personal bests are kept only when the level, its physics block and the engine kind are the ones the thresholds were cast with (the level hash, section 8). Any override of physics, rack or star metric plays fine and is labelled "custom: stars not recorded".
 

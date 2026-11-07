@@ -215,6 +215,8 @@ export interface GameHandle {
   capture(keepPixels?: boolean): Promise<PixelStats | null>;
   /** Tests: pixels of the current view (the ID pass, Renderer.renderIds) that show body `body`. */
   coverage(body: number): Promise<number>;
+  /** Tests: where body `body` shows in the current view (the ID pass): its pixels' indices, row-major, in a frame of this size. */
+  pixelsOf(body: number): Promise<{ width: number; height: number; at: number[] }>;
   /** Tests: the last pull's slide as last drawn (pull-anim.ts): steps since the pull, the drawn centre and scale; null when none is drawn. */
   pullDrawn: { body: number; k: number; pos: [number, number, number]; scale: number } | null;
   /** Bullet Time's frozen look as last drawn (frozen-look.ts): the grade's amount, 0 none to 1 full, eased per frame. */
@@ -335,7 +337,7 @@ export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
     status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, hold: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0, impact: false, xray: false }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, card: { place: 'center', endedMs: null, shownMs: null }, openingHud: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, skip: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, impact: null, select: () => false, dial: () => null, dialStep: () => null, startQuake: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, sightlines: async () => null, coverage: async () => 0, pullDrawn: null, frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], refreshMarks: () => {},
+    fire: () => false, bank: () => false, skip: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, impact: null, select: () => false, dial: () => null, dialStep: () => null, startQuake: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, sightlines: async () => null, coverage: async () => 0, pixelsOf: async () => ({ width: 0, height: 0, at: [] }), pullDrawn: null, frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], refreshMarks: () => {},
     state: none, asleep: () => ({ asleep: 0, of: 0 }), line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null, handoff: false, scoreFloat: '', shotNote: '',
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
     ice: () => ({ count: 0, cracks: [] }),
@@ -679,6 +681,11 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   /** Where the previewed shot first touches (the impact marker), and whether the preview is the opener's. */
   let contact: Contact | null = null, previewingOpener = false;
   let pointer: [number, number] | null = null;
+  /**
+   * The last spot aimed at on the canvas (NDC), kept when the pointer goes (the cursor off to the HUD, a finger lifted):
+   * while frozen (Bullet Time, PT33) the aim holds there, or on a standing crown, so the frozen frame keeps its preview.
+   */
+  let heldAim: [number, number] | null = null;
   let regrowT: number | null = null;
   let fastHeld = false;
   /** Skip (key K, the HUD's Skip button; agent playtest PT6): the running shot's settle runs at SKIP_SCALE until it ends. */
@@ -1280,6 +1287,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     frozen = false;
     pullAnim = null;
     handle.pullDrawn = null;
+    heldAim = null;
     aimed = null;
     beads = null;
     hover = null; // the new level's tints are fresh
@@ -1350,8 +1358,32 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (b !== null) renderer.setFx(b, Uint32Array.of(PULL_HOVER));
   }
 
+  /**
+   * Where a frozen shot's aim holds with no pointer (PT33, PaceFeel.frozenAim): the last spot aimed at, else the standing
+   * crown nearest the middle of the frame (so a freeze from the HUD or a key still shows what a shot would do), else the
+   * middle of the frame (a level with no crowns: B1's wall), where the view looks.
+   */
+  function heldAimAt(): [number, number] | null {
+    if (!frozen || !feel.frozenAim) return null;
+    if (heldAim) return heldAim;
+    const m = viewProj(orbit, aspect()), s = driver.snapshot, live = driver.session.crownLive;
+    let best: [number, number] | null = null, bestD = Infinity;
+    c.meta.crowns.forEach((b, k) => {
+      if (live[k] || b >= s.count) return;
+      const x0 = s.pos[3 * b]!, y0 = s.pos[3 * b + 1]!, z0 = s.pos[3 * b + 2]!;
+      const w = m[3]! * x0 + m[7]! * y0 + m[11]! * z0 + m[15]!;
+      if (w <= 0) return;
+      const x = (m[0]! * x0 + m[4]! * y0 + m[8]! * z0 + m[12]!) / w, y = (m[1]! * x0 + m[5]! * y0 + m[9]! * z0 + m[13]!) / w;
+      const d = Math.hypot(x, y);
+      if (Math.abs(x) <= 0.95 && Math.abs(y) <= 0.95 && d < bestD) { best = [x, y]; bestD = d; }
+    });
+    return best ?? [0, 0];
+  }
+
   function updateAim() {
     aimDirty = false;
+    if (pointer) heldAim = [pointer[0], pointer[1]];
+    const at = pointer ?? heldAimAt();
     aimed = null;
     aimHit = null;
     beads = null;
@@ -1360,8 +1392,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     contact = null;
     previewingOpener = false;
     // No aim (nor its preview) under the hand-over card: the next player has not taken the device yet.
-    if (pointer && selected && aimable() && regrowT === null && !handle.handoff) {
-      const hit = pick(rayThrough(orbit, aspect(), pointer[0], pointer[1]), driver.snapshot, c);
+    if (at && selected && aimable() && regrowT === null && !handle.handoff) {
+      const hit = pick(rayThrough(orbit, aspect(), at[0], at[1]), driver.snapshot, c);
       if (selected === 'pull') {
         // A pull takes the block under the cursor: lit when it can be taken, no arc.
         const p = pullFor(driver.session, hit);
@@ -1378,7 +1410,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         const blasts = aimed ? c.arms[selected]?.blasts : undefined;
         if (blasts?.length === 1 && blasts[0]!.count === 1) ring = handle.reach = { centre: [hit.point[0], hit.point[1], hit.point[2]], radius: blasts[0]!.blast.radius };
       }
-    } else if (!pointer && aimable() && regrowT === null && !handle.handoff) {
+    } else if (!at && aimable() && regrowT === null && !handle.handoff) {
       // Before the player aims (and while the cursor is off the canvas), the pre-aimed opener shows its flight and where
       // it lands (PT14): what F, or the HUD's Fire button, will do. Its blast zone too, for a bomb. Nothing is aimed.
       // Not under the hand-over card, like the aim.
@@ -1699,6 +1731,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (duel) { duel.fired(shot); turnStart = performance.now(); syncDuel(); swing.grab(); hideHandoff(); }
     // A shot fired while frozen (Bullet Time) has cut in at the frozen step: the world runs on with it.
     frozen = false;
+    // A held aim (PT33) was only for the freeze: it goes with it, at the next frame.
+    aimDirty = true;
     // The shot's first step goes in now, not at the next frame.
     physicsIdle.kick();
     // A shot's pace starts fresh: no tail yet, and at real time until its steps say otherwise.
@@ -2086,9 +2120,25 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (!upright && !matchMedia(DOCK_SIDEWAYS).matches) return undefined;
     const boxOf = (e: Element) => { const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; };
     const boxes = [...env.hud.querySelectorAll(upright ? ':scope > .st, :scope > .tray, :scope > .tray > .above' : ':scope > .st, :scope > .tray')].map(boxOf);
+    // Fuse & Fold's panel is part of the band (PT21): upright it stands on the tray, sideways it runs down the right side.
+    if (fuse?.timeline) { placeFuse(); boxes.push(boxOf(fuse.el)); }
     const out = hudInsets(boxes, innerWidth, innerHeight), above = env.hud.querySelector(':scope > .tray > .above');
     if (!upright && above) { const b = boxOf(above); if (b.w > 0 && b.h > 0) out.top = Math.max(out.top, Math.min(1, (b.y + b.h) / innerHeight)); }
     return out;
+  }
+
+  /**
+   * Upright on a docked phone, Fuse & Fold's panel stands on the HUD's tray (and the hints over it) instead of
+   * covering it (PT21); anywhere else it keeps the stylesheet's place. Every frame on a level with a timeline.
+   */
+  function placeFuse(): void {
+    if (!fuse?.timeline) return;
+    let bottom: number | null = null;
+    if (env.hud.classList.contains('kg-dock') && document.body.classList.contains('kg-touch') && matchMedia(DOCK_PORTRAIT).matches) {
+      const tops = [...env.hud.querySelectorAll(':scope > .tray, :scope > .tray > .above')].map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0 && r.height > 0).map((r) => r.top);
+      if (tops.length) bottom = innerHeight - Math.min(...tops) + 8;
+    }
+    fuse.dock(bottom);
   }
 
   function drawHud() {
@@ -2135,6 +2185,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const px = pixelCounts({ width, height, ids, solo: new Float64Array(0) }, c.meta.n, covered);
     return { width, height, px: Array.from(px), solo: Array.from(outlineAreas(c, m, width, height)) };
   };
+  handle.pixelsOf = (body) => exclusive(async () => {
+    const r = await renderer.renderIds({ viewProj: viewProj(orbit, aspect()), eye: eyeOf(orbit), focus: orbit.target, groundY: 0, alpha: 1 });
+    const at: number[] = [];
+    r.ids.forEach((id, i) => { if (id === body + 1) at.push(i); });
+    return { width: r.width, height: r.height, at };
+  });
   handle.coverage = (body) => exclusive(async () => {
     const r = await renderer.renderIds({ viewProj: viewProj(orbit, aspect()), eye: eyeOf(orbit), focus: orbit.target, groundY: 0, alpha: 1 });
     let n = 0;
@@ -2188,7 +2244,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // Fuse & Fold: the charges' markers, coloured by their delays, while the plunger can still go.
     const plungerReady = !!fuse?.timeline && handle.ready && driver.session.rackLeft.includes('plunger');
     fuse?.ready(plungerReady);
-    if (fuse?.timeline) fuse.heading(view.yaw, view.pitch);
+    if (fuse?.timeline) { fuse.heading(view.yaw, view.pitch); placeFuse(); }
     const ghost = pullAnim ? ghostOutline(pullAnim, now - pullAnim.at) : null;
     const o = joinOverlays(beads ? beadOverlay(beads, aimed?.reachable ?? true) : null, arc, ghost, plungerReady ? timelineOverlay(fuse!.timeline!) : null, foldLot);
     renderer.reach(ring?.centre ?? null, ring?.radius ?? 0);
@@ -2205,7 +2261,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // Bullet Time's frozen look: the grade eases in and out, the sparks dim and hang (dt 0) while frozen.
     const frozenLook = frozen && feel.frozenLook;
     frozenGrade = easeGrade(frozenGrade, frozenLook ? 1 : 0, dt);
-    renderer.freezeFx = freezeFxOf(frozenGrade);
+    renderer.freezeFx = freezeFxOf(frozenGrade, feel.frozenAim);
     handle.frozenGrade = frozenGrade;
     frozenLabel.classList.toggle('on', frozenLook);
     const fp = { viewProj: viewProj(view, aspect()), eye: eyeOf(view), focus: orbit.target, time: now / 1000, groundY: 0, alpha: running ? alphaAt(arrivals, now, 1000 * c.scene.dt) : 1, ...(frozenLook ? { dt: 0 } : {}) };

@@ -134,8 +134,13 @@ export const lowerIsBetter = (metric: StarMetric): boolean => metric === 'skylin
 /**
  * A level's star thresholds, as a cast set them. `waived` names cast gates that failed and were accepted as a
  * documented call (keystone-lab `--waive`; the level's notes say why), so the stars file says which stars rest on one.
+ * `agrees` names engines other than `engine` whose cloud of the cast's best line passed the cross-device gate
+ * (keystone-lab `--cloud-of`, cloudCheck): the stars hold there too, so the game records them there (game onEngine).
  */
-export interface StarsDef { metric: StarMetric; t2: number; t3: number; best?: number; castOn?: string; engine?: string; hash?: string; n?: number; seed?: number; waived?: string[] }
+export interface StarsDef { metric: StarMetric; t2: number; t3: number; best?: number; castOn?: string; engine?: string; agrees?: string[]; hash?: string; n?: number; seed?: number; waived?: string[] }
+
+/** Whether stars `s` hold on engine `kind`: cast there, or checked there by the cross-device gate (StarsDef.agrees). */
+export const starsHoldOn = (s: StarsDef, kind: string): boolean => s.engine === undefined || s.engine === kind || (s.agrees ?? []).includes(kind);
 
 /**
  * x as a StarsDef, or throws naming `where` and the field at fault: the check a stars file (big-levels.ts
@@ -150,7 +155,8 @@ export function checkStars(x: unknown, where = 'stars'): StarsDef {
   for (const k of ['best', 'n', 'seed']) if (o[k] !== undefined && (typeof o[k] !== 'number' || !Number.isFinite(o[k]))) throw new Error(`${where}.${k} must be a finite number when given: ${String(o[k])}`);
   for (const k of ['castOn', 'engine', 'hash']) if (o[k] !== undefined && typeof o[k] !== 'string') throw new Error(`${where}.${k} must be a string when given: ${String(o[k])}`);
   if (o.waived !== undefined && (!Array.isArray(o.waived) || !o.waived.length || !o.waived.every((g) => typeof g === 'string' && g.length > 0))) throw new Error(`${where}.waived must be a non-empty list of gate names when given: ${JSON.stringify(o.waived)}`);
-  const known = new Set(['metric', 't2', 't3', 'best', 'castOn', 'engine', 'hash', 'n', 'seed', 'waived']);
+  if (o.agrees !== undefined && (!Array.isArray(o.agrees) || !o.agrees.length || !o.agrees.every((g) => typeof g === 'string' && g.length > 0 && g !== o.engine))) throw new Error(`${where}.agrees must be a non-empty list of engines other than its own when given: ${JSON.stringify(o.agrees)}`);
+  const known = new Set(['metric', 't2', 't3', 'best', 'castOn', 'engine', 'agrees', 'hash', 'n', 'seed', 'waived']);
   for (const k of Object.keys(o)) if (!known.has(k)) throw new Error(`${where}: unknown field ${k}`);
   const lower = lowerIsBetter(o.metric as StarMetric), t2 = o.t2 as number, t3 = o.t3 as number;
   if (lower ? t3 > t2 : t3 < t2) throw new Error(`${where}: t3 (${t3}) is easier than t2 (${t2}) for ${String(o.metric)}`);
@@ -198,9 +204,10 @@ export interface LevelDef {
   /**
    * Recorded solutions, replayed by tests. `opener` is the pre-aimed first shot a first visit is offered
    * (the door's Fire button), chosen to win the level alone (PT13: keystone-lab opener.ts); absent, the
-   * opener is the ace's or the par line's first shot.
+   * opener is the ace's or the par line's first shot. `teach`: the opener shows the level's mechanic without winning it
+   * (Wavefront's starter push, PT39), so a first visit is offered it on any level of its series, not only the first.
    */
-  solutions?: { par?: Shot[]; ace?: Shot[]; opener?: Shot };
+  solutions?: { par?: Shot[]; ace?: Shot[]; opener?: Shot; teach?: true };
   /** Default 'par': every level before the spectacle mode, scored as before. */
   scoring?: Scoring;
   /** How leverage pays points (LEV_POINTS; URL key keystone.levpoints). Default 'log'; 'share' is part of the hash, so score casts made under log never show. */
@@ -237,6 +244,11 @@ export interface LevelDef {
    * never before it starts (with rapid fire, or in Bullet Time when the player has rapid fire off). Part of the hash.
    */
   cut?: true;
+  /**
+   * Parts the player is meant to push first (Wavefront's starter slabs, PT39): the game marks their bodies with the
+   * crosshair and the HUD names them until the first shot. Presentation only, so not part of the hash.
+   */
+  push?: number[];
   /** The physics the level plays at (default Keystone's: PHYSICS_DEFAULTS). Part of the level hash, so stars cast at one setting never show at another. */
   physics?: PhysicsBlock;
   /** Aftershock (quake.ts): what the quake dial allows, for a level whose rack holds a quake. Part of the hash. */
@@ -572,7 +584,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   // Solutions don't change the scene, and the stars are cast against the hash (StarsDef.hash).
   // scoring 'par', autobank false, the scoring's settle rule and physics at its defaults are the defaults, so writing them out names the same level;
   // custom marks overrides the hash already holds.
-  const { solutions: _omit, stars: _stars, custom: _custom, ...geometry } = def;
+  const { solutions: _omit, stars: _stars, custom: _custom, push: _push, ...geometry } = def;
   if (geometry.scoring === 'par') delete geometry.scoring;
   if (geometry.autobank === false) delete geometry.autobank;
   if (geometry.levPoints === 'log') delete geometry.levPoints;
