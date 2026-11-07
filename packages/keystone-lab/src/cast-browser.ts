@@ -8,7 +8,7 @@ import { platform } from 'node:os';
 import type { Page } from 'playwright';
 import { createServer } from 'vite';
 import { CLOSE_TIMEOUT_MS, closeWithin, launchChromium, WEBGPU_ARGS } from '@tb/testkit';
-import { type CastPlay, type LevelDef, readShots, type RubeResult, writeShots } from '@tb/keystone';
+import { type CastPlay, type LevelDef, type MasonVerdict, readShots, type RubeResult, writeShots } from '@tb/keystone';
 import type { RestReport } from '../../game/src/cast-page.ts';
 import type { CastPlayer } from './cast.ts';
 import { withPageRetry } from './page-retry.ts';
@@ -56,6 +56,8 @@ export interface BrowserCastPlayer extends CastPlayer {
   rest(level: LevelDef, steps: number): Promise<RestReport>;
   /** A Rube Lab level played once with its plunger on the page's engine (cast-page.ts rube). */
   rube(level: LevelDef): Promise<RubeResult & { ms: number }>;
+  /** A Mason level as built, judged in `worlds` at once on the page's engine (cast-page.ts mason). */
+  mason(level: LevelDef, worlds: number[]): Promise<MasonVerdict & { limits: string[]; ms: number }>;
   close(): Promise<string[]>;
 }
 
@@ -142,6 +144,7 @@ export async function openBrowserCastPlayer(opts: BrowserCastOptions = {}): Prom
     },
     rest: (level, steps) => onPage('rest', (p) => p.evaluate(([lv, n]) => window.__cast.rest(lv, n), [level, steps] as const)),
     rube: (level) => onPage(`rube ${level.id}`, (p) => p.evaluate((lv) => window.__cast.rube(lv), level)),
+    mason: (level, worlds) => onPage(`mason ${level.id}`, (p) => p.evaluate(([lv, w]) => window.__cast.mason(lv, w), [level, worlds] as const)),
     injectFault(kind) { fault = kind; },
     setBatchTimeout(ms) { batchTimeoutMs = ms; },
     close,

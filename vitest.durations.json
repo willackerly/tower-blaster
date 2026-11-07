@@ -359,5 +359,16 @@
   "packages/weapons/test/yield.test.ts": 0.1,
   "packages/game/test/coats-e2e.test.ts": 60.0,
   "packages/game/test/ice-pale-e2e.test.ts": 75.0,
-  "packages/game/test/duel-colours-e2e.test.ts": 35.0
+  "packages/game/test/duel-colours-e2e.test.ts": 35.0,
+  "packages/keystone-lab/test/mason-gpu-MT1.test.ts": 115,
+  "packages/keystone-lab/test/mason-gpu-MT2.test.ts": 100,
+  "packages/keystone-lab/test/mason-gpu-MT3.test.ts": 115,
+  "packages/keystone-lab/test/mason-gpu-MT4.test.ts": 70,
+  "packages/keystone-lab/test/mason-ref-MT1.test.ts": 123,
+  "packages/keystone-lab/test/mason-ref-MT2.test.ts": 86.3,
+  "packages/keystone-lab/test/mason-ref-MT3.test.ts": 131.8,
+  "packages/keystone-lab/test/mason-ref-MT4.test.ts": 33.2,
+  "packages/keystone-lab/test/mason-stats.test.ts": 0,
+  "packages/keystone/test/mason.test.ts": 0.3,
+  "packages/game/test/mason-engine.test.ts": 0.5
 }

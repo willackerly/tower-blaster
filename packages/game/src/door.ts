@@ -118,6 +118,7 @@ export function objectiveShort(o: Objective): string {
     case 'quake': return 'condemned down';
     case 'fold': return `${pct(o.min)}, in the lot`;
     case 'bell': return 'ring the bell';
+    case 'trial': return 'pass the test';
   }
 }
 

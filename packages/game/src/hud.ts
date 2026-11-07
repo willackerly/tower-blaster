@@ -187,6 +187,7 @@ export function objectiveText(o: Objective): string {
     case 'quake': return 'fell the condemned, spare the heritage';
     case 'fold': return `fold ${pct(o.min)} into its lot, neighbours untouched`;
     case 'bell': return 'ring the bell';
+    case 'trial': return 'build it to pass the test';
   }
 }
 

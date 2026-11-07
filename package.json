@@ -41,7 +41,8 @@
     "playtest:testers": "tsx packages/playtest/src/testers.ts",
     "playtest:smoke": "tsx packages/playtest/src/smoke.ts",
     "playtest:agent": "tsx packages/playtest/src/agent/run.ts",
-    "probe:modes": "tsx packages/mode-probes/src/cli.ts"
+    "probe:modes": "tsx packages/mode-probes/src/cli.ts",
+    "mason:judge": "tsx packages/keystone-lab/src/mason-cli.ts"
   },
   "devDependencies": {
     "@tb/adapter-rapier": "workspace:*",
