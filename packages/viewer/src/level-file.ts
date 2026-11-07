@@ -6,7 +6,7 @@
 // Whether the level is any good (overlaps, unsupported bodies, tunnelling ammo)
 // is validateLevel's question; the panel shows its issues without refusing.
 import {
-  type BuildDef, CATALOG_NAMES, checkPhysics, checkRunWindow, checkSettle, freezeProblem, checkShot, compileLevel, type CourseOverride, type Issue, type LevelDef, MATERIALS, type MaterialName, type Part, type PhysicsBlock, isRackItem, RACK_ITEM_NAMES, type RackItem, type Role, type RoleRule, ROLES, type ScenarioPart, SCORINGS, type Scoring, type Shot,
+  type BuildDef, CATALOG_NAMES, checkEnd, checkPhysics, checkRunWindow, checkSettle, freezeProblem, checkShot, compileLevel, type CourseOverride, type Issue, type LevelDef, MATERIALS, type MaterialName, type Part, type PhysicsBlock, isRackItem, RACK_ITEM_NAMES, type RackItem, type Role, type RoleRule, ROLES, type ScenarioPart, SCORINGS, type Scoring, type Shot,
   STAR_METRICS, type StarMetric, type StarsDef, validateLevel,
 } from '@tb/keystone';
 import { SCENARIOS } from '@tb/scenarios';
@@ -21,7 +21,7 @@ const MATERIAL_NAMES = MATERIALS.map((m) => m.name) as readonly string[];
 /** The LevelDef a JSON value describes, or an error saying where it is wrong. */
 export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   const o = object(v, where);
-  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars', 'autobank', 'settle', 'runWindow', 'freeze', 'physics', 'custom', 'build', 'charges', 'rube', 'cut', 'push'], where);
+  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars', 'autobank', 'settle', 'runWindow', 'freeze', 'physics', 'custom', 'build', 'charges', 'rube', 'cut', 'end', 'push'], where);
   if (o.format !== undefined && o.format !== LEVEL_FILE_FORMAT) throw new Error(`${where}.format should be "${LEVEL_FILE_FORMAT}"`);
   const id = str(o.id, `${where}.id`);
   if (!/^[\w-]{1,32}$/.test(id)) throw new Error(`${where}.id must be 1 to 32 letters, digits, - or _`);
@@ -72,6 +72,7 @@ export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
     def.push = arr(o.push, `${where}.push`).map((x, i) => int(x, `${where}.push[${i}]`));
     for (const k of def.push) if (k < 0 || k >= def.parts.length) throw new Error(`${where}.push: part ${k} is not one of the level's ${def.parts.length}`);
   }
+  if (o.end !== undefined) def.end = checkEnd(o.end, def.objective.kind, `${where}.end`);
   return def;
 }
 
