@@ -391,8 +391,8 @@ export class Session {
     }
     if (cleared || this.rackLeft.length === 0) {
       this.phase = cleared ? 'cleared' : 'failed';
-      // Rube Lab: a binary clear, starred on the build's cost against the parts par (rules.ts rubeStars).
-      this.score = levelScore(c.def, this.outcomes, cleared, m.n, c.def.rube ? placedCost(c.def) : 0);
+      // Rube Lab: a binary clear, starred on the build's cost against the parts par (rules.ts partsStars).
+      this.score = levelScore(c.def, this.outcomes, cleared, m.n, c.def.build?.par !== undefined ? placedCost(c.def) : 0);
       out.push({ t: 'levelEnd', step, cleared, score: this.score });
     } else {
       this.phase = 'aiming';
