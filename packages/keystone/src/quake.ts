@@ -27,7 +27,15 @@ export interface QuakeRules {
   budget?: number;
   /** The axes the dial snaps to, degrees (the game's step; any axis is legal in a line). */
   axisStep?: number;
+  /**
+   * The level's own quake (an Aftershock retrofit, M7b: the quake is coming and the player braces for it): the dial
+   * is locked to it, and no other quake goes in. The ranges above then hold only it.
+   */
+  fixed?: QuakeDialValues;
 }
+
+/** A quake's four dial values, QuakeShot's units (peak % g, hz 0.1 Hz, sec 0.1 s, axis degrees). */
+export type QuakeDialValues = Pick<QuakeShot, 'peak' | 'hz' | 'sec' | 'axis'>;
 
 /**
  * The default dial: up to 0.8 g, 0.3 to 3 Hz, 0.5 to 12 s, axis in 15 degree steps. 0.8 g is past plaster's
@@ -35,10 +43,12 @@ export interface QuakeRules {
  */
 export const QUAKE_DEFAULTS = { peakMax: 80, hz: [3, 30], sec: [5, 120], axisStep: 15 } as const satisfies QuakeRules;
 
-export interface ResolvedQuakeRules { peakMax: number; hz: [number, number]; sec: [number, number]; budget?: number; axisStep: number }
+export interface ResolvedQuakeRules { peakMax: number; hz: [number, number]; sec: [number, number]; budget?: number; axisStep: number; fixed?: QuakeDialValues }
 
 export function quakeRulesOf(d: Pick<LevelDef, 'quake'>): ResolvedQuakeRules {
   const q = d.quake ?? {};
+  const f = q.fixed;
+  if (f) return { peakMax: f.peak, hz: [f.hz, f.hz], sec: [f.sec, f.sec], axisStep: QUAKE_DEFAULTS.axisStep, fixed: { peak: f.peak, hz: f.hz, sec: f.sec, axis: f.axis }, ...(q.budget !== undefined ? { budget: q.budget } : {}) };
   return {
     peakMax: q.peakMax ?? QUAKE_DEFAULTS.peakMax, hz: q.hz ?? [...QUAKE_DEFAULTS.hz], sec: q.sec ?? [...QUAKE_DEFAULTS.sec],
     axisStep: q.axisStep ?? QUAKE_DEFAULTS.axisStep, ...(q.budget !== undefined ? { budget: q.budget } : {}),
@@ -58,6 +68,15 @@ export function checkQuakeRules(q: QuakeRules, where = 'quake'): void {
   }
   if (q.budget !== undefined && !(Number.isFinite(q.budget) && q.budget > 0)) throw new Error(`${where}.budget must be a positive number of joules: ${q.budget}`);
   if (q.axisStep !== undefined) intIn(q.axisStep, 'axisStep', 1, 90);
+  if (q.fixed !== undefined) {
+    const f = q.fixed as unknown as Record<string, unknown>;
+    if (typeof f !== 'object' || f === null) throw new Error(`${where}.fixed must be {peak, hz, sec, axis}`);
+    const known = new Set(['peak', 'hz', 'sec', 'axis']);
+    for (const k of Object.keys(f)) if (!known.has(k)) throw new Error(`${where}.fixed.${k} is not a quake field (peak, hz, sec, axis)`);
+    for (const k of ['peak', 'hz', 'sec', 'axis'] as const) intIn(f[k] as number, `fixed.${k}`, QUAKE_RANGE[k][0], QUAKE_RANGE[k][1]);
+    // The ranges would only contradict it: a fixed quake is the whole dial.
+    for (const k of ['peakMax', 'hz', 'sec', 'axisStep'] as const) if (q[k] !== undefined) throw new Error(`${where}: a fixed quake takes no ${k} (the dial is locked to it)`);
+  }
 }
 
 /** The engine steps a quake shakes for (its last field key, restoring gravity, is due then). */
@@ -100,7 +119,8 @@ export function quakeEnergy(c: CompiledLevel, shot: Pick<QuakeShot, 'peak' | 'hz
 
 /** Why a quake cannot go in on level `c`, or null if it can: inside the level's dial and, with a budget, within it. */
 export function quakeRefusal(c: CompiledLevel, shot: QuakeShot): string | null {
-  const r = quakeRulesOf(c.def);
+  const r = quakeRulesOf(c.def), f = r.fixed;
+  if (f && (shot.peak !== f.peak || shot.hz !== f.hz || shot.sec !== f.sec || shot.axis !== f.axis)) return `this level's quake is fixed: ${f.peak}% g, ${f.hz / 10} Hz, ${f.sec / 10} s at ${f.axis} degrees`;
   if (shot.peak > r.peakMax) return `peak ${shot.peak}% g is over the level's ${r.peakMax}%`;
   if (shot.hz < r.hz[0] || shot.hz > r.hz[1]) return `${shot.hz / 10} Hz is outside the level's ${r.hz[0] / 10} to ${r.hz[1] / 10} Hz`;
   if (shot.sec < r.sec[0] || shot.sec > r.sec[1]) return `${shot.sec / 10} s is outside the level's ${r.sec[0] / 10} to ${r.sec[1] / 10} s`;
@@ -114,10 +134,11 @@ export function quakeRefusal(c: CompiledLevel, shot: QuakeShot): string | null {
 
 /**
  * The brute-force quake: the dial's strongest peak at its lowest frequency, for its longest duration, along +x.
- * Ignores the budget (it is what the budget is there to stop). Aftershock's gate (quake-search.ts) passes a level
+ * Ignores the budget (it is what the budget is there to stop). A level with a fixed quake has only that one. Aftershock's gate (quake-search.ts) passes a level
  * only if this quake fails it.
  */
 export function naiveQuake(c: CompiledLevel): QuakeShot {
   const r = quakeRulesOf(c.def);
+  if (r.fixed) return { ammo: 'quake', ...r.fixed };
   return { ammo: 'quake', peak: r.peakMax, hz: r.hz[0], sec: r.sec[1], axis: 0 };
 }

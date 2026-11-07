@@ -123,18 +123,32 @@ export class EditController {
     return changed;
   }
 
-  /** A key in edit mode; returns whether it was one (Q / E turn 90 deg, 15 with Shift; T tip; 1 to 8 items; B brush; X erase; P place; Z undo). */
+  /** A key in edit mode; returns whether it was one (Q / E turn 90 deg, 15 with Shift; T tip; [ / ] slide; 1 to 8 items; B brush; X erase; P place; Z undo). */
   key(k: string, mods: Mods = {}): boolean {
     const step = mods.shift ? 15 : 90;
     const lower = k.toLowerCase();
     if (lower === 'q') this.hold = turn(this.hold, -step);
     else if (lower === 'e') this.hold = turn(this.hold, step);
     else if (lower === 't') this.hold = { ...this.hold, tip: ((this.hold.tip + 1) % 3) as 0 | 1 | 2 };
+    else if (k === '[' || k === ']') return this.slide(k === '[' ? -1 : 1);
     else if (/^[1-9]$/.test(k)) { const it = this.session.items[Number(k) - 1]; if (!it) return false; this.select(it.name as CatalogName); }
     else if (lower === 'b') this.setTool(this.tool === 'brush' ? 'place' : 'brush');
     else if (lower === 'x') this.setTool(this.tool === 'erase' ? 'place' : 'erase');
     else if (lower === 'z') { this.undo(); return true; }
     else return false;
+    if (this.lastRay) this.move(this.lastRay, this.lastMods);
+    return true;
+  }
+
+  /**
+   * Slide what is held a half-cell along its own x (build.ts Hold.slide), within what keeps the pointer's point under
+   * it; returns whether it moved (false at the end of its reach, or for a piece that cannot slide).
+   */
+  slide(d: -1 | 1): boolean {
+    const s = this.session.slideOf(this.hold), m = this.session.slideMax(this.hold), next = Math.max(-m, Math.min(m, s + d));
+    if (next === s) { this.message = m === 0 ? 'this piece does not slide' : 'slid as far as it goes'; return false; }
+    this.hold = { ...this.hold, slide: next };
+    this.message = '';
     if (this.lastRay) this.move(this.lastRay, this.lastMods);
     return true;
   }
@@ -177,7 +191,7 @@ export class EditController {
   /** One line for the panel: what is held, how it is turned, what is left, and why the ghost does not fit. */
   status(): string {
     const s = this.session, left = s.left();
-    const what = this.tool === 'brush' ? 'domino brush' : this.tool === 'erase' ? 'erase' : `${s.items.find((i) => i.name === this.hold.item)?.label ?? this.hold.item}, ${this.hold.yaw}°${this.hold.tip ? `, tipped ${this.hold.tip === 1 ? 'on x' : 'on z'}` : ''}`;
+    const what = this.tool === 'brush' ? 'domino brush' : this.tool === 'erase' ? 'erase' : `${s.items.find((i) => i.name === this.hold.item)?.label ?? this.hold.item}, ${this.hold.yaw}°${this.hold.tip ? `, tipped ${this.hold.tip === 1 ? 'on x' : 'on z'}` : ''}${s.slideOf(this.hold) ? `, slid ${s.slideOf(this.hold) > 0 ? '+' : ''}${s.slideOf(this.hold)}` : ''}`;
     const budget = left === null ? `${s.spent()} placed` : `${left} of ${s.budget} left`;
     const why = this.strokeGhost ? (this.strokeGhost.why || `${this.strokeGhost.cost} dominoes${this.strokeGhost.clash.some(Boolean) ? `, ${this.strokeGhost.clash.filter(Boolean).length} left out` : ''}`) : this.ghost && !this.ghost.ok ? this.ghost.why : this.message;
     return [what, budget, why].filter(Boolean).join(' · ');
