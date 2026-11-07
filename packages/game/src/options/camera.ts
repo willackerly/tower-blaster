@@ -18,6 +18,7 @@ export const camera = {
     door: {
       act: 'camera',
       label: 'Camera',
+      player: true,
       choices: [
         { arg: 'still', value: 'still', text: 'Still', title: 'Moves only when you move it' },
         { arg: 'dynamic', value: 'dynamic', text: 'Dynamic', title: 'Follows the collapse and shakes on hits' },

@@ -5,7 +5,7 @@
 // order (and a later GPU reduction) gives the same number.
 import type { Vec3 } from '@tb/engine-api';
 import { type CompiledLevel, lowerIsBetter, type Objective, type Scoring, type StarMetric, type StarsDef } from './level.ts';
-import { aabbTop, asideOf, floorTotal, HEIGHT_BINS, type LevelScore, peOf_mJ, type Reductions, type ScoreLine, skyline, spillOf } from './rules.ts';
+import { aabbTop, asideOf, floorTotal, HEIGHT_BINS, type LevelScore, leveragePoints, logLeveragePoints, peOf_mJ, type Reductions, type ScoreLine, type ShotOutcome, skyline, spillOf } from './rules.ts';
 
 
 /**
@@ -132,6 +132,11 @@ export interface OutcomeFacts {
   energy?: number;
   /** Fold levels (Fuse & Fold): the building's spill at the end (rules.ts spillOf), 0 to 1; absent on other levels. */
   spill?: number;
+  /**
+   * Levels on the 'share' leverage points rule (LevelDef.levPoints, PT31): the shots, the line and what could fall
+   * (PE(B0) - PE_floor), for rules.ts leveragePoints. Absent: the 'log' rule on `leverage`.
+   */
+  levShare?: { shots: readonly Pick<ShotOutcome, 'ke' | 'yield' | 'dPE_mJ' | 'leverage'>[]; line: number; span_mJ: number };
   /** Fold levels: charges that never cut their column (a dead domino fuse, M5b: Session.misfires); any fails the objective. */
   misfires?: number;
   /** Build levels (a build block): what the player placed (build.ts placedCost) and the level's budget (absent: none). */
@@ -161,7 +166,8 @@ export function outcomeTally(f: OutcomeFacts, w = OUTCOME_WEIGHTS): ScoreLine[] 
     return lines;
   }
   lines.push({ label: 'Collapse', value: Math.floor(w.collapse * f.collapse) });
-  lines.push({ label: 'Leverage', value: Math.floor(w.leverage * Math.log2(1 + f.leverage)) });
+  const share = f.levShare;
+  lines.push({ label: 'Leverage', value: share ? leveragePoints(share.shots, share.line, share.span_mJ, 'share') : logLeveragePoints(f.leverage, w.leverage) });
   if (f.hasCrowns) lines.push({ label: 'Combo', value: w.combo * tri(Math.min(Math.max(0, f.comboMax), w.comboCap)) });
   if (f.met && f.rackLeft > 0) lines.push({ label: 'Rack left', value: w.rackLeft * f.rackLeft });
   if (f.heritageBroken) lines.push({ label: 'Heritage', value: w.heritage * f.heritageBroken });

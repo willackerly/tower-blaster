@@ -4,7 +4,7 @@
 // game's keys are held back (a capture listener on window runs before the
 // game's own).
 import { type CompiledLevel, compileLevel, isTrial, type LevelDef } from '@tb/keystone';
-import { type DoorDuel, DOOR_CSS, doorHtml, doorLevels, type DoorLevel } from './door.ts';
+import { type DoorDuel, DOOR_CSS, doorHtml, doorLevels, type DoorLevel, howModeOf } from './door.ts';
 import type { GameHandle } from './play.ts';
 import type { ProgressStore } from './progress.ts';
 import { doorChange, type Settings, type SettingsStore } from './settings.ts';
@@ -44,7 +44,7 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
     style.textContent = DOOR_CSS;
     doc.head.append(style);
   }
-  let open = false, howTo = false, advanced = false, armedReset = false, pending: string | null = null, levels: DoorLevel[] = [];
+  let open = false, howTo = false, howMode: string | null = null, advanced = false, developer = false, armedReset = false, pending: string | null = null, levels: DoorLevel[] = [];
   // The Trials toggle: open from the start when the page opened on a trial, else closed (its levels uncompiled until opened).
   const trialCount = o.levels.filter((d) => isTrial(d.id)).length;
   let trialsOpen = isTrial(o.start);
@@ -56,11 +56,9 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
   const draw = () => {
     levels = doorLevels(o.levels, (id, h) => o.progress.best(id, h), compile, (d) => !trialsOpen && isTrial(d.id));
     o.root.innerHTML = doorHtml({
-      levels, current: o.openLevel ? -1 : current(), settings: o.settings.current, howTo, advanced, detected: o.handle.quality?.probed ?? null, duels: o.duels ?? [],
+      levels, current: o.openLevel ? -1 : current(), settings: o.settings.current, howTo, howMode: howMode ?? (o.duels?.some((d) => d.current) ? 'siege' : howModeOf(o.levels[current()])), advanced, developer, resetAsk: armedReset, detected: o.handle.quality?.probed ?? null, duels: o.duels ?? [],
       ...(trialCount ? { trials: { count: trialCount, open: trialsOpen } } : {}),
     });
-    const reset = o.root.querySelector('[data-act="reset"]');
-    if (armedReset && reset) reset.textContent = 'Click again to forget every best play';
   };
   const page: DoorPage = {
     show() { armedReset = false; draw(); o.root.classList.add('show'); doc.body.classList.add('door-open'); o.menu.style.display = 'none'; open = true; },
@@ -85,7 +83,7 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
     const b = (e.target as HTMLElement).closest('button');
     if (!b) return;
     const act = b.dataset.act, arg = b.dataset.arg ?? '';
-    if (act !== 'reset') armedReset = false;
+    if (act !== 'reset' && act !== 'reset-yes') armedReset = false;
     const change = doorChange(act, arg, o.settings.current);
     if (change) { set(change); return; }
     switch (act) {
@@ -104,15 +102,29 @@ export function installDoor(o: DoorOptions, doc: Document = document): DoorPage 
         draw();
         if (trialsOpen) o.root.querySelector('.trials-head')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
         break;
+      case 'howmode':
+        howMode = arg;
+        draw();
+        o.root.querySelector('.how')?.scrollIntoView({ block: 'nearest' });
+        break;
+      case 'developer':
+        developer = !developer;
+        draw();
+        if (developer) o.root.querySelector('.developer')?.scrollIntoView({ block: 'nearest' });
+        break;
       case 'advanced':
         advanced = !advanced;
         draw();
         if (advanced) o.root.querySelector('.advanced')?.scrollIntoView({ block: 'nearest' });
         break;
-      case 'reset':
-        if (armedReset) { o.progress.reset(); armedReset = false; } else armedReset = true;
+      // Forget my progress asks first (PT37): Forget wipes every best play, Keep (or any other click) backs out.
+      case 'reset': armedReset = true; draw(); break;
+      case 'reset-yes':
+        if (armedReset) o.progress.reset();
+        armedReset = false;
         draw();
         break;
+      case 'reset-no': draw(); break;
     }
   });
   o.menu.addEventListener('click', () => page.show());

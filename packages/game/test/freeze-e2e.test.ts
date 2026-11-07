@@ -10,8 +10,12 @@ import { driverOptions } from '../src/engines.ts';
 import { gamePage, ready } from './page.ts';
 
 const game = gamePage();
-/** A marble well wide of the tower (it runs a while), then the par cannonball while it is frozen. */
-const miss: Shot = { ammo: 'marble', az: 0, y: 4, yaw: 900, pitch: 0, power: 30 };
+/**
+ * A marble well wide of the tower, lobbed high so it runs a while, then the par cannonball while it is frozen. Fired
+ * flat (pitch 0) it left the lot and the run ended about 20 steps in, so the second freeze, asked for some 15 steps
+ * in, raced the end of the run and lost on a slow CI runner; lobbed at 70 deg the run lasts about 95 steps.
+ */
+const miss: Shot = { ammo: 'marble', az: 0, y: 4, yaw: 900, pitch: 700, power: 30 };
 const par = L1.solutions!.par![0] as Shot;
 const URL = '/?level=L1&engine=rapier&look=candy&offscreen=1&keystone.rapid=0&keystone.freeze=1';
 
