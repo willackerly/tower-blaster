@@ -3,9 +3,11 @@
 // GPU reduce() will take at 100k bodies) or a read of a few watched bodies
 // (crowns, heritage, live ammo). Integer fields are exact so a GPU version can
 // be checked bit for bit against this one.
-import type { Quat, Snapshot, Vec3 } from '@tb/engine-api';
+import { type Quat, type Snapshot, TIER_FREE, type Vec3 } from '@tb/engine-api';
 import { quatAngle } from '@tb/geom';
-import { GRAVITY, MATERIALS } from './materials.ts';
+import { GRAVITY, MATERIALS, ROLES } from './materials.ts';
+
+const ROLE_HERITAGE = ROLES.indexOf('heritage');
 import type { CompiledLevel, LevelDef } from './level.ts';
 
 export const HEIGHT_BINS = 64;
@@ -97,10 +99,19 @@ export interface Reductions {
   maxAngSpeed: number;
   /** Potential energy of the structure, sum of round(m g y * 1000) in index order. */
   pe_mJ: number;
+  /** The part of pe_mJ that is heritage's (a fold level's collapse is the building's: outcome.ts buildingOnly). */
+  peHeritage_mJ: number;
   /** Structure bodies more than DISPLACED h from the shot baseline. */
   displaced: number;
   /** Structure bodies whose centre is outside the lot grown by 0.5 h. */
   outOfLot: number;
+  /**
+   * Fuse & Fold's spill, in integer grams (docs/game/fuse-and-fold.md): the building's mass (structure bodies
+   * that are not heritage and not removed) and the part of it whose centre is outside the lot grown by 0.5 h.
+   * spillOf divides them: C11's spill (footprint.ts) with the lot as the target mask.
+   */
+  mass_g: number;
+  spill_g: number;
   /** Structure bodies by the top of their world AABB, over [0, level height]. */
   heightHist: Uint32Array;
   /** Impacts this step by material (6) x home height band (8). */
@@ -146,6 +157,9 @@ export function aabbTop(y: number, q: Quat, half: Vec3): number {
   return y + Math.abs(r10) * half[0] + Math.abs(r11) * half[1] + Math.abs(r12) * half[2];
 }
 
+/** The building's spill at a reduction: the share of its mass (grams) outside the lot grown by 0.5 h; 0 with no building left. */
+export const spillOf = (r: Pick<Reductions, 'mass_g' | 'spill_g'>): number => (r.mass_g > 0 ? r.spill_g / r.mass_g : 0);
+
 export function outsideLot(c: CompiledLevel, x: number, z: number, grow = 0): boolean {
   return x < c.lot.min[0] - grow || x > c.lot.max[0] + grow || z < c.lot.min[1] - grow || z > c.lot.max[1] + grow;
 }
@@ -169,7 +183,7 @@ export function ammoInFlight(c: CompiledLevel, contact: boolean, y: number, spee
 export function reduceCpu(s: Snapshot, prevLinVel: Float64Array | null, c: CompiledLevel, base: Baseline, step: number): Reductions {
   const { meta: m } = c, h = c.frame.unit, dt = c.scene.dt;
   const r: Reductions = {
-    step, nAwake: 0, maxSpeed: 0, maxAngSpeed: 0, pe_mJ: 0, displaced: 0, outOfLot: 0, heightHist: new Uint32Array(HEIGHT_BINS), impacts: new Uint32Array(MATERIALS.length * BANDS),
+    step, nAwake: 0, maxSpeed: 0, maxAngSpeed: 0, pe_mJ: 0, peHeritage_mJ: 0, displaced: 0, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(HEIGHT_BINS), impacts: new Uint32Array(MATERIALS.length * BANDS),
     nMoving: 0, movingBox: Float64Array.of(Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity), ammoSpeed: 0,
   };
   const top = Math.max(c.height, 1e-9);
@@ -196,10 +210,18 @@ export function reduceCpu(s: Snapshot, prevLinVel: Float64Array | null, c: Compi
     }
     if (!structure) continue;
     const x = s.pos[3 * i]!, y = s.pos[3 * i + 1]!, z = s.pos[3 * i + 2]!;
-    r.pe_mJ += peOf_mJ(m.mass[i]!, y);
+    const pe = peOf_mJ(m.mass[i]!, y);
+    r.pe_mJ += pe;
+    if (m.role[i] === ROLE_HERITAGE) r.peHeritage_mJ += pe;
     const dx = x - base.pos[3 * i]!, dy = y - base.pos[3 * i + 1]!, dz = z - base.pos[3 * i + 2]!;
     if (dx * dx + dy * dy + dz * dz > (DISPLACED * h) ** 2) r.displaced++;
-    if (outsideLot(c, x, z, 0.5 * h)) r.outOfLot++;
+    const out = outsideLot(c, x, z, 0.5 * h);
+    if (out) r.outOfLot++;
+    if (m.role[i] !== ROLE_HERITAGE && s.tier?.[i] !== TIER_FREE) {
+      const g = Math.round(m.mass[i]! * 1000);
+      r.mass_g += g;
+      if (out) r.spill_g += g;
+    }
     const t = aabbTop(y, get4(s.rot, i), get3(m.half, i));
     r.heightHist[Math.max(0, Math.min(HEIGHT_BINS - 1, Math.floor((HEIGHT_BINS * t) / top)))]!++;
     if (prevLinVel && 3 * i + 2 < prevLinVel.length) {

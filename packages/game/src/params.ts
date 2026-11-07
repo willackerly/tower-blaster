@@ -4,7 +4,7 @@
 // (docs/design/viewer-superset.md, step F). A key's bad value is refused with
 // a message naming it; keys a page doesn't know are left to it (the look's
 // real.* knobs, the viewer's own).
-import { BIG_LEVELS, checkPhysics, LEVELS, RUBE_LEVELS, TRIAL_LEVELS, UNDERCUT_LEVELS, checkSettle, DUELS, duelLevel, type DuelDef, findDuel, freezeProblem, isRackItem, itemRef, levelById, type LevelDef, MAX_PULLS, MAX_RACK, type PhysicsBlock, RACK_ITEM_NAMES, type RackItem, rackSizeProblem, readShots, SCORINGS, type Scoring, type SettleRule, type Shot, weaponOf } from '@tb/keystone';
+import { BIG_LEVELS, checkPhysics, FUSE_LEVELS, LEVELS, RUBE_LEVELS, TRIAL_LEVELS, UNDERCUT_LEVELS, checkSettle, DUELS, duelLevel, type DuelDef, findDuel, freezeProblem, isRackItem, itemRef, levelById, type LevelDef, MAX_PULLS, MAX_RACK, type PhysicsBlock, RACK_ITEM_NAMES, type RackItem, rackSizeProblem, readShots, SCORINGS, type Scoring, type SettleRule, type Shot, weaponOf } from '@tb/keystone';
 import { LOOKS } from '@tb/render';
 import { isWeaponTier, WEAPON_TIERS, type WeaponTier } from '@tb/weapons';
 import { type EngineKind, engineKind } from './engines.ts';
@@ -161,9 +161,9 @@ export const DEFAULT_LEVEL = BIG_LEVELS[0]!.id;
 
 /**
  * The built-in series in the game's order (the door's sections, top to bottom): the spectacle slice the bare URL
- * opens, the chamber levels, Undercut's, Rube Lab's contraptions, then the unrated trials. Every level of @tb/keystone's SERIES, once.
+ * opens, the chamber levels, Undercut's, Rube Lab's contraptions, Fuse & Fold's, then the unrated trials. Every level of @tb/keystone's SERIES, once.
  */
-export const GAME_SERIES: readonly (readonly LevelDef[])[] = [BIG_LEVELS, LEVELS, UNDERCUT_LEVELS, RUBE_LEVELS, TRIAL_LEVELS];
+export const GAME_SERIES: readonly (readonly LevelDef[])[] = [BIG_LEVELS, LEVELS, UNDERCUT_LEVELS, RUBE_LEVELS, FUSE_LEVELS, TRIAL_LEVELS];
 
 /** A built-in level (chamber L1 to L5, big B1 on, Undercut U1 on or a trial T-...) by id, any case; throws naming the known ones. */
 export const gameLevel = (id: string): LevelDef => levelById(id);
