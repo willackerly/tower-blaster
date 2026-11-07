@@ -5,10 +5,11 @@
 // --engine gpu drives it (keystone-lab cast-browser.ts): SwiftShader in CI,
 // Metal with --channel chrome on a Mac. No rendering: physics only.
 // ?engine=rapier plays on Rapier instead, for comparison.
-import { type CastPlay, castPlay, type CompiledLevel, compileLevel, judgeMason, type LevelDef, type MasonVerdict, nudgedLevel, physicsOf, readShots, type RubeResult, rubePlay } from '@tb/keystone';
+import { type CastPlay, castPlay, type CompiledLevel, compileLevel, DUELS, duelLevel, type Player, judgeMason, type LevelDef, type MasonVerdict, nudgedLevel, physicsOf, readShots, type RubeResult, rubePlay } from '@tb/keystone';
 import { limitProblems } from '@tb/engine-api';
 import { createDevice, isSoftwareAdapter } from '@tb/gpu';
 import { driverOptions, engineKind, makeEngine, makeMasonEngine } from './engines.ts';
+import { type DuelOutcome, duelOutcome, noviceDuel } from './duel-bot.ts';
 
 export interface CastHandle {
   status: 'loading' | 'ready' | 'error';
@@ -32,6 +33,11 @@ export interface CastHandle {
   rube(level: LevelDef): Promise<RubeResult & { ms: number }>;
   /** A Mason level as built, judged in `worlds` (MasonDef worlds' indices) at once on a fresh engine (keystone judgeMason); limits as rest's. */
   mason(level: LevelDef, worlds: number[]): Promise<MasonVerdict & { limits: string[]; ms: number }>;
+  /**
+   * One novice Siege Table duel (duel-bot.ts noviceDuel: the agent playtest's bot) on a fresh engine built as the game
+   * builds the table's level for `first`: PT5's balance on this engine (agent playtest round 2: the GPU solver).
+   */
+  duel(id: string, first: Player, seed: number, aspect?: number): Promise<DuelOutcome & { ms: number }>;
 }
 
 export interface RestReport { presettle: number; steps: number; maxMove: number; topDrop: number; limits: string[]; ms: number }
@@ -40,7 +46,7 @@ declare global { interface Window { __cast: CastHandle } }
 
 const log = document.getElementById('log')!;
 const notReady = async (): Promise<never> => { throw new Error('the cast page is not ready'); };
-const handle: CastHandle = { status: 'loading', adapter: '', software: false, engine: '', play: notReady, rest: notReady, rube: notReady, mason: notReady };
+const handle: CastHandle = { status: 'loading', adapter: '', software: false, engine: '', play: notReady, rest: notReady, rube: notReady, mason: notReady, duel: notReady };
 window.__cast = handle;
 
 async function main() {
@@ -94,6 +100,12 @@ async function main() {
       const v = await judgeMason(e, c, worlds);
       return { ...v, limits: limitProblems(e.health ? await e.health() : null, e.info.name), ms: performance.now() - t0 };
     } finally { e.dispose(); }
+  };
+  handle.duel = async (id, first, seed, aspect = 1.6) => {
+    const def = DUELS.find((d) => d.id === id);
+    if (!def) throw new Error(`no duel ${id}: ${DUELS.map((d) => d.id).join(', ')}`);
+    const e = makeEngine(kind, compileLevel(duelLevel(def, first)), device), t0 = performance.now();
+    try { return { ...duelOutcome(await noviceDuel(e, def, first, seed, aspect)), ms: performance.now() - t0 }; } finally { e.dispose(); }
   };
   handle.status = 'ready';
   log.textContent = `${handle.adapter} (${kind}): ready`;
