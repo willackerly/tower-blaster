@@ -151,6 +151,45 @@ describe('the id map and event release', () => {
     expect(() => new Islands([scene('c', [cube([0, 0.25, 0])], [{ step: 5, kind: 'field', kick: [0, 1, 0] }])])).toThrow(/world-wide/);
   });
 
+  it('pushField: world-wide field events, released unchanged ahead of every island\'s same-step events; solo(k) and pack() carry them', () => {
+    const mk = (id: string) => scene(id, [cube([0, 0.25, 0])], [{ step: 4, kind: 'spawn', body: ball([1, 2, 0]) }]);
+    const isl = new Islands([mk('a'), mk('b'), mk('c')], { gap: 10 });
+    const tilt: InputEvent = { step: 2, kind: 'field', gravity: [1, -9.75, 0] }, kick: InputEvent = { step: 4, kind: 'field', kick: [0.5, 0, 0] };
+    isl.pushField([kick as Extract<InputEvent, { kind: 'field' }>, tilt as Extract<InputEvent, { kind: 'field' }>]);
+    expect(isl.due(0)).toEqual([]);
+    expect(isl.due(1)).toEqual([]);
+    expect(isl.due(2)).toEqual([tilt]);
+    expect(isl.due(3)).toEqual([]);
+    // Step 4: the kick first, then every island's spawn in island order (none of them is kicked, in any island).
+    const at4 = isl.due(4);
+    expect(at4.map((e) => e.kind)).toEqual(['field', 'spawn', 'spawn', 'spawn']);
+    expect(at4[0]).toEqual(kick);
+    for (const k of [0, 1, 2]) {
+      const solo = isl.solo(k);
+      expect(solo.inputs.map((e) => [e.step, e.kind])).toEqual([[2, 'field'], [4, 'field'], [4, 'spawn']]);
+      expect(() => checkInputQueue(solo.bodies.length, solo.inputs)).not.toThrow();
+    }
+    // pack() releases them too, in the same order, and equals releasing step by step.
+    const iso2 = new Islands([mk('a'), mk('b'), mk('c')], { gap: 10 });
+    iso2.pushField([tilt as Extract<InputEvent, { kind: 'field' }>, kick as Extract<InputEvent, { kind: 'field' }>]);
+    expect(iso2.pack().inputs).toEqual(isl.record().inputs);
+    // Field events still queued when solo() is asked go in too, ahead of the same step's own events.
+    const iso3 = new Islands([mk('a')], { gap: 10 });
+    iso3.pushField([kick as Extract<InputEvent, { kind: 'field' }>]);
+    expect(iso3.solo(0).inputs.map((e) => e.kind)).toEqual(['field', 'spawn']);
+  });
+
+  it('pushField refuses other kinds, values off the field grid, and a field event pushed after pack() sealed its step', () => {
+    const isl = new Islands([scene('a', [cube([0, 0.25, 0])])], { gap: 10 });
+    expect(() => isl.pushField([{ step: 1, kind: 'spawn', body: ball([0, 1, 0]) } as unknown as Extract<InputEvent, { kind: 'field' }>])).toThrow(/field events only/);
+    expect(() => isl.pushField([{ step: 1, kind: 'field', kick: [0.1, 0, 0] }])).toThrow(/multiples of 2\^-12/);
+    expect(() => isl.pushField([{ step: 1, kind: 'field' }])).toThrow(/needs a gravity or a kick/);
+    isl.pushField([{ step: 3, kind: 'field', kick: [0.5, 0, 0] }]);
+    isl.pack();
+    isl.pushField([{ step: 2, kind: 'field', kick: [0.5, 0, 0] }]);
+    expect(() => isl.due(3)).toThrow(/pushed after pack\(\) sealed/);
+  });
+
   it('solo(k) is world k alone at its island, with its own events in local ids', () => {
     const [w0, w1] = twoWorlds(), isl = new Islands([w0, w1], { gap: 20 }), o = isl.offsets[1]!;
     for (let s = 0; s <= 4; s++) isl.due(s);

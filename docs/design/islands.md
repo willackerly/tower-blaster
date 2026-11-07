@@ -69,7 +69,7 @@ const { counts } = await obs.result(step);  // counts[question][island]
 
 ## Limits
 
-- At most 256 islands (the observer's bins). Every world shares gravity, dt, the ground, sleep and the combine rules (the constructor refuses otherwise). A gravity schedule (C7) shakes every island alike, which suits Chorus.
+- At most 256 islands (the observer's bins). Every world shares gravity, dt, the ground, sleep and the combine rules (the constructor refuses otherwise), and the field schedule (C7, `docs/design/gravity-and-pins.md`): field events are pushed once for every island with `pushField()` (`push(k)` refuses them), released unchanged ahead of every island's same-step events, so a quake shakes every island alike and a body spawned at a kick's step is never kicked, in any island. `solo(k)` carries them in the same order. Mason's Trial's quake test uses it (`docs/game/masons-trial.md`).
 - Capacity is the engine's: K times a world's bodies plus every spawn.
 
 ## Measured
