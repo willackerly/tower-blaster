@@ -1,7 +1,7 @@
 // The Siege Table's turn controller (duel.ts) on synthetic body states, and its tables (duels.ts) validated.
 import { describe, expect, it } from 'vitest';
 import { emptySnapshot, type Snapshot } from '@tb/engine-api';
-import { checkDuel, compileLevel, D1, D2, Duel, type DuelDef, duelLevel, DUELS, findDuel, inArc, type Shot, validateLevel } from '@tb/keystone';
+import { checkDuel, compileLevel, D1, D2, Duel, type DuelDef, duelLevel, DUELS, findDuel, inArc, KEEP_COURSES, type Shot, validateLevel } from '@tb/keystone';
 
 const shotAt = (az: number, ammo: Shot['ammo'] = 'cannonball'): Shot => ({ ammo, az, y: 8, yaw: 0, pitch: 100, power: 100 } as Shot);
 const WEST = 360, EAST = 0;
@@ -22,9 +22,9 @@ const flatten = (c: ReturnType<typeof world>['c'], s: Snapshot, parts: number[],
 /** D1's parts by what they are (duels.ts: Gold's half as unit cubes, then Blue's the same turned half way round). */
 const partsOf = (sel: unknown) => (sel as { parts: number[] }).parts;
 const GK = partsOf(D1.sides[0].king), BK = partsOf(D1.sides[1].king);
-/** Each side's keep below its battlement (the 54 cubes under course 6). */
+/** Each side's keep below its battlement (the cubes under its first battlement course). */
 const atOf = (def: DuelDef, i: number) => (def.level.parts[i] as { at: [number, number, number] }).at;
-const keepOf = (k: 0 | 1) => partsOf(D1.sides[k].owns).filter((i) => atOf(D1, i)[1] < 6);
+const keepOf = (k: 0 | 1) => partsOf(D1.sides[k].owns).filter((i) => atOf(D1, i)[1] < KEEP_COURSES);
 /** D2's parts (unit cubes) of side k in course y, and only those in the column at x (cells: -1.5 west face, -0.5 core, 0.5 east face) when given. */
 const herald = (k: 0 | 1, y: number, x?: number) => partsOf(D2.sides[k].owns).filter((i) => atOf(D2, i)[1] === y && (x === undefined || atOf(D2, i)[0] === x));
 const courses = (from: number, to = 11) => D2.level.parts.flatMap((_, i) => (atOf(D2, i)[1] >= from && atOf(D2, i)[1] <= to ? [i] : []));
@@ -226,7 +226,7 @@ describe('Duel, Heraldry', () => {
     flatten(c, s, herald(1, 10)); // course 10's blue: 6 blue blocks down on Blue's own shot
     d.settled(s);
     expect(d.sides.map((x) => x.points)).toEqual([4, -6]);
-    for (let k = 2; k < 8; k++) { d.fired(shotAt(d.turn === 0 ? WEST : EAST, k < 4 ? 'cannonball' : 'marble')); d.settled(s); }
+    for (let k = 2; k < 8; k++) { d.fired(shotAt(d.turn === 0 ? WEST : EAST, 'marble')); d.settled(s); }
     expect(d.result).toMatchObject({ over: true, winner: 0, why: 'Gold scored more' });
   });
 
@@ -255,7 +255,7 @@ describe('Duel, Heraldry', () => {
   it('level on points: the side that brought down more of the other\'s blocks wins', () => {
     const { c, s } = world(D2), d = new Duel(D2, c);
     d.fired(shotAt(WEST)); flatten(c, s, courses(11)); d.settled(s); // 6 blue, 6 gold: Gold 0 pts, struck 6
-    for (let k = 1; k < 8; k++) { d.fired(shotAt(d.turn === 0 ? WEST : EAST, k < 4 ? 'cannonball' : 'marble')); d.settled(s); }
+    for (let k = 1; k < 8; k++) { d.fired(shotAt(d.turn === 0 ? WEST : EAST, k < 2 ? 'cannonball' : 'marble')); d.settled(s); }
     expect(d.sides.map((x) => [x.points, x.struck])).toEqual([[0, 6], [0, 0]]);
     expect(d.result).toMatchObject({ over: true, winner: 0, why: 'level on points, Gold brought down more' });
   });

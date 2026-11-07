@@ -5,7 +5,7 @@
 // --engine gpu drives it (keystone-lab cast-browser.ts): SwiftShader in CI,
 // Metal with --channel chrome on a Mac. No rendering: physics only.
 // ?engine=rapier plays on Rapier instead, for comparison.
-import { type CastPlay, castPlay, type CompiledLevel, compileLevel, DUELS, duelLevel, type Player, judgeMason, type LevelDef, type MasonVerdict, nudgedLevel, physicsOf, readShots, type RubeResult, rubePlay, type WaveOptions, type WaveResult, wavePlay } from '@tb/keystone';
+import { type CastPlay, castPlay, type CompiledLevel, compileLevel, type DuelDef, DUELS, duelLevel, type Player, judgeMason, type LevelDef, type MasonVerdict, nudgedLevel, physicsOf, readShots, type RubeResult, rubePlay, type WaveOptions, type WaveResult, wavePlay } from '@tb/keystone';
 import { limitProblems } from '@tb/engine-api';
 import { createDevice, isSoftwareAdapter } from '@tb/gpu';
 import { driverOptions, engineKind, makeEngine, makeMasonEngine } from './engines.ts';
@@ -52,9 +52,10 @@ const log = document.getElementById('log')!;
 const notReady = async (): Promise<never> => { throw new Error('the cast page is not ready'); };
 /**
  * A probe duel (PT22): `turns` stops after that many shots; `swap` trades the sides' parts in the part list (duel-bot.ts
- * swappedOrder); `rivalOnly` aims only clicks on rival blocks (duel-bot.ts NoviceOptions).
+ * swappedOrder); `rivalOnly` aims only clicks on rival blocks (duel-bot.ts NoviceOptions); `def` plays that table
+ * instead of the one named (a variant under test: the layout before PT22, say).
  */
-export interface DuelProbe { turns?: number; swap?: boolean; rivalOnly?: boolean }
+export interface DuelProbe { turns?: number; swap?: boolean; rivalOnly?: boolean; def?: DuelDef }
 /** One shot of a probe duel as it crosses to node: who fired, the referee's tally and the kings after it. */
 export interface DuelShot { player: Player; rival: number; own: number; kingsDown: [boolean, boolean] }
 const duelShot = (t: NoviceTurn): DuelShot => ({ player: t.player, rival: t.tally?.rival ?? 0, own: t.tally?.own ?? 0, kingsDown: t.kingsDown });
@@ -126,7 +127,7 @@ async function main() {
     } finally { e.dispose(); }
   };
   handle.duel = async (id, first, seed, aspect = 1.6, opts = {}) => {
-    const table = DUELS.find((d) => d.id === id);
+    const table = opts.def ?? DUELS.find((d) => d.id === id);
     if (!table) throw new Error(`no duel ${id}: ${DUELS.map((d) => d.id).join(', ')}`);
     const def = opts.swap ? swappedOrder(table) : table;
     const e = makeEngine(kind, compileLevel(duelLevel(def, first)), device), t0 = performance.now();
