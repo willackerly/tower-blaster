@@ -1625,6 +1625,7 @@ export class AvbdSolver {
       // The cap's fixed-point sums (restitution.ts, CAP_FIX_LO) hold the low parts of up to 2^22 bodies.
       if (restitution.energyCap && capacity >= 2 ** 22) throw new Error(`AvbdSolver: the restitution energy cap holds under 2^22 bodies (its fixed-point sums), got capacity ${capacity}`);
       if (!(Number.isFinite(as) && as >= 0)) throw new Error(`AvbdSolver: restitution.anchorSpeed must be a finite number >= 0, got ${as}`);
+      if (!(restitution.anchorCut >= 0 && restitution.anchorCut <= 1)) throw new Error(`AvbdSolver: restitution.anchorCut must be a number in [0, 1], got ${restitution.anchorCut}`);
       if (records === 2) throw new Error('AvbdSolver: restitution is not implemented with records 2 yet (the pass reads points or exact records)');
       // The pass moves bodies after finalize; it does not know sleepers are anchors yet.
       if (sleep) throw new Error('AvbdSolver: restitution is not implemented with sleep yet');
