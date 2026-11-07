@@ -4,7 +4,7 @@
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
-import { engrave, MARK_COVER, MARK_HIT, MARK_KEEP, MARK_MASK, MARK_NONE, MARK_SAVE, MARK_SHADE, MARK_SHIFT, markPoint, markSd, packFx, shieldSd, unpackFx, FX_ANCHOR, FX_BAND, FX_MATTE, FX_PAINT, FX_WORDS, type V3 } from '../src/index.ts';
+import { COAT_GILT, COAT_GLAZE, COAT_MASK, COAT_NONE, COAT_SHIFT, engrave, linearToOklab, MARK_COVER, MARK_HIT, MARK_KEEP, MARK_MASK, MARK_NONE, MARK_SAVE, MARK_SHADE, MARK_SHIFT, markPoint, markSd, packFx, shieldSd, srgbToLinear, unpackFx, FX_ANCHOR, FX_BAND, FX_MATTE, FX_PAINT, FX_WORDS, type V3 } from '../src/index.ts';
 import type * as Drivers from './marks-page.ts';
 
 describe('glyphs (CPU)', () => {
@@ -108,6 +108,19 @@ describe('glyphs (CPU)', () => {
     packFx({ tint: [1, 1, 1] }, w);
     expect(unpackFx(w).mark).toBe(MARK_NONE);
   });
+
+  it('fx word 1 carries the coat in bits 22-23, clear of the mark and the flags; unpack reads it back', () => {
+    expect(COAT_MASK).toBe(3 << COAT_SHIFT);
+    for (const flag of [FX_ANCHOR, FX_PAINT, FX_MATTE, FX_BAND, MARK_MASK]) expect(flag & COAT_MASK).toBe(0);
+    const w = new Uint32Array(FX_WORDS);
+    for (const coat of [COAT_GILT, COAT_GLAZE] as const) for (const mark of [MARK_NONE, MARK_HIT, MARK_SAVE] as const) {
+      packFx({ tint: [1, 0.5, 0.2], band: true, scale: 0.5, mark, coat }, w);
+      expect(unpackFx(w)).toMatchObject({ coat, mark, band: true, anchor: false });
+      expect(unpackFx(w).scale).toBeCloseTo(0.5, 3);
+    }
+    packFx({ tint: [1, 1, 1] }, w);
+    expect(unpackFx(w).coat).toBe(COAT_NONE);
+  });
 });
 
 let gpu: WebGPUSession | null = null;
@@ -163,7 +176,7 @@ describe('marked cubes on the GPU', () => {
     if (!gpu) return ctx.skip();
     const r = await frames({ look });
     expect(r.error).toBeNull();
-    const [plainGold, hit, save, plainCeladon] = r.faces as [Face, Face, Face, Face];
+    const [plainGold, hit, save, plainCeladon] = r.faces as unknown as [Face, Face, Face, Face];
     const hitSd: Sd = (x, y) => markSd(MARK_HIT, x, y), saveSd: Sd = (x, y) => markSd(MARK_SAVE, x, y), flipped: Sd = (x, y) => markSd(MARK_SAVE, x, -y);
     const msg = JSON.stringify({ hit: [contrast(hit, hitSd), prefers(hit, hitSd, saveSd)], save: [contrast(save, saveSd), prefers(save, saveSd, hitSd), prefers(save, saveSd, flipped)], plain: [contrast(plainGold, hitSd), contrast(plainCeladon, saveSd)] });
     // Carved reads clearly darker (display values, 0-255) where the glyph is, on both colours.
@@ -197,6 +210,31 @@ describe('marked cubes on the GPU', () => {
     expect(r.kept).toEqual([MARK_NONE, MARK_HIT, MARK_SAVE, MARK_NONE]);
     expect(r.cleared).toEqual([0, 0, 0, 0]);
     expect(contrast(r.faces[1] as Face, (x, y) => markSd(MARK_HIT, x, y))).toBeGreaterThan(20);
+  });
+
+  it('coats stay through a setFx without one and a bulk scale write, and clearFx removes them', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await frames({ look: 'candy', coats: true, marks: false, restyle: true });
+    expect(r.error).toBeNull();
+    expect(r.keptCoats).toEqual([COAT_GILT, COAT_GILT, COAT_GLAZE, COAT_GLAZE]);
+    expect(r.clearedCoats).toEqual([0, 0, 0, 0]);
+  });
+
+  it.for(['hazy', 'real', 'candy'] as const)('%s: an untinted gilt cube reads gold and a glaze cube teal, the same coat the same hue whatever the slot', async (look, ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await frames({ look, coats: true, marks: false });
+    expect(r.error).toBeNull();
+    const hue = (face: Array<{ rgb: V3 }>) => {
+      let a = 0, b = 0;
+      for (const { rgb } of face) { const lab = linearToOklab(rgb.map((x) => srgbToLinear(x / 255)) as V3); a += lab[1]; b += lab[2]; }
+      return { h: ((Math.atan2(b, a) * 180) / Math.PI + 360) % 360, c: Math.hypot(a, b) / face.length };
+    };
+    const hs = (r.faces as Array<Array<{ rgb: V3 }>>).map(hue), msg = JSON.stringify(hs);
+    for (const k of [0, 1]) { expect(hs[k]!.h, msg).toBeGreaterThan(60); expect(hs[k]!.h, msg).toBeLessThan(100); expect(hs[k]!.c, msg).toBeGreaterThan(0.05); }
+    for (const k of [2, 3]) { expect(hs[k]!.h, msg).toBeGreaterThan(150); expect(hs[k]!.h, msg).toBeLessThan(200); expect(hs[k]!.c, msg).toBeGreaterThan(0.04); }
+    // Candy gives slots 0 and 1 (and 2 and 3) different palette colours; a coat replaces them, so they match.
+    expect(Math.abs(hs[0]!.h - hs[1]!.h), msg).toBeLessThan(3);
+    expect(Math.abs(hs[2]!.h - hs[3]!.h), msg).toBeLessThan(3);
   });
 
   it('screenshots (MARKS_SHOTS=dir): before and after, close and far, in each look', async (ctx) => {

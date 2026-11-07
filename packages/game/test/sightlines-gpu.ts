@@ -17,14 +17,19 @@ export interface Sight { crowns: number; crownsSeen: number; heritage: number; h
 /** Open `id` at `shape` (URL keys `extra` added) on Rapier (the opening view does not depend on the engine) and count what the ID pass shows. */
 export async function sightOf(game: GamePage, id: string, shape: keyof typeof SHAPES, extra = ''): Promise<Sight | null> {
   const s = SHAPES[shape], { width, height } = s.viewport;
-  const o = await game.open(`/?level=${id}&engine=rapier&offscreen=${width}x${height}&progress=off&door=0${extra}`, 10 * 60_000, s);
+  // keystone.build=0: a workshop (T-W1) opens on its play view, not its build phase (the gate is about the view the shots are aimed from).
+  const o = await game.open(`/?level=${id}&engine=rapier&offscreen=${width}x${height}&progress=off&door=0&keystone.build=0${extra}`, 10 * 60_000, s);
   if (!o) return null;
   const { page, errors } = o;
   await ready(page, 10 * 60_000); // the structure is in the renderer's source once the level is ready to play
   const got = await page.evaluate(async () => {
     const W = innerWidth, H = innerHeight;
+    const shown = (e: Element) => getComputedStyle(e).display !== 'none' && getComputedStyle(e).visibility !== 'hidden';
+    // A docked HUD (ui.ts DOCK_CSS, a phone) spans the screen with no background of its own: what covers the
+    // scene is its strip, tray and the hints over the tray, its children.
     const covered = [...document.querySelectorAll<HTMLElement>('.kg-panel')]
-      .filter((e) => !e.classList.contains('kg-result') && getComputedStyle(e).display !== 'none' && getComputedStyle(e).visibility !== 'hidden')
+      .filter((e) => !e.classList.contains('kg-result') && shown(e))
+      .flatMap((e) => (e.classList.contains('kg-dock') && getComputedStyle(e).backgroundColor === 'rgba(0, 0, 0, 0)' ? [...e.children].filter(shown) : [e]))
       .map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0 && r.height > 0)
       .map((r) => ({ left: r.left / W, top: r.top / H, right: r.right / W, bottom: r.bottom / H }));
     return window.__game.sightlines(covered);

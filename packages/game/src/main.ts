@@ -16,14 +16,14 @@ import { doorDuels, doorMode, doorOnLoad, duelsOnDoor, openerFor, preaimMode, se
 import { buildOption, GAME_SERIES, loadOptions, lookName, onEngine, parseGameParams, weaponTierOf, withRules } from './params.ts';
 import { browserKeyValue, memoryKeyValue, type ProgressStore, progressStore } from './progress.ts';
 import { bankAfterLine, type SessionFacts, sessionFile, sessionFileName } from './session-file.ts';
-import { CAMERA_KEYS, cameraFeel, LAUNCH_KEYS, launchFeel, MARKS_KEYS, marksFeel, RAPID_KEYS, rapidFeel, type Settings, SettingsStore, TURN_VIEW_KEYS, turnViewFeel, VIEW_KEYS, viewFeel, IMPACT_KEYS, impactFeel, XRAY_KEYS, xrayFeel } from './settings.ts';
+import { feelFromSettings, settingFeel, type Settings, SettingsStore, settingUrlKeys } from './settings.ts';
 import { knobsFor, type QualityState, tierFor } from './quality.ts';
 import { probeQuality } from './quality-probe.ts';
 import { NO_WEBGPU_HTML, webgpuMissing } from './support.ts';
 import { type GameHandle, newGameHandle, playKeystone, playLine } from './play.ts';
 import { helpHtml, installGameStyles } from './ui.ts';
 import { goalsMode } from './lot-hud.ts';
-import { LAYOUT_KEYS, layoutOf } from './layout.ts';
+import { layoutOf } from './layout.ts';
 import { touchMode } from './touch.ts';
 
 declare global { interface Window { __game: GameHandle; __progress: ProgressStore; __door: DoorPage } }
@@ -61,25 +61,12 @@ async function main() {
   window.__progress = progress;
   const settings = new SettingsStore(q.get('progress') === 'off' ? memoryKeyValue() : browserKeyValue() ?? memoryKeyValue(), q);
   const look = lookName(settings.current.look);
-  // The camera motions: the URL's keystone.follow / keystone.shake where it says, else the Camera setting.
-  // One object, read live by the game: a change applies to the shake at once and to the follow from the next shot.
-  Object.assign(feel, cameraFeel(feel, q, settings.current.camera));
-  // Rapid fire: the URL's keystone.rapid where it says, else the setting (on by default). Read live: a change applies to the next click.
-  // A duel is one shot per turn, so it never fires mid-shot whatever the setting says.
-  Object.assign(feel, rapidFeel(feel, q, settings.current.rapid));
+  // Each setting's say over feel (settings.ts feelFromSettings): the camera motions, rapid fire, a duel's turn view
+  // and hand-over card, launch height, stone marks, each field unless the URL's key says it. One object, read live
+  // by the game (each option's module, ./options, says when a change shows).
+  feelFromSettings(feel, q, settings.current);
+  // A duel is one shot per turn, so it never fires mid-shot whatever the Rapid fire setting says.
   if (duel) feel.rapid = false;
-  // A duel's turn view: the URL's keystone.turnview where it says, else the Duel turns setting (on by default). Read live: from the next turn.
-  Object.assign(feel, turnViewFeel(feel, q, settings.current.duelView));
-  // Launch height: the URL's keystone.launch where it says, else the setting (high by default). Read live: a change moves the launcher at once.
-  Object.assign(feel, launchFeel(feel, q, settings.current.launch));
-  // Stone marks: the URL's keystone.marks where it says, else the setting (on by default). Read live: a change recarves the stones at once.
-  Object.assign(feel, marksFeel(feel, q, settings.current.marks));
-  // The opening view: the URL's keystone.view where it says, else the Opening view setting (goals by default). Read at each level load.
-  Object.assign(feel, viewFeel(feel, q, settings.current.view));
-  // The impact marker: the URL's keystone.impact where it says, else the setting (on by default). Read live, at each aim.
-  Object.assign(feel, impactFeel(feel, q, settings.current.impact));
-  // Hidden goals: the URL's keystone.xray where it says, else the setting (auto: the city levels). Read live, each frame.
-  Object.assign(feel, xrayFeel(feel, q, settings.current.xray));
   // Where the HUD and the result card sit (layout.ts): the URL's keystone.hud / card / carddelay where they say, else the Layout setting.
   // One object, read live by the game; the HUD's kg-dock class docks it on a phone (ui.ts DOCK_CSS).
   const layout = layoutOf(q, settings.current.layout);
@@ -155,17 +142,12 @@ async function main() {
       if (changed === 'look') renderer.look = lookByName(lookName(st.look), parseRealOptions(q));
       if (changed === 'sound') handle.setMuted(!st.sound);
       if (changed === 'sharp' || changed === 'quality') applyQuality(st);
-      if (changed === 'camera') Object.assign(feel, cameraFeel(feel, new URLSearchParams(), st.camera));
-      if (changed === 'rapid') { Object.assign(feel, rapidFeel(feel, new URLSearchParams(), st.rapid)); if (duel) feel.rapid = false; }
-      if (changed === 'duelView') Object.assign(feel, turnViewFeel(feel, new URLSearchParams(), st.duelView));
-      if (changed === 'launch') Object.assign(feel, launchFeel(feel, new URLSearchParams(), st.launch));
-      if (changed === 'view') Object.assign(feel, viewFeel(feel, new URLSearchParams(), st.view));
-      if (changed === 'impact') Object.assign(feel, impactFeel(feel, new URLSearchParams(), st.impact));
-      if (changed === 'xray') Object.assign(feel, xrayFeel(feel, new URLSearchParams(), st.xray));
-      if (changed === 'marks') { Object.assign(feel, marksFeel(feel, new URLSearchParams(), st.marks)); handle.refreshMarks(); }
+      Object.assign(feel, settingFeel(changed, feel, new URLSearchParams(), st[changed]));
+      if (changed === 'rapid' && duel) feel.rapid = false;
+      if (changed === 'marks') handle.refreshMarks();
       if (changed === 'layout') { Object.assign(layout, layoutOf(new URLSearchParams(), st.layout)); applyLayout(); }
       // The setting now says it: the URL keys that set it for this visit go.
-      const u = new URLSearchParams(location.search), keys = changed === 'camera' ? CAMERA_KEYS : changed === 'rapid' ? RAPID_KEYS : changed === 'duelView' ? TURN_VIEW_KEYS : changed === 'launch' ? LAUNCH_KEYS : changed === 'marks' ? MARKS_KEYS : changed === 'layout' ? LAYOUT_KEYS : changed === 'view' ? VIEW_KEYS : changed === 'impact' ? IMPACT_KEYS : changed === 'xray' ? XRAY_KEYS : [changed];
+      const u = new URLSearchParams(location.search), keys = settingUrlKeys(changed);
       if (keys.some((k) => u.has(k))) { for (const k of keys) u.delete(k); history.replaceState(null, '', `?${u}`); }
     },
   });

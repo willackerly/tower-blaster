@@ -96,7 +96,7 @@ describe('the opening view shows the objectives (PT1)', () => {
 
 describe('viewOf', () => {
   it('classic (keystone.view=classic) opens on the base yaw at 12 degrees whatever the level shows', () => {
-    const c = compileLevel(B2), o = viewOf(c, WIDE, undefined, undefined, 'classic');
+    const c = compileLevel(B2), o = viewOf(c, WIDE, undefined, undefined, undefined, { mode: 'classic' });
     expect(o.yaw).toBeCloseTo((baseYaw(c) * Math.PI) / 180, 12);
     expect(o.pitch).toBeCloseTo((12 * Math.PI) / 180, 12);
     expect(viewOf(c, WIDE)).not.toEqual(o);
@@ -115,7 +115,7 @@ describe('viewOf', () => {
 
   it('extra insets (a measured HUD band) join the defaults side by side', () => {
     const c = compileLevel(LEVELS[0]!), { min, max } = structureBox(c);
-    const o = viewOf(c, PHONE, undefined, { top: 0.1, bottom: 0.3 }), [, , y0, y1] = extent(o, PHONE, min, max);
+    const o = viewOf(c, PHONE, undefined, undefined, undefined, { insets: { top: 0.1, bottom: 0.3 } }), [, , y0, y1] = extent(o, PHONE, min, max);
     expect(y1!).toBeLessThanOrEqual(1 - 2 * PORTRAIT_HUD_SHARE + 1e-9);
     expect(y0!).toBeGreaterThanOrEqual(-1 + 2 * 0.3 - 1e-9);
     const w = viewOf(c, WIDE), [, , , top] = extent(w, WIDE, min, max);

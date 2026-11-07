@@ -33,7 +33,7 @@ Items 4 and 5 are the opening view (`docs/game/opening-view.md`). This note cove
 - It is drawn for every aimed shot except a pull. A pull lights its block instead.
 - It is not drawn when the blast zone shows (one-blast weapons), since that zone already marks the spot.
 - Like the zone, it shows faintly through what stands in front of it, so a shot that will hit a wall in front of the cursor shows the mark on that wall.
-- Option: `keystone.impact=0` turns it off, as does the door's **Advanced settings > Impact marker** and the viewer's Scene panel.
+- Option: `keystone.impact=0` turns it off, as does the door's **Advanced settings > Impact marker** and the viewer's Scene panel (`options/impact.ts`).
 
 ## The opener's preview
 

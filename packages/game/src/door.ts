@@ -15,16 +15,10 @@
 import { castStars, type CompiledLevel, compileLevel, DUEL_NAMES, type DuelDef, isTrial, type LevelDef, type Objective, scoringOf, SERIES, SERIES_TITLES, type Shot, type StarMetric, type StarsDef } from '@tb/keystone';
 import { CUSTOM_NOTE, esc, fmtPoints, itemLabel, LEVERAGE_MEANS, objectiveText, pct } from './hud.ts';
 import type { LevelRecord } from './progress.ts';
-import type { QualitySetting, QualityTier } from './quality.ts';
-import { LOOK_CHOICES, QUALITY_CHOICES, type Settings } from './settings.ts';
+import type { QualityTier } from './quality.ts';
+import { type Settings, settingRows } from './settings.ts';
 
-/** The Quality buttons' tooltips (docs/game/quality-tiers.md). */
-export const QUALITY_TITLES: Readonly<Record<QualitySetting, string>> = {
-  auto: 'Picked for this device when the page loads',
-  high: 'Full resolution, every effect',
-  mid: 'One pixel per screen point: a quarter of the pixels on a sharp screen',
-  low: 'Half resolution, no ambient occlusion, no sparks or dust',
-};
+export { QUALITY_TITLES } from './options/quality.ts';
 
 /** ?door=auto (default: shown when the URL names no level), 1 (always shown on load) or 0 (never). */
 export type DoorMode = 'auto' | '1' | '0';
@@ -217,13 +211,13 @@ export interface DoorModel {
   settings: Settings;
   /** The how-to-play panel is open. */
   howTo: boolean;
-  /** The Advanced settings panel (sound, look, camera, rapid fire, duel turns, launch height, stone marks, opening view, impact marker, hidden goals, layout, sharpness, quality, forget my progress) is open; closed by default. */
+  /** The Advanced settings panel (sound, look, camera, rapid fire, duel turns, hand-over, launch height, stone marks, layout, sharpness, quality, forget my progress) is open; closed by default. */
   advanced: boolean;
   /** The tier the probe picked on load, which Auto takes (quality.ts); null or absent when none ran. */
   detected?: QualityTier | null;
 }
 
-/** The door's markup. Every button carries data-act (play, level, how, advanced, trials, sound, look, sharp, quality, camera, rapid, duelview, launch, marks, view, impact, xray, layout, reset, close) and data-arg where it needs one. */
+/** The door's markup. Every button carries data-act (play, level, how, advanced, trials, sound, look, sharp, quality, camera, rapid, duelview, handoff, launch, marks, layout, reset, close) and data-arg where it needs one. */
 export function doorHtml(m: DoorModel): string {
   const next = nextLevel(m.levels);
   const card = (l: DoorLevel, i: number) => {
@@ -252,9 +246,6 @@ export function doorHtml(m: DoorModel): string {
       ${m.trials.open ? `<div class="trials-blurb">${esc(TRIALS_BLURB)}</div><div class="cards trials">${trialCards}</div>` : ''}` : '';
   const play = m.levels[next], here = m.levels.find((l) => l.index === m.current);
   const s = m.settings;
-  const tierName = (t: QualityTier) => QUALITY_CHOICES.find((c) => c.quality === t)!.label;
-  const qualities = QUALITY_CHOICES.map((c) => `<button data-act="quality" data-arg="${c.quality}" class="${s.quality === c.quality ? 'on' : ''}" title="${esc(QUALITY_TITLES[c.quality])}">${c.quality === 'auto' && m.detected ? `Auto (${tierName(m.detected)})` : c.label}</button>`).join('');
-  const looks = LOOK_CHOICES.map((c) => `<button data-act="look" data-arg="${c.look}" class="${s.look === c.look ? 'on' : ''}">${c.label}</button>`).join('');
   return `
     <div class="door-inner">
       <h1>Keystone</h1>
@@ -271,19 +262,7 @@ export function doorHtml(m: DoorModel): string {
       <button data-act="advanced" class="howlink advlink${m.advanced ? ' on' : ''}" aria-expanded="${m.advanced}">Advanced settings</button>
       ${m.advanced ? `<div class="advanced">
       <div class="foot">
-        <span class="group"><span class="lbl">Sound</span><span class="seg"><button data-act="sound" class="${s.sound ? 'on' : ''}">${s.sound ? 'On' : 'Off'}</button></span></span>
-        <span class="group"><span class="lbl">Look</span><span class="seg">${looks}</span></span>
-        <span class="group"><span class="lbl">Camera</span><span class="seg"><button data-act="camera" data-arg="still" class="${s.camera === 'still' ? 'on' : ''}" title="Moves only when you move it">Still</button><button data-act="camera" data-arg="dynamic" class="${s.camera === 'dynamic' ? 'on' : ''}" title="Follows the collapse and shakes on hits">Dynamic</button></span></span>
-        <span class="group"><span class="lbl">Rapid fire</span><span class="seg"><button data-act="rapid" data-arg="on" class="${s.rapid ? 'on' : ''}" title="Fire again before the last shot settles">On</button><button data-act="rapid" data-arg="off" class="${s.rapid ? '' : 'on'}" title="Each shot waits for the last to settle">Off</button></span></span>
-        <span class="group"><span class="lbl">Duel turns</span><span class="seg"><button data-act="duelview" data-arg="on" class="${s.duelView ? 'on' : ''}" title="The camera turns to the side whose turn it is">Turn the view</button><button data-act="duelview" data-arg="off" class="${s.duelView ? '' : 'on'}" title="The camera stays where the last player left it">Leave it</button></span></span>
-        <span class="group"><span class="lbl">Launch height</span><span class="seg"><button data-act="launch" data-arg="high" class="${s.launch === 'high' ? 'on' : ''}" title="Shots leave from over the structure's top, clear of the rubble (keys W and S move it)">High</button><button data-act="launch" data-arg="level" class="${s.launch === 'level' ? 'on' : ''}" title="Shots leave from the level's own launcher, near the ground, where its par lines were recorded">Level's</button></span></span>
-        <span class="group"><span class="lbl">Stone marks</span><span class="seg"><button data-act="marks" data-arg="on" class="${s.marks ? 'on' : ''}" title="A crosshair carved on the blocks to bring down, a shield on the blocks to keep">Carved</button><button data-act="marks" data-arg="off" class="${s.marks ? '' : 'on'}" title="Plain stones: only their colour says which are which">Off</button></span></span>
-        <span class="group"><span class="lbl">Opening view</span><span class="seg"><button data-act="view" data-arg="goals" class="${s.view === 'goals' ? 'on' : ''}" title="Each level opens on a view that shows its crowns and what to spare">Show the goals</button><button data-act="view" data-arg="classic" class="${s.view === 'classic' ? 'on' : ''}" title="Each level opens on the low three-quarter view from the launcher's side">Classic</button></span></span>
-        <span class="group"><span class="lbl">Impact marker</span><span class="seg"><button data-act="impact" data-arg="on" class="${s.impact ? 'on' : ''}" title="A mark on the face your shot's flight will meet first">On</button><button data-act="impact" data-arg="off" class="${s.impact ? '' : 'on'}" title="Only the dotted flight">Off</button></span></span>
-        <span class="group"><span class="lbl">Hidden goals</span><span class="seg"><button data-act="xray" data-arg="auto" class="${s.xray === 'auto' ? 'on' : ''}" title="Crowns and blocks to spare show through what hides them on the city levels">Cities</button><button data-act="xray" data-arg="on" class="${s.xray === 'on' ? 'on' : ''}" title="Crowns and blocks to spare show through what hides them on every level">Always</button><button data-act="xray" data-arg="off" class="${s.xray === 'off' ? 'on' : ''}" title="Only what is in plain sight">Never</button></span></span>
-        <span class="group"><span class="lbl">Layout</span><span class="seg"><button data-act="layout" data-arg="docked" class="${s.layout === 'docked' ? 'on' : ''}" title="On a phone the HUD docks to the screen's edges; the result card waits a moment after the round, then docks aside so the collapse stays in view">Docked</button><button data-act="layout" data-arg="classic" class="${s.layout === 'classic' ? 'on' : ''}" title="One HUD panel at the top left, and the result card in the middle as soon as the round ends">Classic</button></span></span>
-        <span class="group"><span class="lbl">Sharpness</span><span class="seg"><button data-act="sharp" data-arg="2" class="${s.sharp === 2 ? 'on' : ''}">Full</button><button data-act="sharp" data-arg="1" class="${s.sharp === 1 ? 'on' : ''}">Fast</button></span></span>
-        <span class="group"><span class="lbl">Quality</span><span class="seg">${qualities}</span></span>
+        ${settingRows(s, { detected: m.detected ?? null, esc }).join('\n        ')}
       </div>
       <div class="reset"><button data-act="reset">Forget my progress</button></div>
       </div>` : ''}

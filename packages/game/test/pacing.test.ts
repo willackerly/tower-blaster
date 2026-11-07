@@ -23,23 +23,11 @@ const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 describe('pace feel', () => {
   it('juice and every camera motion are off unless the URL asks for them; the valve and the tail skip are on; every frame is drawn', () => {
     expect(paceFeel(new URLSearchParams(''))).toEqual(DEFAULT_FEEL);
-    expect(DEFAULT_FEEL).toEqual({ hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', balls: 'painted', marks: true, fx: 'damage', spent: true, pullAnim: true, frozenLook: true, view: 'goals', impact: true, xray: 'off' });
+    expect(DEFAULT_FEEL).toEqual({ hitStop: false, slowMo: false, budgetMs: DEFAULT_BUDGET_MS, tailSkip: true, follow: false, shake: false, frames: 'all', rapid: true, turnView: true, arcs: true, handoff: true, undoMB: DEFAULT_UNDO_MB, launch: 'high', balls: 'painted', marks: true, view: 'goals', impact: true, xray: 'off', fx: 'damage', spent: true, sun: 'view', coats: true, pullAnim: true, frozenLook: true });
     // Impact effects follow the damage by default (PT2); keystone.fx=classic restores the old look. Spent ammo fades (PT19), off by keystone.spent=0.
     expect(paceFeel(new URLSearchParams('?keystone.fx=classic'))).toEqual({ ...DEFAULT_FEEL, fx: 'classic' });
     expect(paceFeel(new URLSearchParams('?keystone.spent=0'))).toEqual({ ...DEFAULT_FEEL, spent: false });
     expect(() => paceFeel(new URLSearchParams('?keystone.fx=loud'))).toThrow(/keystone.fx/);
-    // The opening view (PT1): goals by default, classic by its key, anything else refused; written back only when not the default.
-    expect(paceFeel(new URLSearchParams('?keystone.view=classic'))).toEqual({ ...DEFAULT_FEEL, view: 'classic' });
-    expect(() => paceFeel(new URLSearchParams('?keystone.view=top'))).toThrow(/keystone.view must be goals or classic: top/);
-    { const w = new URLSearchParams(); writePaceFeel({ ...DEFAULT_FEEL, view: 'classic' }, w); expect(w.toString()).toBe('keystone.view=classic'); }
-    // The impact marker (PT14): on by default, keystone.impact=0 off, written back only when off.
-    expect(paceFeel(new URLSearchParams('?keystone.impact=0'))).toEqual({ ...DEFAULT_FEEL, impact: false });
-    expect(() => paceFeel(new URLSearchParams('?keystone.impact=yes'))).toThrow(/keystone.impact/);
-    { const w = new URLSearchParams(); writePaceFeel({ ...DEFAULT_FEEL, impact: false }, w); expect(w.toString()).toBe('keystone.impact=0'); }
-    // Hidden goals: off by default, on and off by their key, anything else refused.
-    expect(paceFeel(new URLSearchParams('?keystone.xray=on'))).toEqual({ ...DEFAULT_FEEL, xray: 'on' });
-    expect(() => paceFeel(new URLSearchParams('?keystone.xray=1'))).toThrow(/keystone.xray must be auto, on, off: 1/);
-    { const w = new URLSearchParams(); writePaceFeel({ ...DEFAULT_FEEL, xray: 'auto' }, w); expect(w.toString()).toBe('keystone.xray=auto'); }
     // Undo memory: MB of checkpoints (0: undo replays the shots); out of range or not a number is refused.
     expect(paceFeel(new URLSearchParams('?keystone.undo=0'))).toEqual({ ...DEFAULT_FEEL, undoMB: 0 });
     expect(paceFeel(new URLSearchParams('?keystone.undo=256')).undoMB).toBe(256);
@@ -58,6 +46,11 @@ describe('pace feel', () => {
     // Stone marks are on by default (Will, 2026-11-06), off by keystone.marks=0.
     expect(paceFeel(new URLSearchParams('?keystone.marks=0'))).toEqual({ ...DEFAULT_FEEL, marks: false });
     expect(() => paceFeel(new URLSearchParams('?keystone.marks=off'))).toThrow(/keystone.marks must be 0 or 1: off/);
+    // The real look's sun counts from the opening view (PT15), the look's own by keystone.sun=look.
+    expect(paceFeel(new URLSearchParams('?keystone.sun=look'))).toEqual({ ...DEFAULT_FEEL, sun: 'look' });
+    expect(() => paceFeel(new URLSearchParams('?keystone.sun=north'))).toThrow(/keystone.sun must be view or look: north/);
+    // Crowns gilded and heritage glazed in every look (PT15), the old role tint by keystone.coats=0.
+    expect(paceFeel(new URLSearchParams('?keystone.coats=0'))).toEqual({ ...DEFAULT_FEEL, coats: false });
     // Pulls drawn and Bullet Time's frozen look are on by default (playtest PT17, PT8), each off by its key, and write back.
     expect(paceFeel(new URLSearchParams('?keystone.pullanim=0'))).toEqual({ ...DEFAULT_FEEL, pullAnim: false });
     expect(paceFeel(new URLSearchParams('?keystone.frozenlook=0'))).toEqual({ ...DEFAULT_FEEL, frozenLook: false });
@@ -95,7 +88,8 @@ describe('pace feel', () => {
     expect(() => checkPaceFeel({ ...DEFAULT_FEEL, frames: 'most' as 'all' })).toThrow(/keystone.frames must be/);
     expect(() => checkPaceFeel({ ...DEFAULT_FEEL, launch: 'up' as 'high' })).toThrow(/keystone.launch must be/);
     expect(() => checkPaceFeel({ ...DEFAULT_FEEL, balls: 'red' as 'plain' })).toThrow(/keystone.balls must be/);
-    for (const f of [DEFAULT_FEEL, { ...DEFAULT_FEEL, hitStop: true, budgetMs: 0 }, { ...DEFAULT_FEEL, slowMo: true, tailSkip: false, budgetMs: 20 }, { ...DEFAULT_FEEL, follow: true }, { ...DEFAULT_FEEL, shake: true }, { ...DEFAULT_FEEL, follow: true, shake: true }, { ...DEFAULT_FEEL, frames: 'half' as const }, { ...DEFAULT_FEEL, frames: 'auto' as const }, { ...DEFAULT_FEEL, rapid: false }, { ...DEFAULT_FEEL, launch: 'level' as const }, { ...DEFAULT_FEEL, balls: 'plain' as const }, { ...DEFAULT_FEEL, turnView: false }, { ...DEFAULT_FEEL, arcs: false }, { ...DEFAULT_FEEL, marks: false }]) {
+    expect(() => checkPaceFeel({ ...DEFAULT_FEEL, sun: 'north' as 'look' })).toThrow(/keystone.sun must be/);
+    for (const f of [DEFAULT_FEEL, { ...DEFAULT_FEEL, hitStop: true, budgetMs: 0 }, { ...DEFAULT_FEEL, slowMo: true, tailSkip: false, budgetMs: 20 }, { ...DEFAULT_FEEL, follow: true }, { ...DEFAULT_FEEL, shake: true }, { ...DEFAULT_FEEL, follow: true, shake: true }, { ...DEFAULT_FEEL, frames: 'half' as const }, { ...DEFAULT_FEEL, frames: 'auto' as const }, { ...DEFAULT_FEEL, rapid: false }, { ...DEFAULT_FEEL, launch: 'level' as const }, { ...DEFAULT_FEEL, balls: 'plain' as const }, { ...DEFAULT_FEEL, turnView: false }, { ...DEFAULT_FEEL, arcs: false }, { ...DEFAULT_FEEL, marks: false }, { ...DEFAULT_FEEL, sun: 'look' as const }, { ...DEFAULT_FEEL, coats: false }]) {
       const q = new URLSearchParams();
       writePaceFeel(f, q);
       expect(paceFeel(q)).toEqual(f);

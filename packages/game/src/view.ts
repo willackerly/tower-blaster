@@ -4,8 +4,8 @@
 // structure inside the screen's free area, an exact fit for that direction).
 import type { Vec3 } from '@tb/engine-api';
 import type { CompiledLevel } from '@tb/keystone';
-import { DEFAULT_FRAMING, EYE_ABOVE_GROUND, frame, type Framing, type Orbit, viewProj } from '@tb/render/camera';
-import type { OpeningView } from './pacing.ts';
+import { DEFAULT_FRAMING, EYE_ABOVE_GROUND, eyeDistance, frame, type Framing, type Orbit, viewProj } from '@tb/render/camera';
+import type { OpeningView } from './options/openview.ts';
 import { idRaster, pixelCounts, type ScreenRect, seen } from './sightlines.ts';
 
 /** The share of an upright phone's screen height the HUD takes at the top (the compact touch HUD with its opener and lot sheet line: about 300 of 844 px, plus a margin). */
@@ -46,34 +46,71 @@ export function baseYaw(c: CompiledLevel): number {
   return first && 'az' in first ? 90 - first.az / 2 : DEFAULT_FRAMING.yaw;
 }
 
+/** How an opening view is made (viewOf): `insets` joined with defaultInsets (e.g. the HUD's measured band); `mode` 'classic' (PaceFeel.view, keystone.view) skips the search. */
+export interface ViewOptions { insets?: Partial<Insets>; mode?: OpeningView }
+
 /**
- * The game's opening view of a level: the structure framed whole from openingDirection (or from `face`, a duel's
- * turn view: duel-view.ts duelView), clear of the screen's insets (defaultInsets joined with `insets`, e.g. the
- * HUD's measured band). The eye stays EYE_ABOVE_GROUND over the ground (y 0), as in the viewer.
- * A wide screen (aspect 1 and up) frames as a square one would, so every wide window opens on the same view.
- * `mode` 'classic' (PaceFeel.view, keystone.view) skips the search: the base yaw at DEFAULT_FRAMING's pitch.
- * A `face` with no insets is a duel's turn view, framed as before (faceView).
+ * The game's opening view of a level: the structure framed whole from openingDirection, clear of the screen's
+ * insets (defaultInsets joined with opts.insets). The eye stays EYE_ABOVE_GROUND over the ground (y 0), as in the
+ * viewer. A wide screen (aspect 1 and up) frames as a square one would, so every wide window opens on the same view.
+ * opts.mode 'classic' skips the search: the base yaw at DEFAULT_FRAMING's pitch.
+ * With `face` (degrees, as Framing has them) it is a duel's turn view instead, framed as before PT1 (faceView), where
+ * `focus` and `only` apply.
  */
-export function viewOf(c: CompiledLevel, aspect = 1, face?: Direction, insets?: Partial<Insets>, mode: OpeningView = 'goals'): Orbit {
+export function viewOf(c: CompiledLevel, aspect = 1, face?: Direction, focus?: Vec3, only?: ArrayLike<number>, opts: ViewOptions = {}): Orbit {
+  if (face) return faceView(c, aspect, face, focus, only);
   const { min, max } = structureBox(c);
-  if (face && !insets) return faceView(min, max, face, aspect);
-  const ins = joinInsets(defaultInsets(aspect), insets);
-  const dir = face ?? (mode === 'classic' ? { yaw: baseYaw(c), pitch: DEFAULT_FRAMING.pitch } : openingDirection(c, aspect, ins));
+  const ins = joinInsets(defaultInsets(aspect), opts.insets);
+  const dir = opts.mode === 'classic' ? { yaw: baseYaw(c), pitch: DEFAULT_FRAMING.pitch } : openingDirection(c, aspect, ins);
   return { ...fitBox(min, max, dir, aspect, ins), floor: EYE_ABOVE_GROUND };
 }
 
 /**
- * A duel's turn view (`face` with no insets) frames as it did before PT1, bit for bit: render's frame() from that
- * side, and upright a taller box until the structure clears the HUD's band. Its pitch (DUEL_PITCH) was chosen at
- * this distance (duel-view.test.ts: the other keep shows whole over your own), and fitBox's tighter fit stands
- * closer, where perspective lifts your own keep into the view; the Siege Table's thread owns that choice.
+ * A duel's turn view (duel-view.ts duelView) frames as it did before PT1: render's frame() from `face`'s side, and
+ * upright a taller box until the structure clears the HUD's band. Its pitch (DUEL_PITCH) was chosen at this distance
+ * (duel-view.test.ts: the other keep shows whole over your own), and fitBox's tighter fit stands closer, where
+ * perspective lifts your own keep into the view; the Siege Table's thread owns that choice.
+ * `focus` puts that point at the screen's centre instead of the structure's middle, as far back as the framed bodies need;
+ * `only` frames those structure bodies (all of them when absent; a duel's turn view frames all but the player's own).
  */
-function faceView(min: Vec3, max: Vec3, face: Direction, aspect: number): Orbit {
-  const at = (top: number): Orbit => ({ ...frame(min, [max[0], top, max[2]], { ...DEFAULT_FRAMING, ...face }, 1, min[1], aspect), floor: EYE_ABOVE_GROUND });
-  if (aspect >= 1) return at(max[1]);
-  let o = at(max[1] / (1 - PORTRAIT_HUD_SHARE));
-  for (let k = 0; k < 40 && !clearOfHud(o, aspect, min, max); k++) o = at(o.target[1] / 0.45 * 1.05);
+function faceView(c: CompiledLevel, aspect: number, face: Direction, focus?: Vec3, only?: ArrayLike<number>): Orbit {
+  const min: Vec3 = [Infinity, 0, Infinity], max: Vec3 = [-Infinity, c.height, -Infinity];
+  const all = only ?? { length: c.meta.n };
+  for (let j = 0; j < all.length; j++) for (const k of [0, 2] as const) {
+    const i = only ? only[j]! : j;
+    min[k] = Math.min(min[k], c.meta.home[3 * i + k]! - c.meta.half[3 * i + k]! - 1);
+    max[k] = Math.max(max[k], c.meta.home[3 * i + k]! + c.meta.half[3 * i + k]! + 1);
+  }
+  const at = (top: number): Orbit => ({ ...frame(min, [max[0], top, max[2]], { ...DEFAULT_FRAMING, ...face }, 1, min[1], aspect, focus), floor: EYE_ABOVE_GROUND });
+  if (aspect >= 1) return at(c.height);
+  // Upright, with a focus, it goes to the middle of the screen below the HUD (PLAY_CENTRE_PORTRAIT), and the eye
+  // backs off, 5% a try, until the box clears the HUD; without one, a taller box, taller until it clears.
+  if (focus) {
+    const base = at(c.height);
+    let o = base;
+    for (let k = 0; k < 60; k++) {
+      o = lowered({ ...base, distance: base.distance * 1.05 ** k }, focus);
+      if (clearOfHud(o, aspect, min, max)) break;
+    }
+    return o;
+  }
+  let top = c.height / (1 - PORTRAIT_HUD_SHARE), o = at(top);
+  for (let k = 0; k < 40 && !clearOfHud(o, aspect, min, max); k++) o = at((top *= 1.05));
   return o;
+}
+
+/** Where the middle of what an upright phone shows below the HUD is, in normalised device coordinates: [0, -PORTRAIT_HUD_SHARE]. */
+export const PLAY_CENTRE_PORTRAIT: readonly [number, number] = [0, -PORTRAIT_HUD_SHARE];
+
+/**
+ * The orbit o raised (its target and so its eye) until `focus`, at o's target, shows at PLAY_CENTRE_PORTRAIT: a point
+ * at depth d + D sin(pitch) and D cos(pitch) below the view's middle shows at -s when D = s t d / (cos(pitch) - s t sin(pitch)),
+ * t = tan(fovY / 2), s = PORTRAIT_HUD_SHARE.
+ */
+function lowered(o: Orbit, focus: Vec3): Orbit {
+  const s = PORTRAIT_HUD_SHARE, t = Math.tan(o.fovY / 2), d = eyeDistance({ ...o, target: [...focus] });
+  const up = (s * t * d) / (Math.cos(o.pitch) - s * t * Math.sin(o.pitch));
+  return { ...o, target: [focus[0], focus[1] + up, focus[2]] };
 }
 
 /** Margin around the fit: the box fills 1 / FIT of the free area's height or width (DEFAULT_FRAMING.fit, as frame() had it). */

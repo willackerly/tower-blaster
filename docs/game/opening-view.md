@@ -57,9 +57,12 @@ The B2 search takes about 0.2 s on this cloud box. The chamber levels take a few
 ## Options
 
 - `keystone.view=goals|classic`, the door's **Advanced settings > Opening view** (*Show the goals* / *Classic*), and
-  the viewer's Scene panel select. *Classic* keeps the base direction (par line's side, 12 degrees) and uses the new
-  fit.
-- A duel's turn view (`duel-view.ts`, owned by the Siege Table thread) frames exactly as before (`faceView`).
+  the viewer's Scene panel select (scene key `openview`), declared in `options/openview.ts`. *Classic* keeps the base
+  direction (par line's side, 12 degrees) and uses the new fit.
+- A duel's turn view (`duel-view.ts`, owned by the Siege Table thread) frames exactly as before (`faceView`, with its
+  `focus` and `only`).
+- The gate opens each level with `keystone.build=0`, so a workshop (T-W1) is checked on the view its shots are aimed
+  from, and masks a docked phone HUD by its strip, tray and hints rather than the full-screen container.
   `DUEL_PITCH` was chosen at that distance: the tighter fit stands closer, and perspective then lifts your own keep
   into the view, so `duel-view.test.ts` would drop from a 100% to a 95% view of the other keep. Passing `insets`
   with a `face` opts into `fitBox`.
@@ -109,13 +112,14 @@ The B2 search takes about 0.2 s on this cloud box. The chamber levels take a few
 ## Hidden goals: crowns and heritage through what hides them (an option, off by default)
 
 On B2's city lot even the best opening view leaves some crowns behind towers. `Renderer.setXray(slot0, kinds)` flags
-the objective bodies (fx word 1, bits 22-23: `XRAY_SHIFT`, `XRAY_MASK`), and `fsXray` (`shaders.ts`) draws their
+the objective bodies (fx word 1, bits 24-25: `XRAY_SHIFT`, `XRAY_MASK`), and `fsXray` (`shaders.ts`) draws their
 boxes once more after the sky, with the depth test reversed (`greater`, no depth write, alpha blend). So only the parts
 behind something show, as a faint fill in the mark's colour (gold for a crown, teal for heritage) with a brighter edge.
 Its gain follows the sun's luma, so it reads the same in every look.
 
-- **Option:** `keystone.xray=auto|on|off`, the door's **Advanced settings > Hidden goals** (Cities, Always, Never) and
-  the viewer's Scene panel. `auto` draws it on levels with at least `CITY_BODIES` (1000) bodies that have marks
+- **Option:** `keystone.xray=auto|on|off`, the door's **Advanced settings > Hidden goals** (Never, Cities, Always) and
+  the viewer's Scene panel, declared in `options/xray.ts`. The kind lives in fx word 1 bits 24-25 (bits 22-23 are the
+  coats'); a crown to hold (kind 3) draws as heritage, since both are to keep. `auto` draws it on levels with at least `CITY_BODIES` (1000) bodies that have marks
   (`scene.ts xrayOn`): today, B2 and B3 only.
 - **Default: off.** The brief made `auto` the default only if an independent look review agreed. The review (Opus, on
   B2, B3 and L1 captures, wide and upright) said no to the current look:

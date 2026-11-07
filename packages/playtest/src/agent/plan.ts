@@ -145,3 +145,13 @@ export function sheetGrid(n: number, w: number, h: number, maxWidth = 2000): { c
   const cols = Math.max(1, Math.min(n, Math.floor(maxWidth / cellW)));
   return { cols, rows: Math.ceil(n / cols), cellW, cellH };
 }
+
+/**
+ * A scenario's search with its look set to `look` (run.ts --look): replaces a look= it names, or adds one.
+ * For a side-by-side look review (docs/render/look-colours.md §4): the same scenarios, lines and shots in each look.
+ */
+export function withLook(search: string, look: string): string {
+  const q = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
+  q.set('look', look);
+  return `?${q.toString()}`;
+}

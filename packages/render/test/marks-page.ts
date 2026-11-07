@@ -3,7 +3,7 @@
 // the WGSL carving against its TypeScript twin (marks.ts).
 import { emptySnapshot, type BodyDesc, type Snapshot } from '@tb/engine-api';
 import { readBuffer, sharedDevice } from '@tb/gpu';
-import { engrave, lookAt, MARK_HIT, MARK_KEEP, MARK_NONE, MARK_SAVE, MARKS_WGSL, markPoint, multiply, perspective, Renderer, SnapshotSource, type FrameParams, type V3 } from '../src/index.ts';
+import { COAT_GILT, COAT_GLAZE, engrave, lookAt, MARK_HIT, MARK_KEEP, MARK_NONE, MARK_SAVE, MARKS_WGSL, markPoint, multiply, perspective, Renderer, SnapshotSource, type FrameParams, type V3 } from '../src/index.ts';
 import { LOOKS } from './looks.ts';
 
 const FOV = 0.9;
@@ -35,6 +35,8 @@ export interface MarksCase {
   keep?: boolean;
   /** After setMarks: a setFx flash without a mark and a bulk scale write, which must keep the marks. */
   restyle?: boolean;
+  /** Coats (coats.ts) gilt, gilt, glaze, glaze on the row, every cube untinted: the coat alone gives the colour. */
+  coats?: boolean;
   /** The third cube (celadon) carries the keep crown instead of the save shield. */
   keepGlyph?: boolean;
 }
@@ -68,8 +70,11 @@ export async function marksFrames(c: MarksCase) {
   rend.toggles.trail = false;
   rend.setSource(src);
   rend.setShadowBounds([0, y, z], 3);
-  const tints: Array<{ tint: V3; emissive?: number }> = [{ tint: GOLD, emissive: 0.1 }, { tint: GOLD, emissive: 0.1 }, { tint: CELADON }, { tint: CELADON }, { tint: GOLD, emissive: 0.1 }, { tint: CELADON }];
+  const tints: Array<{ tint: V3; emissive?: number }> = c.coats
+    ? descs.map(() => ({ tint: [1, 1, 1] }))
+    : [{ tint: GOLD, emissive: 0.1 }, { tint: GOLD, emissive: 0.1 }, { tint: CELADON }, { tint: CELADON }, { tint: GOLD, emissive: 0.1 }, { tint: CELADON }];
   tints.slice(0, descs.length).forEach((t, i) => rend.setFx(i, t));
+  if (c.coats) rend.setCoats(0, [COAT_GILT, COAT_GILT, COAT_GLAZE, COAT_GLAZE].slice(0, descs.length));
   const marks = [MARK_NONE, MARK_HIT, c.keepGlyph ? MARK_KEEP : MARK_SAVE, MARK_NONE, MARK_HIT, MARK_SAVE].slice(0, descs.length);
   if (c.marks !== false) rend.setMarks(0, marks);
   if (c.restyle) {
@@ -77,11 +82,13 @@ export async function marksFrames(c: MarksCase) {
     rend.setFx(0, null, new Float32Array(descs.length).fill(1), false);
   }
   const kept = descs.map((_, i) => rend.fxOf(i).mark);
+  const keptCoats = descs.map((_, i) => rend.fxOf(i).coat);
   const eye: V3 = [0, y, 0];
   const f: FrameParams = { viewProj: multiply(perspective(FOV, W / H, 0.1, 400), lookAt(eye, [0, y, z])), eye, groundY: 0, time: 3 };
   const frame = (await rend.render(f, true, true))!.pixels!;
   rend.clearFx(0, descs.length);
   const cleared = descs.map((_, i) => rend.fxOf(i).mark);
+  const clearedCoats = descs.map((_, i) => rend.fxOf(i).coat);
   const err = await device.popErrorScope();
   rend.destroy();
 
@@ -91,19 +98,20 @@ export async function marksFrames(c: MarksCase) {
     return [Math.round(((q[0]! / q[3]! + 1) / 2) * W - 0.5), Math.round(((1 - q[1]! / q[3]!) / 2) * H - 0.5)];
   };
   const luma = (x: number, yy: number) => { const o = yy * frame.bytesPerRow + 4 * x; return (frame.data[o]! + frame.data[o + 1]! + frame.data[o + 2]!) / 3; };
+  const rgb = (x: number, yy: number): V3 => { const o = yy * frame.bytesPerRow + 4 * x; return [frame.data[o]!, frame.data[o + 1]!, frame.data[o + 2]!]; };
   // Samples on a cube's front face (+z, toward the camera): glyph point p (cell half 1 = HALF m) and its pixel.
   const face = (i: number) => {
-    const out: Array<{ p: [number, number]; l: number }> = [];
+    const out: Array<{ p: [number, number]; l: number; rgb: V3 }> = [];
     for (let a = -0.85; a <= 0.85 + 1e-9; a += 0.05) for (let b = -0.85; b <= 0.85 + 1e-9; b += 0.05) {
       const lp: V3 = [a * HALF, b * HALF, HALF];
       const { p } = markPoint(lp, [0, 0, 1], [HALF, HALF, HALF]);
       const [x, yy] = px([XS[i]! + lp[0], y + lp[1], z + lp[2]]);
-      out.push({ p, l: luma(x, yy) });
+      out.push({ p, l: luma(x, yy), rgb: rgb(x, yy) });
     }
     return out;
   };
   return {
-    error: err?.message ?? null, kept, cleared, size: [W, H],
+    error: err?.message ?? null, kept, cleared, keptCoats, clearedCoats, size: [W, H],
     pixels: c.keep ? frame : null,
     faces: [0, 1, 2, 3].map(face),
   };

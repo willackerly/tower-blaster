@@ -113,4 +113,24 @@ describe('an ice tower under a cannonball', () => {
     const plain = await runSession(new RapierEngine(), compileLevel(L1), [par]);
     expect(of(plain.feedback, 'iceCrack')).toHaveLength(0);
   }, 240_000);
+
+  it('fragments (the default) stop near where they broke; even cubes on ice\'s own friction skate (PT15)', async () => {
+    // Each piece's horizontal distance from where it spawned to where the session settles it.
+    const travel = async (fragments: boolean) => {
+      let pushed: InputEvent[] = [];
+      const r = await runSession(new RapierEngine(), compileLevel({ ...def, physics: { ice: { fragments } } }), [par], { perStep: (d) => { pushed = d.pushed; return []; } });
+      const spawns = pushed.filter((e) => e.kind === 'spawn');
+      const d = spawns.map((e, k) => { const id = n + 1 + k, p = e.body.pos; return Math.hypot(r.snapshot.pos[3 * id]! - p[0], r.snapshot.pos[3 * id + 2]! - p[2]) * c.frame.unit; });
+      d.sort((a, b) => a - b);
+      return { pieces: d.length, median: d[d.length >> 1]!, p90: d[Math.floor(0.9 * (d.length - 1))]!, max: d[d.length - 1]! };
+    };
+    const rough = await travel(true), even = await travel(false);
+    console.log('ice pieces travel (m)', JSON.stringify({ rough, even }));
+    expect(rough.pieces).toBeGreaterThan(0);
+    expect(even.pieces).toBeGreaterThan(0);
+    expect(rough.median).toBeLessThan(0.5 * even.median);
+    expect(rough.p90).toBeLessThan(0.5 * even.p90);
+    // Measured: median 1.1 m, p90 3.8 m, max 6.1 m, against 6.1, 23.6 and 39 m for even cubes on ice's 0.05.
+    expect(rough.p90).toBeLessThan(5);
+  }, 240_000);
 });
