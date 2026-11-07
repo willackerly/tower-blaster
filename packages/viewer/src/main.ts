@@ -706,7 +706,7 @@ async function main() {
   buildPanel.show(null);
   const editSearch = () => `${toSearch(config)}&edit=1`;
   function showEdit() {
-    if (editing) editView.show(editing, config.feel.marks);
+    if (editing) editView.show(editing, config.feel.marks, config.feel.coats);
     buildPanel.show(editing);
   }
   function enterEdit(opts: EditOptions = {}) {

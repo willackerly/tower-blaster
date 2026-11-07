@@ -109,3 +109,55 @@ export function driftSuspect(samples: readonly number[], tolerance = 0.03): bool
   if (q < 3) return false;
   return Math.abs(median(samples.slice(-q)) / median(samples.slice(0, q)) - 1) > tolerance;
 }
+
+/**
+ * Two-sample Kolmogorov-Smirnov test: the largest gap D between the samples' empirical CDFs, and its p-value
+ * from the asymptotic Kolmogorov distribution with Stephens' small-sample correction
+ * (sqrt(ne) + 0.12 + 0.11 / sqrt(ne), ne = n m / (n + m)); Numerical Recipes' probks.
+ */
+export function ks2(a: readonly number[], b: readonly number[]): { D: number; p: number } {
+  const x = [...a].sort((p, q) => p - q), y = [...b].sort((p, q) => p - q);
+  let i = 0, j = 0, D = 0;
+  while (i < x.length && j < y.length) {
+    const v = Math.min(x[i]!, y[j]!);
+    while (i < x.length && x[i]! <= v) i++;
+    while (j < y.length && y[j]! <= v) j++;
+    D = Math.max(D, Math.abs(i / x.length - j / y.length));
+  }
+  const ne = (x.length * y.length) / (x.length + y.length), lam = (Math.sqrt(ne) + 0.12 + 0.11 / Math.sqrt(ne)) * D;
+  return { D, p: kolmogorovQ(lam) };
+}
+
+/** Q_KS(lambda) = 2 sum_{k>=1} (-1)^(k-1) exp(-2 k^2 lambda^2), 1 near 0. */
+export function kolmogorovQ(lam: number): number {
+  if (lam < 1e-3) return 1;
+  let sum = 0, prev = 0;
+  for (let k = 1; k <= 100; k++) {
+    const term = 2 * (k % 2 ? 1 : -1) * Math.exp(-2 * k * k * lam * lam);
+    sum += term;
+    if (Math.abs(term) <= 1e-10 * Math.abs(prev) || Math.abs(term) < 1e-12) return Math.min(1, Math.max(0, sum));
+    prev = term;
+  }
+  return 1;
+}
+
+/** ln C(n, k). */
+function lnChoose(n: number, k: number): number {
+  let s = 0;
+  for (let i = 1; i <= k; i++) s += Math.log(n - k + i) - Math.log(i);
+  return s;
+}
+
+/**
+ * Fisher's exact test on a 2 x 2 table, two-sided: successes a of n against b of m. The p-value is the
+ * probability, under equal rates with the margins fixed (hypergeometric), of a table no more likely than the
+ * one seen. Exact for any n, m (the binary counterpart of ks2: two samples of pass/fail).
+ */
+export function fisherExact(a: number, n: number, b: number, m: number): number {
+  const k = a + b, N = n + m, lo = Math.max(0, k - m), hi = Math.min(k, n);
+  const ln = (x: number) => lnChoose(n, x) + lnChoose(m, k - x) - lnChoose(N, k);
+  const seen = ln(a);
+  let p = 0;
+  for (let x = lo; x <= hi; x++) { const l = ln(x); if (l <= seen + 1e-9) p += Math.exp(l); }
+  return Math.min(1, p);
+}

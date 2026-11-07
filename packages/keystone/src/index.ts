@@ -41,3 +41,5 @@ export * from './mason-trial.ts';
 export * from './mason-levels.ts';
 export * from './aftershock-towers.ts';
 export * from './aftershock-levels.ts';
+export * from './chorus.ts';
+export * from './chorus-levels.ts';
