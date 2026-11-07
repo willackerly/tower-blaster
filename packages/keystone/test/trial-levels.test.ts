@@ -4,7 +4,7 @@
 // code it names does turn up, so a note never outlives its issue). That its
 // rack reaches across its launcher ring is keystone-lab's trial-reach.test.ts.
 import { describe, expect, it } from 'vitest';
-import { archWall, compileLevel, DRAFTS, dominoRun, findLevel, IceBreaker, isTrial, LEVELS, BIG_LEVELS, materialId, scoringOf, slabBuilding, towerChain, TRIAL_LEVELS, TRIAL_NOTES, UNDERCUT_LEVELS, validateLevel } from '@tb/keystone';
+import { archWall, BuildSession, compileLevel, DRAFTS, dominoRun, findLevel, IceBreaker, isTrial, LEVELS, BIG_LEVELS, materialId, scoringOf, slabBuilding, towerChain, TRIAL_LEVELS, TRIAL_NOTES, UNDERCUT_LEVELS, validateLevel, WORKSHOP_RADIUS } from '@tb/keystone';
 
 const sizes = new Map(TRIAL_LEVELS.map((d) => [d.id, compileLevel(d)]));
 
@@ -13,7 +13,7 @@ describe('trial levels', () => {
     const ids = TRIAL_LEVELS.map((d) => d.id);
     expect(new Set(ids).size).toBe(ids.length);
     for (const id of ids) {
-      expect(id).toMatch(/^T-[SXBIW]\d+[A-Z]?$/);
+      expect(id).toMatch(/^T-[SXBIWA]\d+[A-Z]?$/);
       expect(isTrial(id) && isTrial(id.toLowerCase())).toBe(true);
       expect(TRIAL_NOTES[id]?.from, id).toBeTruthy();
       expect(findLevel(id)).toBe(TRIAL_LEVELS.find((d) => d.id === id));
@@ -43,14 +43,34 @@ describe('trial levels', () => {
   });
 
   it('the weapon trials are L1 to L5 with the new weapons: the same structure and launcher, the lot at least as big, a rack of them', () => {
-    const ids = TRIAL_LEVELS.filter((d) => /^T-W/.test(d.id)).map((d) => d.id);
-    expect(ids).toEqual(['T-W1', 'T-W2', 'T-W3', 'T-W4', 'T-W5']);
+    const ids = TRIAL_LEVELS.filter((d) => /^T-A/.test(d.id)).map((d) => d.id);
+    expect(ids).toEqual(['T-A1', 'T-A2', 'T-A3', 'T-A4', 'T-A5']);
     ids.forEach((id, k) => {
       const t = TRIAL_LEVELS.find((d) => d.id === id)!, l = LEVELS[k]!;
       expect([t.parts, t.launcher, t.objective]).toEqual([l.parts, l.launcher, l.objective]);
       for (const a of [0, 1] as const) expect([t.lot.min[a] <= l.lot.min[a], t.lot.max[a] >= l.lot.max[a]]).toEqual([true, true]);
       expect(t.rack).toEqual(['w-scatter', 'w-rocket', 'marble']);
     });
+  });
+
+  it('T-W1, the Domino Workshop: three crown dominoes on a circle facing along it, one marble, a domino-only brush budget', () => {
+    const def = findLevel('T-W1')!, c = sizes.get('T-W1')!;
+    expect(def.rack).toEqual(['marble']);
+    expect(def.build).toEqual({ budget: 30, pieces: ['domino'], brush: true });
+    expect(c.meta.n).toBe(3);
+    expect(Array.from(c.meta.crowns)).toEqual([0, 1, 2]);
+    const h = c.frame.unit;
+    for (const b of c.scene.bodies) {
+      const [x, y, z] = b.pos, q = b.rot;
+      expect(Math.hypot(x, z) / h).toBeCloseTo(WORKSHOP_RADIUS, 6);
+      expect(y / h).toBeCloseTo(1, 6); // standing on the ground
+      // The thin axis (z rotated by q) is the circle's tangent: perpendicular to the radius.
+      const zx = 2 * (q[0] * q[2] + q[3] * q[1]), zz = 1 - 2 * (q[0] ** 2 + q[1] ** 2);
+      expect(Math.abs(zx * x + zz * z) / h).toBeLessThan(1e-9);
+    }
+    // Every other trial has no build phase.
+    expect(TRIAL_LEVELS.filter((d) => d.build).map((d) => d.id)).toEqual(['T-W1']);
+    expect(new BuildSession(def).items.map((i) => i.name)).toEqual(['domino']);
   });
 
   it.each(TRIAL_LEVELS.map((d) => d.id))('%s: an uncast outcome level inside the GPU budget, with exactly the issues its note names', (id) => {

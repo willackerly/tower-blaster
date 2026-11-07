@@ -49,7 +49,8 @@ describe('game page', () => {
       expect(await page.evaluate((s) => window.__game.fire(s), shot)).toBe(true);
     }
     await page.waitForFunction(() => window.__game.result !== null, undefined, { timeout: 120_000, polling: 100 });
-    expect(await page.evaluate(() => document.querySelector('#result.show') !== null)).toBe(true);
+    // The card comes Layout.cardDelay after the settle (docs/game/phone-hud.md), docked.
+    await page.waitForFunction(() => document.querySelector('#result.show.dock') !== null, undefined, { timeout: 10_000, polling: 50 });
     const result = await page.evaluate(() => ({ score: window.__game.result, counts: window.__game.counts, phase: window.__game.phase }));
     expect(await page.evaluate(() => (window as unknown as { __torn: string[] }).__torn)).toEqual([]);
     expect(result.phase).toBe('cleared');
@@ -66,7 +67,7 @@ describe('game page', () => {
     // And the page's own replay agrees, pose for pose.
     const live = await page.evaluate(() => window.__game.state());
     expect(live).toMatchObject({ step: r.steps, phase: 'cleared' });
-    // The card showed as soon as the last crown was down, before the settle that scores it.
+    // The round-over notice (the tallying banner, docked) showed as soon as the last crown was down, before the settle that scores it.
     const shownAt = await page.evaluate(() => window.__game.resultShownAt);
     const lastCrown = r.feedback.filter((f) => f.t === 'crownDown').at(-1)!.step;
     expect(shownAt).toBeGreaterThanOrEqual(lastCrown);

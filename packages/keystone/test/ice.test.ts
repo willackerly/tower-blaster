@@ -3,7 +3,7 @@
 // level block's checks and its part in the level hash. Played on an engine: keystone-lab ice.test.ts.
 import { describe, expect, it } from 'vitest';
 import { emptySnapshot, massOf, type Quat, type Snapshot, type SpawnEvent, type Vec3 } from '@tb/engine-api';
-import { checkIce, compileLevel, crackLevel, GRAVITY, hitDamage, ICE_DEFAULTS, IceBreaker, iceOf, L1, type LevelDef, pieceGrid, PIECE_FILL, Session, shatterPieces } from '../src/index.ts';
+import { checkIce, compileLevel, crackLevel, GRAVITY, hitDamage, ICE_DEFAULTS, IceBreaker, iceOf, L1, type LevelDef, pieceCorner, pieceCut, pieceGrid, PIECE_CRACK, PIECE_CUT, PIECE_FILL, PIECE_FRICTION, Session, shatterPieces } from '../src/index.ts';
 
 /** L1's footprint built of ice: a 2 x 3 x 2 block of cubes (12 bodies), the top course crowns. */
 const ICE: LevelDef = { ...L1, id: 'ICE-T', parts: [{ kind: 'block', at: [-1, 0, -1], size: [2, 3, 2], material: 'ice', courses: [{ k: 2, role: 'crown' }] }] };
@@ -26,6 +26,8 @@ function moved(s: Snapshot, i: number, v: Vec3, w: Vec3 = [0, 0, 0]): Snapshot {
   return o;
 }
 const quat = (axis: Vec3, a: number): Quat => { const l = Math.hypot(...axis), s = Math.sin(a / 2) / l; return [axis[0] * s, axis[1] * s, axis[2] * s, Math.cos(a / 2)]; };
+/** v in the frame of rotation q (q conjugated applied to v). */
+const qrotInv = (q: Quat, v: Vec3): Vec3 => { const [x, y, z, w] = [-q[0], -q[1], -q[2], q[3]]; const tx = 2 * (y * v[2] - z * v[1]), ty = 2 * (z * v[0] - x * v[2]), tz = 2 * (x * v[1] - y * v[0]); return [v[0] + w * tx + (y * tz - z * ty), v[1] + w * ty + (z * tx - x * tz), v[2] + w * tz + (x * ty - y * tx)]; };
 
 describe('the damage rule', () => {
   it('nothing under crackDv; one hit at shatterDv is damage 1; the square in between, so two hits 71% of the way add to 1', () => {
@@ -56,6 +58,9 @@ describe('the damage rule', () => {
     expect(() => checkIce({ shatterDv: 1 })).toThrow(/shatterDv/);
     expect(() => compileLevel({ ...ICE, physics: { ice: { shatterDv: 500 } } })).toThrow(/physics\.ice\.shatterDv/);
     checkIce({ crackDv: 1, shatterDv: 2, shatter: false });
+    checkIce({ fragments: false });
+    expect(() => checkIce({ fragments: 'yes' as unknown as boolean })).toThrow(/fragments must be true or false/);
+    expect(iceOf({ fragments: false }).fragments).toBe(false);
   });
 });
 
@@ -67,12 +72,12 @@ describe('the pieces', () => {
     expect(pieceGrid([0.1, 2, 0.1])).toEqual([1, 2, 1]);
   });
 
-  it('keep the mass and the momentum, sit inside the block apart from each other, and spin with it', () => {
-    const b = c.scene.bodies[0]!, M = massOf(b);
+  it('keep the mass, the centre and the momentum, sit inside the block apart from each other, and spin with it (even and as fragments)', () => {
+    const b = c.scene.bodies[0]!, M = massOf(b), h = (b.shape as { half: Vec3 }).half;
     const rot = quat([1, 2, 0.5], 0.7), pos: Vec3 = [0.3, 1.2, -0.4], v: Vec3 = [3, -1, 0.5], w: Vec3 = [0.4, -2, 1];
-    for (const dv of [ICE_DEFAULTS.shatterDv, 5 * ICE_DEFAULTS.shatterDv]) {
-      const ps = shatterPieces(b, pos, rot, v, w, dv, ICE_DEFAULTS, 41);
-      expect(ps).toHaveLength(8);
+    for (const fragments of [false, true]) for (const seed of fragments ? [0, 1, 777, 65535] : [0]) for (const dv of [ICE_DEFAULTS.shatterDv, 5 * ICE_DEFAULTS.shatterDv]) {
+      const rules = { ...ICE_DEFAULTS, fragments }, ps = shatterPieces(b, pos, rot, v, w, dv, rules, 41, seed), at = `fragments ${fragments} seed ${seed} dv ${dv}`;
+      expect(ps, at).toHaveLength(8);
       let m = 0;
       const p: Vec3 = [0, 0, 0], com: Vec3 = [0, 0, 0];
       for (const e of ps) {
@@ -82,23 +87,49 @@ describe('the pieces', () => {
         for (let k = 0; k < 3; k++) { p[k] = p[k]! + mi * e.body.linVel![k]!; com[k] = com[k]! + mi * e.body.pos[k]!; }
         expect(e.body.rot).toEqual(rot);
         expect(e.body.angVel).toEqual(w);
-        // Its centre, in the block's frame, is a cell centre: inside the block, a quarter of the way in on each axis.
-        const h = (b.shape as { half: Vec3 }).half;
-        expect((e.body.shape as { half: Vec3 }).half).toEqual(h.map((x) => (x / 2) * PIECE_FILL));
+        const ph = (e.body.shape as { half: Vec3 }).half;
+        if (!fragments) {
+          // Its centre, in the block's frame, is a cell centre: a quarter of the way in on each axis.
+          expect(ph).toEqual(h.map((x) => (x / 2) * PIECE_FILL));
+          expect(e.body.friction).toBe(b.friction);
+        } else {
+          // Uneven: each piece from (0.5 - PIECE_CUT) to (0.5 + PIECE_CUT) of the block along each axis; rough faces.
+          for (let k = 0; k < 3; k++) { expect(ph[k]! / PIECE_FILL / h[k]!, at).toBeGreaterThanOrEqual(0.5 - PIECE_CUT - 1e-12); expect(ph[k]! / PIECE_FILL / h[k]!, at).toBeLessThanOrEqual(0.5 + PIECE_CUT + 1e-12); }
+          expect(e.body.friction).toBe(PIECE_FRICTION);
+        }
+        // Inside the block: its centre, in the block's frame, plus its half within the block's half.
+        const lp = qrotInv(rot, [e.body.pos[0] - pos[0], e.body.pos[1] - pos[1], e.body.pos[2] - pos[2]]);
+        for (let k = 0; k < 3; k++) expect(Math.abs(lp[k]!) + ph[k]!, at).toBeLessThan(h[k]! + 1e-9);
       }
-      expect(m).toBeCloseTo(M, 9);
-      // Momentum is the block's: v + w x r and the outward kicks each sum to zero over a symmetric split.
-      for (let k = 0; k < 3; k++) { expect(p[k]! / m).toBeCloseTo(v[k]!, 9); expect(com[k]! / m).toBeCloseTo(pos[k]!, 9); }
-      // Pieces start apart: centres 2 cells apart, each PIECE_FILL of a cell across, so a gap of (1 - PIECE_FILL) of a cell.
-      const gaps: number[] = [];
-      for (let i = 0; i < ps.length; i++) for (let j = i + 1; j < ps.length; j++) gaps.push(Math.hypot(...ps[i]!.body.pos.map((x, k) => x - ps[j]!.body.pos[k]!) as Vec3));
-      expect(Math.min(...gaps)).toBeCloseTo(2 * 0.125, 9);
+      expect(m, at).toBeCloseTo(M, 9);
+      // Momentum and centre are the block's: v + w x r sums to v over pieces that tile the block, and the kicks' mean is taken off.
+      for (let k = 0; k < 3; k++) { expect(p[k]! / m, at).toBeCloseTo(v[k]!, 9); expect(com[k]! / m, at).toBeCloseTo(pos[k]!, 9); }
+      if (!fragments) {
+        // Pieces start apart: centres 2 cells apart, each PIECE_FILL of a cell across, so a gap of (1 - PIECE_FILL) of a cell.
+        const gaps: number[] = [];
+        for (let i = 0; i < ps.length; i++) for (let j = i + 1; j < ps.length; j++) gaps.push(Math.hypot(...ps[i]!.body.pos.map((x, k) => x - ps[j]!.body.pos[k]!) as Vec3));
+        expect(Math.min(...gaps)).toBeCloseTo(2 * 0.125, 9);
+      }
     }
+  });
+
+  it('fragment cuts: in range, the same for a seed every time, different across seeds and axes', () => {
+    const cuts = Array.from({ length: 2000 }, (_, s) => [0, 1, 2].map((a) => pieceCut(s, a))).flat();
+    expect(Math.min(...cuts)).toBeGreaterThanOrEqual(0.5 - PIECE_CUT);
+    expect(Math.max(...cuts)).toBeLessThanOrEqual(0.5 + PIECE_CUT);
+    // Spread over the range, not bunched: the middle third of it holds about a third of the cuts.
+    const mid = cuts.filter((x) => Math.abs(x - 0.5) < PIECE_CUT / 3).length / cuts.length;
+    expect(mid).toBeGreaterThan(0.25);
+    expect(mid).toBeLessThan(0.42);
+    expect(pieceCut(1234, 1)).toBe(pieceCut(1234, 1));
+    expect(new Set([0, 1, 2].map((a) => pieceCut(1234, a))).size).toBe(3);
+    expect(pieceCorner([0.1, -0.2, 0])).toEqual([-1, 1, 0]);
   });
 
   it('the kick grows with the hit, up to twice PIECE_KICK', () => {
     const b = c.scene.bodies[0]!;
-    const speed = (dv: number) => { const e = shatterPieces(b, [0, 0, 0], [0, 0, 0, 1], [0, 0, 0], [0, 0, 0], dv, ICE_DEFAULTS, 0)[0]!; return Math.hypot(...e.body.linVel!); };
+    const even = { ...ICE_DEFAULTS, fragments: false };
+    const speed = (dv: number) => { const e = shatterPieces(b, [0, 0, 0], [0, 0, 0, 1], [0, 0, 0], [0, 0, 0], dv, even, 0)[0]!; return Math.hypot(...e.body.linVel!); };
     expect(speed(ICE_DEFAULTS.shatterDv)).toBeCloseTo(0.6, 9);
     expect(speed(2 * ICE_DEFAULTS.shatterDv)).toBeCloseTo(1.2, 9);
     expect(speed(10 * ICE_DEFAULTS.shatterDv)).toBeCloseTo(1.2, 9);
@@ -143,14 +174,20 @@ describe('IceBreaker', () => {
     expect(r.events.slice(1).every((e) => e.kind === 'spawn' && e.step === 14)).toBe(true);
     expect(r.events).toHaveLength(9);
     const placed = ice.placed(Array.from({ length: 8 }, (_, k) => n + k));
-    expect(placed).toEqual({ step: 14, body: 5, pieces: [n, n + 1, n + 2, n + 3, n + 4, n + 5, n + 6, n + 7], dv: r.shatter!.dv });
+    expect(placed).toEqual({ step: 14, body: 5, pieces: [n, n + 1, n + 2, n + 3, n + 4, n + 5, n + 6, n + 7], dv: r.shatter!.dv, cracks: expect.any(Array) });
+    // Fragments start crushed (PIECE_CRACK) at the corner toward the block's centre: one of each of the 8 octants.
+    expect(placed.cracks.map((k) => k.body)).toEqual(placed.pieces);
+    expect(placed.cracks.every((k) => k.level === PIECE_CRACK)).toBe(true);
+    expect(new Set(placed.cracks.map((k) => k.at.join())).size).toBe(8);
+    for (const k of placed.cracks) expect(k.at.every((x) => x === 1 || x === -1)).toBe(true);
     expect(ice.shattered.get(5)).toEqual(placed.pieces);
     expect(() => ice.placed([1])).toThrow(/no shatter pending/);
-    // What to paint: every block but the shattered one, body 2 cracked, the pieces whole.
+    // What to paint: every block but the shattered one, body 2 cracked, the pieces crushed as placed said.
     const paint = ice.surfaces();
     expect(paint.map((x) => x.body)).toEqual([...Array.from({ length: n }, (_, k) => k).filter((k) => k !== 5), ...placed.pieces]);
     expect(paint.find((x) => x.body === 2)).toEqual({ ...a.cracks[0]!, level: 2 });
     expect(paint.find((x) => x.body === 0)).toEqual({ body: 0, level: 0, at: [0, 0, 0], seed: expect.any(Number) });
+    for (const k of placed.cracks) expect(paint.find((x) => x.body === k.body)).toEqual(k);
   });
 
   it('one shatter per step, the hardest hit first; the other keeps its damage and goes the next step', () => {

@@ -11,7 +11,9 @@
 //            from level parts in cells (h = 0.5 m, the probes' cell);
 //   T-I<n>   ice (ice.ts): blocks that crack and shatter, alone and mixed
 //            with stone, to see and tune before any rated level uses ice;
-//   T-W<n>   L1 to L5 with the new weapons in the rack (weapons plan steps 5
+//   T-W<n>   workshops (build.ts, docs/game/placement.md): levels with a
+//            build phase, where the player lays pieces before the first shot.
+//   T-A<n>   L1 to L5 with the new arms in the rack (weapons plan steps 5
 //            and 6), to play them where the bare-ammo levels are known.
 // Every trial is an outcome level with no cast stars: it plays for its
 // objective's star and the tally, and the door lists it under Trials, unrated.
@@ -212,13 +214,33 @@ function weaponTrial(base: LevelDef, k: number): LevelDef {
   const { lGold: _g, solutions: _s, stars: _t, ...rest } = base;
   // Scored on outcome, a shot must stay live to the launcher ring less 3 cells (validateLevel's launcher issue): the lot grows to it.
   const r = base.launcher.radius - 3, lot = { min: [Math.min(base.lot.min[0], -r), Math.min(base.lot.min[1], -r)] as [number, number], max: [Math.max(base.lot.max[0], r), Math.max(base.lot.max[1], r)] as [number, number] };
-  return trial({ ...rest, lot, id: `T-W${k}`, name: `${base.name}: New Arms`, version: 1, world: 5, scoring: 'outcome', par: WEAPON_TRIAL_RACK.length, rack: [...WEAPON_TRIAL_RACK] }, { from: `weapons: ${base.id}'s structure with the new weapons` });
+  return trial({ ...rest, lot, id: `T-A${k}`, name: `${base.name}: New Arms`, version: 1, world: 5, scoring: 'outcome', par: WEAPON_TRIAL_RACK.length, rack: [...WEAPON_TRIAL_RACK] }, { from: `weapons: ${base.id}'s structure with the new weapons` });
 }
 
 const WEAPON_TRIALS: LevelDef[] = [L1, L2, L3, L4, L5].map((l, i) => weaponTrial(l, i + 1));
 
-/** The trials in door order: scenarios, the mode probes' structures, the drafts, ice, then the new weapons. */
-export const TRIAL_LEVELS: readonly LevelDef[] = [...SCENARIO_TRIALS, ...PROBE_TRIALS, ...DRAFT_TRIALS, ...ICE_TRIALS, ...WEAPON_TRIALS];
+/** The Domino Workshop's crowns: on a circle of WORKSHOP_RADIUS cells at 180, 90 and 0 degrees, each turned to face along it. */
+export const WORKSHOP_RADIUS = 6;
+export const WORKSHOP_ANGLES = [180, 90, 0] as const;
+
+/**
+ * Workshops: a build phase before the first shot (C9, docs/game/placement.md). T-W1: three crown dominoes stand a
+ * quarter circle apart and the rack is one marble, so no shot fells more than one; the player lays the domino runs
+ * that join them (the brush, along the circle or any other way) and fires once. 30 dominoes of budget; a quarter
+ * circle of 6 cells takes 7.
+ */
+const WORKSHOP_TRIALS: LevelDef[] = [
+  trial(outcomeLevel('T-W1', 'Domino Workshop', WORKSHOP_ANGLES.map((deg): Part => {
+    const a = (deg * Math.PI) / 180;
+    // A domino's thin axis (z) along the circle's tangent (-sin a, cos a): yawed -a about +y.
+    return { kind: 'piece', at: [+(WORKSHOP_RADIUS * Math.cos(a)).toFixed(6), 1, +(WORKSHOP_RADIUS * Math.sin(a)).toFixed(6)], half: [0.5, 1, 0.15], yaw: deg % 180 === 0 ? 0 : -deg, material: 'plaster', role: 'crown' };
+  }), [WORKSHOP_RADIUS + 1, WORKSHOP_RADIUS + 1], 2, ['marble'], {
+    world: 5, gap: 0, crownLine: 0.6, objective: { kind: 'crowns' }, build: { budget: 30, pieces: ['domino'], brush: true },
+  }), { from: 'workshop: three crown dominoes a quarter circle apart, a 30-domino brush, one marble' }),
+];
+
+/** The trials in door order: scenarios, the mode probes' structures, the drafts, ice, the workshops, then the new arms. */
+export const TRIAL_LEVELS: readonly LevelDef[] = [...SCENARIO_TRIALS, ...PROBE_TRIALS, ...DRAFT_TRIALS, ...ICE_TRIALS, ...WORKSHOP_TRIALS, ...WEAPON_TRIALS];
 
 /** Whether level `id` is a trial (unrated). */
 export const isTrial = (id: string): boolean => id.toUpperCase().startsWith('T-');

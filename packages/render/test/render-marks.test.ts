@@ -4,7 +4,7 @@
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadBundle, openWebGPU, type WebGPUSession } from '@tb/testkit';
-import { engrave, MARK_COVER, MARK_HIT, MARK_MASK, MARK_NONE, MARK_SAVE, MARK_SHADE, MARK_SHIFT, markPoint, markSd, packFx, shieldSd, unpackFx, FX_ANCHOR, FX_BAND, FX_MATTE, FX_PAINT, FX_WORDS, type V3 } from '../src/index.ts';
+import { COAT_GILT, COAT_GLAZE, COAT_MASK, COAT_NONE, COAT_SHIFT, engrave, linearToOklab, MARK_COVER, MARK_HIT, MARK_KEEP, MARK_MASK, MARK_NONE, MARK_SAVE, MARK_SHADE, MARK_SHIFT, markPoint, markSd, packFx, shieldSd, srgbToLinear, unpackFx, FX_ANCHOR, FX_BAND, FX_MATTE, FX_PAINT, FX_WORDS, type V3 } from '../src/index.ts';
 import type * as Drivers from './marks-page.ts';
 
 describe('glyphs (CPU)', () => {
@@ -37,13 +37,32 @@ describe('glyphs (CPU)', () => {
     expect(markSd(MARK_SAVE, 0, 0.8)).toBeGreaterThan(0);
   });
 
-  it('both glyphs keep clear of the cell edge (the bevel and seam) and cover a similar share of it', () => {
-    for (const mark of [MARK_HIT, MARK_SAVE]) {
+  it('keep is a crown: a solid band, three points with a jewel on each, open between the points and above the band', () => {
+    expect(markSd(MARK_KEEP, 0, -0.44)).toBeLessThan(0); // the band's middle
+    expect(markSd(MARK_KEEP, 0.45, -0.44)).toBeLessThan(0); // its end
+    for (const [x, y] of [[0, 0.52], [0.58, 0.42], [-0.58, 0.42]] as const) expect(markSd(MARK_KEEP, x, y)).toBeLessThan(0); // the jewels
+    expect(markSd(MARK_KEEP, 0.53, 0)).toBeLessThan(0); // a side
+    expect(markSd(MARK_KEEP, 0.4, 0.3)).toBeGreaterThan(0); // between an outer point and the middle one
+    expect(markSd(MARK_KEEP, 0, -0.15)).toBeGreaterThan(0); // above the band, under the middle point
+    expect(markSd(MARK_KEEP, 0, 0.8)).toBeGreaterThan(0);
+    for (const [x, y] of [[0.3, 0.1], [0.1, -0.4], [0.5, 0.2]] as const) expect(markSd(MARK_KEEP, -x, y)).toBe(markSd(MARK_KEEP, x, y));
+    // A silhouette of its own: where the crown is open the crosshair or the shield carve, and the other way round.
+    expect(markSd(MARK_HIT, 0, 0)).toBeLessThan(0);
+    expect(markSd(MARK_SAVE, 0, -0.15)).toBeLessThan(0);
+    expect(markSd(MARK_HIT, 0.4, -0.44)).toBeGreaterThan(0);
+    expect(markSd(MARK_SAVE, 0.58, 0.42)).toBeGreaterThan(0);
+  });
+
+  it('every glyph keeps clear of the cell edge (the bevel and seam) and covers a similar share of it', () => {
+    for (const mark of [MARK_HIT, MARK_SAVE, MARK_KEEP]) {
       for (let t = -1; t <= 1; t += 0.05) for (const [x, y] of [[t, 0.85], [t, -0.85], [0.85, t], [-0.85, t]]) expect(markSd(mark, x!, y!)).toBeGreaterThan(0);
       expect(MARK_COVER[mark]).toBeGreaterThan(0.08);
       expect(MARK_COVER[mark]).toBeLessThan(0.3);
     }
     expect(Math.abs(MARK_COVER[MARK_HIT]! - MARK_COVER[MARK_SAVE]!)).toBeLessThan(0.08);
+    expect(Math.abs(MARK_COVER[MARK_HIT]! - MARK_COVER[MARK_KEEP]!)).toBeLessThan(0.08);
+    // Under a pixel per stroke a mark is its mean shade: the keep crown's is its own (WGSL engrave's select).
+    expect(engrave(MARK_KEEP, [0, 0, 0.25], [0, 0, 1], [0.25, 0.25, 0.25], 0.2).shade).toBeCloseTo(1 - MARK_SHADE * MARK_COVER[MARK_KEEP]!, 9);
   });
 
   it('a long face carries a row of square cells; the glyph is centred in each', () => {
@@ -88,6 +107,19 @@ describe('glyphs (CPU)', () => {
     expect(unpackFx(w).scale).toBeCloseTo(0.5, 3);
     packFx({ tint: [1, 1, 1] }, w);
     expect(unpackFx(w).mark).toBe(MARK_NONE);
+  });
+
+  it('fx word 1 carries the coat in bits 22-23, clear of the mark and the flags; unpack reads it back', () => {
+    expect(COAT_MASK).toBe(3 << COAT_SHIFT);
+    for (const flag of [FX_ANCHOR, FX_PAINT, FX_MATTE, FX_BAND, MARK_MASK]) expect(flag & COAT_MASK).toBe(0);
+    const w = new Uint32Array(FX_WORDS);
+    for (const coat of [COAT_GILT, COAT_GLAZE] as const) for (const mark of [MARK_NONE, MARK_HIT, MARK_SAVE] as const) {
+      packFx({ tint: [1, 0.5, 0.2], band: true, scale: 0.5, mark, coat }, w);
+      expect(unpackFx(w)).toMatchObject({ coat, mark, band: true, anchor: false });
+      expect(unpackFx(w).scale).toBeCloseTo(0.5, 3);
+    }
+    packFx({ tint: [1, 1, 1] }, w);
+    expect(unpackFx(w).coat).toBe(COAT_NONE);
   });
 });
 
@@ -144,7 +176,7 @@ describe('marked cubes on the GPU', () => {
     if (!gpu) return ctx.skip();
     const r = await frames({ look });
     expect(r.error).toBeNull();
-    const [plainGold, hit, save, plainCeladon] = r.faces as [Face, Face, Face, Face];
+    const [plainGold, hit, save, plainCeladon] = r.faces as unknown as [Face, Face, Face, Face];
     const hitSd: Sd = (x, y) => markSd(MARK_HIT, x, y), saveSd: Sd = (x, y) => markSd(MARK_SAVE, x, y), flipped: Sd = (x, y) => markSd(MARK_SAVE, x, -y);
     const msg = JSON.stringify({ hit: [contrast(hit, hitSd), prefers(hit, hitSd, saveSd)], save: [contrast(save, saveSd), prefers(save, saveSd, hitSd), prefers(save, saveSd, flipped)], plain: [contrast(plainGold, hitSd), contrast(plainCeladon, saveSd)] });
     // Carved reads clearly darker (display values, 0-255) where the glyph is, on both colours.
@@ -159,6 +191,18 @@ describe('marked cubes on the GPU', () => {
     expect(Math.abs(contrast(plainCeladon, saveSd)), msg).toBeLessThan(4);
   });
 
+  it.for(['hazy', 'real', 'candy'] as const)('%s: a keep crown reads as a crown, not a shield or a crosshair', async (look, ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await frames({ look, keepGlyph: true });
+    expect(r.error).toBeNull();
+    const keep = r.faces[2] as Face;
+    const keepSd: Sd = (x, y) => markSd(MARK_KEEP, x, y), saveSd: Sd = (x, y) => markSd(MARK_SAVE, x, y), hitSd: Sd = (x, y) => markSd(MARK_HIT, x, y);
+    const msg = JSON.stringify({ contrast: contrast(keep, keepSd), notSave: prefers(keep, keepSd, saveSd), notHit: prefers(keep, keepSd, hitSd) });
+    expect(contrast(keep, keepSd), msg).toBeGreaterThan(15);
+    expect(prefers(keep, keepSd, saveSd), msg).toBeGreaterThan(10);
+    expect(prefers(keep, keepSd, hitSd), msg).toBeGreaterThan(10);
+  });
+
   it('a mark stays through a setFx without one and a bulk scale write, and clearFx removes it', async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await frames({ look: 'hazy', restyle: true });
@@ -166,6 +210,31 @@ describe('marked cubes on the GPU', () => {
     expect(r.kept).toEqual([MARK_NONE, MARK_HIT, MARK_SAVE, MARK_NONE]);
     expect(r.cleared).toEqual([0, 0, 0, 0]);
     expect(contrast(r.faces[1] as Face, (x, y) => markSd(MARK_HIT, x, y))).toBeGreaterThan(20);
+  });
+
+  it('coats stay through a setFx without one and a bulk scale write, and clearFx removes them', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await frames({ look: 'candy', coats: true, marks: false, restyle: true });
+    expect(r.error).toBeNull();
+    expect(r.keptCoats).toEqual([COAT_GILT, COAT_GILT, COAT_GLAZE, COAT_GLAZE]);
+    expect(r.clearedCoats).toEqual([0, 0, 0, 0]);
+  });
+
+  it.for(['hazy', 'real', 'candy'] as const)('%s: an untinted gilt cube reads gold and a glaze cube teal, the same coat the same hue whatever the slot', async (look, ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await frames({ look, coats: true, marks: false });
+    expect(r.error).toBeNull();
+    const hue = (face: Array<{ rgb: V3 }>) => {
+      let a = 0, b = 0;
+      for (const { rgb } of face) { const lab = linearToOklab(rgb.map((x) => srgbToLinear(x / 255)) as V3); a += lab[1]; b += lab[2]; }
+      return { h: ((Math.atan2(b, a) * 180) / Math.PI + 360) % 360, c: Math.hypot(a, b) / face.length };
+    };
+    const hs = (r.faces as Array<Array<{ rgb: V3 }>>).map(hue), msg = JSON.stringify(hs);
+    for (const k of [0, 1]) { expect(hs[k]!.h, msg).toBeGreaterThan(60); expect(hs[k]!.h, msg).toBeLessThan(100); expect(hs[k]!.c, msg).toBeGreaterThan(0.05); }
+    for (const k of [2, 3]) { expect(hs[k]!.h, msg).toBeGreaterThan(150); expect(hs[k]!.h, msg).toBeLessThan(200); expect(hs[k]!.c, msg).toBeGreaterThan(0.04); }
+    // Candy gives slots 0 and 1 (and 2 and 3) different palette colours; a coat replaces them, so they match.
+    expect(Math.abs(hs[0]!.h - hs[1]!.h), msg).toBeLessThan(3);
+    expect(Math.abs(hs[2]!.h - hs[3]!.h), msg).toBeLessThan(3);
   });
 
   it('screenshots (MARKS_SHOTS=dir): before and after, close and far, in each look', async (ctx) => {

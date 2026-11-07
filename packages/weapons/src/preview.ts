@@ -27,7 +27,7 @@ import { blastArea, blastCentre, blastVelocity, type BodyMotion, checkBlast, For
 import { boundingRadius } from '@tb/geom';
 import { type GrenadeWorld, surfaceDistance } from './grenade.ts';
 import { WeaponRuntime } from './runtime.ts';
-import { checkWeapon, type MunitionSpec, weaponBudget, type WeaponSpec } from './spec.ts';
+import { checkWeapon, type MunitionSpec, type Trigger, weaponBudget, type WeaponSpec } from './spec.ts';
 
 /** Steps a preview runs at most when not told: 10 s at 60 Hz, past every built-in's last blast. */
 export const PREVIEW_STEPS = 600;
@@ -89,27 +89,30 @@ interface Mun {
   still: boolean;
 }
 
-/** The flight of `spec` fired as `launch` in `world` (WeaponRuntime's world: dt, substeps, gravity, ground). */
+/**
+ * The flight of `spec` fired as `launch` in `world` (WeaponRuntime's world: dt, substeps, gravity, ground).
+ *
+ * Ids: munitions are bodies 0 .. cap - 1 (the shell 0, then each spawn in the engines' order), and the
+ * obstacles near a live munition this step follow them, found in a grid, so a step senses tens of
+ * bodies, not a whole 10k scene (the runtime's proximity test walks every body it is given).
+ */
 export function previewWeapon(spec: WeaponSpec, launch: PreviewLaunch, world: GrenadeWorld, opts: PreviewOptions = {}): WeaponPreview {
   const weapon = checkWeapon(spec);
   const maxSteps = opts.steps ?? PREVIEW_STEPS;
-  const obs = opts.obstacles ?? null, nObs = obs?.s.count ?? 0;
-  const cap = nObs + weaponBudget(weapon).bodies;
-  // One snapshot, reused: obstacles copied once, munitions written after every step.
+  const grid = opts.obstacles ? new ObstacleGrid(opts.obstacles.s, opts.obstacles.shapes) : null;
+  const cap = weaponBudget(weapon).bodies, room = cap + (grid?.count ?? 0);
+  // One snapshot, reused: munitions in the first cap slots, this step's nearby obstacles after them.
   const s: Snapshot = {
-    count: nObs, pos: new Float64Array(3 * cap), rot: new Float64Array(4 * cap), linVel: new Float64Array(3 * cap),
-    angVel: new Float64Array(3 * cap), awake: new Uint8Array(cap), tier: new Uint8Array(cap),
+    count: cap, pos: new Float64Array(3 * room), rot: new Float64Array(4 * room), linVel: new Float64Array(3 * room),
+    angVel: new Float64Array(3 * room), awake: new Uint8Array(room), tier: new Uint8Array(room).fill(TIER_FREE),
   };
-  const shapes: { shape: ShapeDesc }[] = [];
-  if (obs) {
-    s.pos.set(obs.s.pos.subarray(0, 3 * nObs));
-    s.rot.set(obs.s.rot.subarray(0, 4 * nObs));
-    if (obs.s.tier) s.tier!.set(obs.s.tier.subarray(0, nObs));
-    for (let i = 0; i < nObs; i++) shapes.push({ shape: obs.shapes[i]!.shape });
-  }
+  for (let i = 0; i < room; i++) s.rot[4 * i + 3] = 1;
+  const shapes: { shape: ShapeDesc }[] = Array.from({ length: cap }, () => ({ shape: launch.shape }));
+  // How far around a munition an obstacle can matter this step: its widest near trigger, its own size, a step's travel, the biggest obstacle.
+  const sense = maxNear(weapon) + (grid?.maxRadius ?? 0) + 0.5;
   const muns: Mun[] = [], tracks: PreviewTrack[] = [], blasts: PreviewBlast[] = [];
+  const byId = (id: number): Mun | undefined => (id < muns.length ? muns[id] : undefined);
   // Each spawn's munition path: the shell's is '', a split child's its parent's plus the child's name.
-  const byId = (id: number): Mun | undefined => muns[id - nObs];
   const pathOf = new Map<SpawnEvent, string>(), idOfSpawn = new Map<SpawnEvent, number>();
   const rt = new WeaponRuntime(world, 1), forces = new ForceTable();
   const fired: SpawnEvent = { step: 0, kind: 'spawn', body: { shape: launch.shape, pos: [...launch.pos], rot: [0, 0, 0, 1], linVel: [...launch.vel], angVel: [0, 0, 0], density: launch.density, friction: 0.5, restitution: 0, tag: 0 } };
@@ -131,11 +134,29 @@ export function previewWeapon(spec: WeaponSpec, launch: PreviewLaunch, world: Gr
     }
     queue = queueInputs(queue, evs);
   };
-  take(rt.launch(nObs, 0, weapon, launch.shape));
+  take(rt.launch(0, 0, weapon, launch.shape));
   const groundY = world.groundY;
+  /** The obstacles near live munitions, into the snapshot after the munitions. */
+  const gather = () => {
+    if (!grid) return;
+    const near = grid.near(muns.filter((m) => !m.gone).map((m) => ({ p: m.p, r: m.radius + sense + Math.hypot(...m.v) * world.dt })));
+    near.forEach((i, j) => {
+      const k = cap + j;
+      s.pos.set(grid.s.pos.subarray(3 * i, 3 * i + 3), 3 * k);
+      s.rot.set(grid.s.rot.subarray(4 * i, 4 * i + 4), 4 * k);
+      s.tier![k] = 0;
+      shapes[k] = grid.shapes[i]!;
+    });
+    s.count = cap + near.length;
+  };
   const touches = (m: Mun): boolean => {
     if (groundY !== null && m.p[1] - m.radius <= groundY) return true;
-    for (let i = 0; i < nObs; i++) if (s.tier![i] !== TIER_FREE && surfaceDistance(shapes[i]!.shape, s, i, m.p) <= m.radius) return true;
+    const reach = m.radius + (grid?.maxRadius ?? 0);
+    for (let k = cap; k < s.count; k++) {
+      const dx = s.pos[3 * k]! - m.p[0], dy = s.pos[3 * k + 1]! - m.p[1], dz = s.pos[3 * k + 2]! - m.p[2];
+      if (dx * dx + dy * dy + dz * dz > reach * reach) continue;
+      if (surfaceDistance(shapes[k]!.shape, s, k, m.p) <= m.radius) return true;
+    }
     return false;
   };
 
@@ -151,24 +172,24 @@ export function previewWeapon(spec: WeaponSpec, launch: PreviewLaunch, world: Gr
     while (queue.length && queue[0]!.step <= step) {
       const e = queue.shift()!;
       if (e.kind === 'spawn') {
-        const b = e.from ? relativeBody(parentOf(e.from.body), e.body, e.from.axes) : e.body, id = nObs + muns.length;
+        const b = e.from ? relativeBody(parentOf(e.from.body), e.body, e.from.axes) : e.body, id = muns.length;
         idOfSpawn.set(e, id);
         tracks.push({ path: pathOf.get(e) ?? '', start: e.step, points: [[...b.pos]], end: 'open', contact: null });
         muns.push({ track: tracks.length - 1, shape: b.shape, radius: boundingRadius(b.shape), mass: massOf(b), p: [...b.pos], v: [...b.linVel], gone: false, still: false });
-        shapes.push({ shape: b.shape });
-        s.count = id + 1;
+        shapes[id] = { shape: b.shape };
       } else if (e.kind === 'blast') {
         const b = checkBlast(e.blast), host = b.point ? null : byId(b.body)!;
         const centre = blastCentre(b, host ? host.p : null);
         blasts.push({ step: e.step, track: host ? host.track : -1, path: host ? tracks[host.track]!.path : '', centre, radius: b.radius });
         muns.forEach((m, k) => {
           if (m.gone) return;
-          const v = blastVelocity(b, centre, nObs + k, m.p, m.v, m.mass, blastArea(m.shape));
+          const v = blastVelocity(b, centre, k, m.p, m.v, m.mass, blastArea(m.shape));
           if (v) { m.v = v; m.still = false; }
         });
       } else if (e.kind === 'force') {
         forces.apply(e, step);
-      } else {
+      } else if (e.kind === 'remove') {
+        // A weapon's runtime emits spawns, blasts, forces and removals only; it never schedules a field event.
         forces.remove(e.id);
         const m = byId(e.id);
         if (m && !m.gone) {
@@ -185,27 +206,27 @@ export function previewWeapon(spec: WeaponSpec, launch: PreviewLaunch, world: Gr
     }
     if (!queue.length && !rt.pending && muns.every((m) => m.gone)) break;
     // The step: free flight, held still from the first contact.
+    for (const m of muns) {
+      if (m.gone || m.still) continue;
+      const f = freeFlight(m.p, m.v, world.gravity, world.dt, world.substeps, 1);
+      m.p = f.pos; m.v = f.vel;
+    }
+    gather();
     muns.forEach((m) => {
       if (m.gone) return;
-      if (!m.still) {
-        const f = freeFlight(m.p, m.v, world.gravity, world.dt, world.substeps, 1);
-        m.p = f.pos; m.v = f.vel;
-        if (touches(m)) {
-          m.still = true;
-          m.v = [0, 0, 0];
-          if (groundY !== null && m.p[1] - m.radius < groundY) m.p = [m.p[0], groundY + m.radius, m.p[2]];
-          tracks[m.track]!.contact ??= step + 1;
-        }
+      if (!m.still && touches(m)) {
+        m.still = true;
+        m.v = [0, 0, 0];
+        if (groundY !== null && m.p[1] - m.radius < groundY) m.p = [m.p[0], groundY + m.radius, m.p[2]];
+        tracks[m.track]!.contact ??= step + 1;
       }
       tracks[m.track]!.points.push([...m.p]);
     });
     muns.forEach((m, k) => {
-      const i = nObs + k;
-      s.pos.set(m.p, 3 * i);
-      s.linVel.set(m.v, 3 * i);
-      s.rot.set([0, 0, 0, 1], 4 * i);
-      s.awake[i] = m.gone ? 0 : 1;
-      s.tier![i] = m.gone ? TIER_FREE : 0;
+      s.pos.set(m.p, 3 * k);
+      s.linVel.set(m.v, 3 * k);
+      s.awake[k] = m.gone ? 0 : 1;
+      s.tier![k] = m.gone ? TIER_FREE : 0;
     });
     const evs = rt.observe(s, step + 1, shapes, (e) => {
       const id = idOfSpawn.get(e);
@@ -215,6 +236,65 @@ export function previewWeapon(spec: WeaponSpec, launch: PreviewLaunch, world: Gr
     take(evs);
   }
   return { tracks, blasts, steps: step };
+}
+
+/** The widest near trigger anywhere in a weapon (0 with none). */
+function maxNear(m: MunitionSpec): number {
+  let out = 0;
+  const trig = (t: Trigger) => {
+    if ('near' in t) out = Math.max(out, t.near);
+    else if ('then' in t) t.then.forEach(trig);
+    else if ('any' in t) t.any.forEach(trig);
+  };
+  for (const r of m.rules) trig(r.when);
+  for (const c of Object.values(m.children ?? {})) out = Math.max(out, maxNear(c));
+  return out;
+}
+
+/** Bodies on a uniform grid of their centres, to find the few near a point. Removed bodies are left out. */
+class ObstacleGrid {
+  readonly count: number;
+  readonly maxRadius: number;
+  private readonly cell: number;
+  private readonly cells = new Map<number, number[]>();
+  private readonly seen: Int32Array;
+  private stamp = 0;
+
+  constructor(readonly s: Snapshot, readonly shapes: readonly { shape: ShapeDesc }[]) {
+    let r = 0, live = 0;
+    for (let i = 0; i < s.count; i++) if (s.tier?.[i] !== TIER_FREE) { r = Math.max(r, boundingRadius(shapes[i]!.shape)); live++; }
+    this.count = live;
+    this.maxRadius = r;
+    this.cell = Math.max(1, 2 * r);
+    this.seen = new Int32Array(s.count);
+    for (let i = 0; i < s.count; i++) {
+      if (s.tier?.[i] === TIER_FREE) continue;
+      const k = this.key(Math.floor(s.pos[3 * i]! / this.cell), Math.floor(s.pos[3 * i + 1]! / this.cell), Math.floor(s.pos[3 * i + 2]! / this.cell));
+      const list = this.cells.get(k);
+      if (list) list.push(i); else this.cells.set(k, [i]);
+    }
+  }
+
+  private key(x: number, y: number, z: number): number {
+    return ((x * 73856093) ^ (y * 19349663) ^ (z * 83492791)) | 0;
+  }
+
+  /** The bodies whose centre is within r (plus a cell) of any of the points, each once, in id order. */
+  near(points: readonly { p: Vec3; r: number }[]): number[] {
+    const out: number[] = [];
+    this.stamp++;
+    for (const { p, r } of points) {
+      const lo = p.map((x) => Math.floor((x - r) / this.cell)), hi = p.map((x) => Math.floor((x + r) / this.cell));
+      for (let x = lo[0]!; x <= hi[0]!; x++) for (let y = lo[1]!; y <= hi[1]!; y++) for (let z = lo[2]!; z <= hi[2]!; z++) {
+        for (const i of this.cells.get(this.key(x, y, z)) ?? []) {
+          if (this.seen[i] === this.stamp) continue;
+          this.seen[i] = this.stamp;
+          out.push(i);
+        }
+      }
+    }
+    return out.sort((a, b) => a - b);
+  }
 }
 
 /**

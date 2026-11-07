@@ -1,0 +1,3 @@
+# The option list (O4, docs/design/options.md): one import and one entry per line, so branches that each
+# add an option merge by keeping both lines.
+packages/game/src/options/index.ts merge=union

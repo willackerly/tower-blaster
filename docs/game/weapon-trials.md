@@ -56,4 +56,4 @@ The rocket is a quarter grenade that hits like more: at about the S grenade's en
 
 ## Playing them
 
-Trials T-W1 to T-W5 (`trial-levels.ts`): L1 to L5's structures and launchers with a rack of a Scatter, a Rocket and a marble, scored on the objective alone (the lot grown to the launcher ring less 3 cells, as every outcome level's). In the viewer, `proj.weapon=scatter` or `proj.weapon=rocket`; any level's rack may name `w-scatter` or `w-rocket`.
+Trials T-A1 to T-A5 (`trial-levels.ts`): L1 to L5's structures and launchers with a rack of a Scatter, a Rocket and a marble, scored on the objective alone (the lot grown to the launcher ring less 3 cells, as every outcome level's). In the viewer, `proj.weapon=scatter` or `proj.weapon=rocket`; any level's rack may name `w-scatter` or `w-rocket`.

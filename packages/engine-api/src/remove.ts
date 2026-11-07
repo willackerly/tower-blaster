@@ -23,16 +23,18 @@ import type { InputEvent } from './index.ts';
 import { checkBlast } from './blast.ts';
 import { checkForce, MAX_FORCED } from './force.ts';
 import { checkSpawnFrom } from './spawn.ts';
+import { checkField } from './field.ts';
+import { isPinned } from './pinned.ts';
 
 /** Snapshot.tier of a removed body: @tb/schema TIER.free (an unused slot; every render pass skips it). */
 export const TIER_FREE = 255;
 
 /**
  * Throws unless every event in `queue` (the events an engine will apply, in
- * order) can be applied: each blast passes checkBlast and, centred on a body,
+ * order) can be applied: each field event passes checkField (field.ts); each blast passes checkBlast and, centred on a body,
  * names one that exists and is not removed when it is due; each removal names
  * a body that exists then and is not removed yet; each relative spawn
- * (spawn.ts) passes checkSpawnFrom and names a parent that exists at the start
+ * (spawn.ts) passes checkSpawnFrom, is not pinned, and names a parent that exists at the start
  * of its step and was not removed at an earlier step; each force event
  * (force.ts) names a body that exists then and is not removed, its force
  * passes checkForce, and no step has forces on more than MAX_FORCED bodies.
@@ -59,10 +61,13 @@ export function checkInputQueue(existing: number, queue: readonly InputEvent[], 
         const p = checkSpawnFrom(ev.from).body;
         if (p >= atStart) throw new Error(`spawn at step ${ev.step} is relative to body ${p}, which does not exist at the start of that step (${atStart} bodies)`);
         if (goneAtStart.has(p)) throw new Error(`spawn at step ${ev.step} is relative to body ${p}, which is removed before that step`);
+        // A pinned body is bolted to the world (pinned.ts): it is placed in the world's frame, never a parent's.
+        if (isPinned(ev.body)) throw new Error(`spawn at step ${ev.step} is pinned and relative to body ${p}; a pinned body is placed in world coordinates`);
       }
       n++;
       continue;
     }
+    if (ev.kind === 'field') { checkField(ev); continue; }
     if (ev.kind === 'remove') {
       const id = ev.id;
       if (!Number.isInteger(id) || id < 0) throw new Error(`remove at step ${ev.step}: id must be a body id, got ${JSON.stringify(id)}`);

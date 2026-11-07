@@ -1,5 +1,5 @@
 // The reference AVBD solver behind the engine contract.
-import { blastArea, blastCentre, blastVelocity, type BodyMotion, checkBlast, checkInputQueue, emptySnapshot, ForceTable, forceKicks, queueInputs, relativeBody, TIER_FREE, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
+import { blastArea, blastCentre, blastVelocity, type BodyMotion, checkBlast, checkInputQueue, emptySnapshot, ForceTable, forceKicks, kicks, queueInputs, relativeBody, scenePins, TIER_FREE, type EngineInfo, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot } from '@tb/engine-api';
 import { type AvbdParams, avbdVariant, AvbdWorld, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD } from './avbd.ts';
 
 export class AvbdReferenceEngine implements PhysicsEngine {
@@ -29,6 +29,7 @@ export class AvbdReferenceEngine implements PhysicsEngine {
     if (e !== undefined && !(e >= 0 && e <= 1)) throw new Error(`AvbdReferenceEngine: SceneDesc.ground.restitution must be in [0, 1], got ${e}`);
     const pending = [...scene.inputs].sort((a, b) => a.step - b.step);
     checkInputQueue(scene.bodies.length, pending);
+    if (this.params.restitution && scenePins(scene)) throw new Error('AvbdReferenceEngine: pinned bodies are not implemented with AvbdParams.restitution yet (docs/design/gravity-and-pins.md)');
     this.world = new AvbdWorld(scene, this.params);
     for (const b of scene.bodies) this.world.add(b);
     this.pending = pending;
@@ -40,6 +41,7 @@ export class AvbdReferenceEngine implements PhysicsEngine {
     // Stable insertion keeps push order among events due at the same step; checked before anything changes.
     const pending = queueInputs(this.pending, events);
     checkInputQueue(this.world?.bodies.length ?? 0, pending, this.removed(), this.stepIndex, this.forces.ends());
+    if (this.params.restitution && scenePins({ bodies: [], inputs: events })) throw new Error('AvbdReferenceEngine: pinned bodies are not implemented with AvbdParams.restitution yet (docs/design/gravity-and-pins.md)');
     this.pending = pending;
   }
 
@@ -60,11 +62,24 @@ export class AvbdReferenceEngine implements PhysicsEngine {
       // A removal (remove.ts): the body touches nothing from this step on.
       if (ev.kind === 'remove') { w.remove(ev.id); this.forces.remove(ev.id); continue; }
       if (ev.kind === 'force') { this.forces.apply(ev, this.stepIndex); continue; }
+      // A field event (field.ts): the gravity from this step on, and a kick for every moving body (to its warm
+      // start's previous velocity too, as a blast's). Nothing sleeps here, so there is nothing to wake.
+      if (ev.kind === 'field') {
+        if (ev.gravity) w.gravity = [...ev.gravity];
+        const k = ev.kick;
+        if (k && kicks(ev)) for (const body of w.bodies) {
+          if (body.removed || body.pinned) continue;
+          body.linVel = [body.linVel[0] + k[0], body.linVel[1] + k[1], body.linVel[2] + k[2]];
+          body.prevLinVel = [body.prevLinVel[0] + k[0], body.prevLinVel[1] + k[1], body.prevLinVel[2] + k[2]];
+        }
+        continue;
+      }
       // A blast (blast.ts) pushes the bodies that exist now, before the step starts; never a removed one.
       const b = checkBlast(ev.blast);
       const centre = blastCentre(b, b.body >= 0 ? w.bodies[b.body]!.pos : null);
       w.bodies.forEach((body, id) => {
-        if (body.removed) return;
+        // Never a removed body, nor a pinned one (engine-api pinned.ts).
+        if (body.removed || body.pinned) return;
         const v = blastVelocity(b, centre, id, body.pos, body.linVel, body.mass, blastArea(body.desc.shape));
         if (!v) return;
         // The adaptive warm start compares linVel with prevLinVel: the kick is not an acceleration (blast.ts).
@@ -77,6 +92,7 @@ export class AvbdReferenceEngine implements PhysicsEngine {
     const motion = (id: number): BodyMotion => { const b = w.bodies[id]!; return { pos: b.pos, rot: b.rot, linVel: b.linVel, angVel: b.angVel }; };
     for (const { id, dv } of forceKicks(this.forces.act(this.stepIndex), this.stepIndex, w.scene.dt, motion, (id) => w.bodies[id]!.mass)) {
       const b = w.bodies[id]!, u = b.linVel, p = b.prevLinVel;
+      if (b.pinned) continue; // a pinned body feels no force (pinned.ts)
       b.linVel = [u[0] + dv[0], u[1] + dv[1], u[2] + dv[2]];
       b.prevLinVel = [p[0] + dv[0], p[1] + dv[1], p[2] + dv[2]];
     }
@@ -92,7 +108,7 @@ export class AvbdReferenceEngine implements PhysicsEngine {
       s.rot.set(b.rot, 4 * i);
       s.linVel.set(b.linVel, 3 * i);
       s.angVel.set(b.angVel, 3 * i);
-      s.awake[i] = b.removed ? 0 : 1; // no sleeping yet
+      s.awake[i] = b.removed || b.pinned ? 0 : 1; // no sleeping yet; a pinned body is not solved (engine-api pinned.ts)
     });
     // Tiers only once a body is removed (Snapshot.tier: absent, every body is active).
     if (bodies.some((b) => b.removed)) s.tier = Uint8Array.from(bodies, (b) => (b.removed ? TIER_FREE : 0));

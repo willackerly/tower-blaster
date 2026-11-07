@@ -1,0 +1,2513 @@
+{
+ "DEFAULT_FEEL": {
+  "hitStop": false,
+  "slowMo": false,
+  "budgetMs": 14,
+  "tailSkip": true,
+  "follow": false,
+  "shake": false,
+  "frames": "all",
+  "rapid": true,
+  "turnView": true,
+  "arcs": true,
+  "handoff": true,
+  "undoMB": 1024,
+  "launch": "high",
+  "balls": "painted",
+  "marks": true,
+  "fx": "damage",
+  "spent": true,
+  "pullAnim": true,
+  "frozenLook": true
+ },
+ "feelKeyOrder": [
+  "hitStop",
+  "slowMo",
+  "budgetMs",
+  "tailSkip",
+  "follow",
+  "shake",
+  "frames",
+  "rapid",
+  "turnView",
+  "arcs",
+  "handoff",
+  "undoMB",
+  "launch",
+  "balls",
+  "marks",
+  "fx",
+  "spent",
+  "pullAnim",
+  "frozenLook"
+ ],
+ "DEFAULT_SETTINGS": {
+  "sound": true,
+  "look": "hazy",
+  "sharp": 2,
+  "camera": "still",
+  "rapid": true,
+  "duelView": true,
+  "handoff": true,
+  "launch": "high",
+  "marks": true,
+  "layout": "docked",
+  "quality": "auto"
+ },
+ "SETTINGS_KEY": "tb.settings.v1",
+ "feel": [
+  {
+   "search": "keystone.hitstop=0",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": ""
+  },
+  {
+   "search": "keystone.hitstop=1",
+   "feel": {
+    "hitStop": true,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.hitstop=1"
+  },
+  {
+   "search": "keystone.hitstop=2",
+   "error": "keystone.hitstop must be 0 or 1: 2"
+  },
+  {
+   "search": "keystone.hitstop=yes",
+   "error": "keystone.hitstop must be 0 or 1: yes"
+  },
+  {
+   "search": "keystone.hitstop=",
+   "error": "keystone.hitstop must be 0 or 1: "
+  },
+  {
+   "search": "keystone.slowmo=0",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": ""
+  },
+  {
+   "search": "keystone.slowmo=1",
+   "feel": {
+    "hitStop": false,
+    "slowMo": true,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.slowmo=1"
+  },
+  {
+   "search": "keystone.slowmo=2",
+   "error": "keystone.slowmo must be 0 or 1: 2"
+  },
+  {
+   "search": "keystone.slowmo=yes",
+   "error": "keystone.slowmo must be 0 or 1: yes"
+  },
+  {
+   "search": "keystone.slowmo=",
+   "error": "keystone.slowmo must be 0 or 1: "
+  },
+  {
+   "search": "keystone.tailskip=0",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": false,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.tailskip=0"
+  },
+  {
+   "search": "keystone.tailskip=1",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": ""
+  },
+  {
+   "search": "keystone.tailskip=2",
+   "error": "keystone.tailskip must be 0 or 1: 2"
+  },
+  {
+   "search": "keystone.tailskip=yes",
+   "error": "keystone.tailskip must be 0 or 1: yes"
+  },
+  {
+   "search": "keystone.tailskip=",
+   "error": "keystone.tailskip must be 0 or 1: "
+  },
+  {
+   "search": "keystone.follow=0",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": ""
+  },
+  {
+   "search": "keystone.follow=1",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": true,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.follow=1"
+  },
+  {
+   "search": "keystone.follow=2",
+   "error": "keystone.follow must be 0 or 1: 2"
+  },
+  {
+   "search": "keystone.follow=yes",
+   "error": "keystone.follow must be 0 or 1: yes"
+  },
+  {
+   "search": "keystone.follow=",
+   "error": "keystone.follow must be 0 or 1: "
+  },
+  {
+   "search": "keystone.shake=0",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": ""
+  },
+  {
+   "search": "keystone.shake=1",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": true,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.shake=1"
+  },
+  {
+   "search": "keystone.shake=2",
+   "error": "keystone.shake must be 0 or 1: 2"
+  },
+  {
+   "search": "keystone.shake=yes",
+   "error": "keystone.shake must be 0 or 1: yes"
+  },
+  {
+   "search": "keystone.shake=",
+   "error": "keystone.shake must be 0 or 1: "
+  },
+  {
+   "search": "keystone.rapid=0",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": false,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.rapid=0"
+  },
+  {
+   "search": "keystone.rapid=1",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": ""
+  },
+  {
+   "search": "keystone.rapid=2",
+   "error": "keystone.rapid must be 0 or 1: 2"
+  },
+  {
+   "search": "keystone.rapid=yes",
+   "error": "keystone.rapid must be 0 or 1: yes"
+  },
+  {
+   "search": "keystone.rapid=",
+   "error": "keystone.rapid must be 0 or 1: "
+  },
+  {
+   "search": "keystone.turnview=0",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": false,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.turnview=0"
+  },
+  {
+   "search": "keystone.turnview=1",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": ""
+  },
+  {
+   "search": "keystone.turnview=2",
+   "error": "keystone.turnview must be 0 or 1: 2"
+  },
+  {
+   "search": "keystone.turnview=yes",
+   "error": "keystone.turnview must be 0 or 1: yes"
+  },
+  {
+   "search": "keystone.turnview=",
+   "error": "keystone.turnview must be 0 or 1: "
+  },
+  {
+   "search": "keystone.arcs=0",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": false,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.arcs=0"
+  },
+  {
+   "search": "keystone.arcs=1",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": ""
+  },
+  {
+   "search": "keystone.arcs=2",
+   "error": "keystone.arcs must be 0 or 1: 2"
+  },
+  {
+   "search": "keystone.arcs=yes",
+   "error": "keystone.arcs must be 0 or 1: yes"
+  },
+  {
+   "search": "keystone.arcs=",
+   "error": "keystone.arcs must be 0 or 1: "
+  },
+  {
+   "search": "keystone.handoff=0",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": false,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.handoff=0"
+  },
+  {
+   "search": "keystone.handoff=1",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": ""
+  },
+  {
+   "search": "keystone.handoff=2",
+   "error": "keystone.handoff must be 0 or 1: 2"
+  },
+  {
+   "search": "keystone.handoff=yes",
+   "error": "keystone.handoff must be 0 or 1: yes"
+  },
+  {
+   "search": "keystone.handoff=",
+   "error": "keystone.handoff must be 0 or 1: "
+  },
+  {
+   "search": "keystone.marks=0",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": false,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.marks=0"
+  },
+  {
+   "search": "keystone.marks=1",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": ""
+  },
+  {
+   "search": "keystone.marks=2",
+   "error": "keystone.marks must be 0 or 1: 2"
+  },
+  {
+   "search": "keystone.marks=yes",
+   "error": "keystone.marks must be 0 or 1: yes"
+  },
+  {
+   "search": "keystone.marks=",
+   "error": "keystone.marks must be 0 or 1: "
+  },
+  {
+   "search": "keystone.spent=0",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": false,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.spent=0"
+  },
+  {
+   "search": "keystone.spent=1",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": ""
+  },
+  {
+   "search": "keystone.spent=2",
+   "error": "keystone.spent must be 0 or 1: 2"
+  },
+  {
+   "search": "keystone.spent=yes",
+   "error": "keystone.spent must be 0 or 1: yes"
+  },
+  {
+   "search": "keystone.spent=",
+   "error": "keystone.spent must be 0 or 1: "
+  },
+  {
+   "search": "keystone.pullanim=0",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": false,
+    "frozenLook": true
+   },
+   "written": "keystone.pullanim=0"
+  },
+  {
+   "search": "keystone.pullanim=1",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": ""
+  },
+  {
+   "search": "keystone.pullanim=2",
+   "error": "keystone.pullanim must be 0 or 1: 2"
+  },
+  {
+   "search": "keystone.pullanim=yes",
+   "error": "keystone.pullanim must be 0 or 1: yes"
+  },
+  {
+   "search": "keystone.pullanim=",
+   "error": "keystone.pullanim must be 0 or 1: "
+  },
+  {
+   "search": "keystone.frozenlook=0",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": false
+   },
+   "written": "keystone.frozenlook=0"
+  },
+  {
+   "search": "keystone.frozenlook=1",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": ""
+  },
+  {
+   "search": "keystone.frozenlook=2",
+   "error": "keystone.frozenlook must be 0 or 1: 2"
+  },
+  {
+   "search": "keystone.frozenlook=yes",
+   "error": "keystone.frozenlook must be 0 or 1: yes"
+  },
+  {
+   "search": "keystone.frozenlook=",
+   "error": "keystone.frozenlook must be 0 or 1: "
+  },
+  {
+   "search": "keystone.budget=0",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 0,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.budget=0"
+  },
+  {
+   "search": "keystone.budget=14",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": ""
+  },
+  {
+   "search": "keystone.budget=7.5",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 7.5,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.budget=7.5"
+  },
+  {
+   "search": "keystone.budget=1000",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 1000,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.budget=1000"
+  },
+  {
+   "search": "keystone.budget=1e2",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 100,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.budget=100"
+  },
+  {
+   "search": "keystone.budget=%205%20",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 5,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.budget=5"
+  },
+  {
+   "search": "keystone.budget=-1",
+   "error": "keystone.budget must be from 0 to 1000 ms (0: no valve): -1"
+  },
+  {
+   "search": "keystone.budget=1001",
+   "error": "keystone.budget must be from 0 to 1000 ms (0: no valve): 1001"
+  },
+  {
+   "search": "keystone.budget=",
+   "error": "keystone.budget must be from 0 to 1000 ms (0: no valve): "
+  },
+  {
+   "search": "keystone.budget=x",
+   "error": "keystone.budget must be from 0 to 1000 ms (0: no valve): x"
+  },
+  {
+   "search": "keystone.budget=NaN",
+   "error": "keystone.budget must be from 0 to 1000 ms (0: no valve): NaN"
+  },
+  {
+   "search": "keystone.undo=0",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 0,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.undo=0"
+  },
+  {
+   "search": "keystone.undo=1024",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": ""
+  },
+  {
+   "search": "keystone.undo=65536",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 65536,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.undo=65536"
+  },
+  {
+   "search": "keystone.undo=12.5",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 12.5,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.undo=12.5"
+  },
+  {
+   "search": "keystone.undo=65537",
+   "error": "keystone.undo must be from 0 to 65536 MB (0: undo replays the shots): 65537"
+  },
+  {
+   "search": "keystone.undo=-3",
+   "error": "keystone.undo must be from 0 to 65536 MB (0: undo replays the shots): -3"
+  },
+  {
+   "search": "keystone.undo=",
+   "error": "keystone.undo must be from 0 to 65536 MB (0: undo replays the shots): "
+  },
+  {
+   "search": "keystone.undo=lots",
+   "error": "keystone.undo must be from 0 to 65536 MB (0: undo replays the shots): lots"
+  },
+  {
+   "search": "keystone.frames=all",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": ""
+  },
+  {
+   "search": "keystone.frames=half",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "half",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.frames=half"
+  },
+  {
+   "search": "keystone.frames=auto",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "auto",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.frames=auto"
+  },
+  {
+   "search": "keystone.frames=none",
+   "error": "keystone.frames must be one of all, half, auto: none"
+  },
+  {
+   "search": "keystone.frames=",
+   "error": "keystone.frames must be one of all, half, auto: "
+  },
+  {
+   "search": "keystone.launch=high",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": ""
+  },
+  {
+   "search": "keystone.launch=level",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "level",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.launch=level"
+  },
+  {
+   "search": "keystone.launch=low",
+   "error": "keystone.launch must be high or level: low"
+  },
+  {
+   "search": "keystone.launch=",
+   "error": "keystone.launch must be high or level: "
+  },
+  {
+   "search": "keystone.balls=painted",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": ""
+  },
+  {
+   "search": "keystone.balls=plain",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "plain",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.balls=plain"
+  },
+  {
+   "search": "keystone.balls=gold",
+   "error": "keystone.balls must be painted or plain: gold"
+  },
+  {
+   "search": "keystone.balls=",
+   "error": "keystone.balls must be painted or plain: "
+  },
+  {
+   "search": "keystone.fx=damage",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "damage",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": ""
+  },
+  {
+   "search": "keystone.fx=classic",
+   "feel": {
+    "hitStop": false,
+    "slowMo": false,
+    "budgetMs": 14,
+    "tailSkip": true,
+    "follow": false,
+    "shake": false,
+    "frames": "all",
+    "rapid": true,
+    "turnView": true,
+    "arcs": true,
+    "handoff": true,
+    "undoMB": 1024,
+    "launch": "high",
+    "balls": "painted",
+    "marks": true,
+    "fx": "classic",
+    "spent": true,
+    "pullAnim": true,
+    "frozenLook": true
+   },
+   "written": "keystone.fx=classic"
+  },
+  {
+   "search": "keystone.fx=big",
+   "error": "keystone.fx must be damage or classic: big"
+  },
+  {
+   "search": "keystone.fx=",
+   "error": "keystone.fx must be damage or classic: "
+  }
+ ],
+ "flipped": {
+  "feel": {
+   "hitStop": true,
+   "slowMo": true,
+   "budgetMs": 0,
+   "tailSkip": false,
+   "follow": true,
+   "shake": true,
+   "frames": "half",
+   "rapid": false,
+   "turnView": false,
+   "arcs": false,
+   "handoff": false,
+   "undoMB": 0,
+   "launch": "level",
+   "balls": "plain",
+   "marks": false,
+   "fx": "classic",
+   "spent": false,
+   "pullAnim": false,
+   "frozenLook": false
+  },
+  "written": "keystone.hitstop=1&keystone.slowmo=1&keystone.budget=0&keystone.tailskip=0&keystone.follow=1&keystone.shake=1&keystone.frames=half&keystone.rapid=0&keystone.turnview=0&keystone.arcs=0&keystone.handoff=0&keystone.undo=0&keystone.launch=level&keystone.balls=plain&keystone.marks=0&keystone.fx=classic&keystone.spent=0&keystone.pullanim=0&keystone.frozenlook=0"
+ },
+ "check": [
+  {
+   "patch": {
+    "budgetMs": -1
+   },
+   "error": "physics budget must be from 0 to 1000 ms (0: no valve): -1"
+  },
+  {
+   "patch": {
+    "budgetMs": null
+   },
+   "error": "physics budget must be from 0 to 1000 ms (0: no valve): NaN"
+  },
+  {
+   "patch": {
+    "undoMB": 1000000000
+   },
+   "error": "undo memory must be from 0 to 65536 MB (0: undo replays the shots): 1000000000"
+  },
+  {
+   "patch": {
+    "frames": "x"
+   },
+   "error": "keystone.frames must be one of all, half, auto: x"
+  },
+  {
+   "patch": {
+    "launch": "x"
+   },
+   "error": "keystone.launch must be high or level: x"
+  },
+  {
+   "patch": {
+    "balls": "x"
+   },
+   "error": "keystone.balls must be painted or plain: x"
+  },
+  {
+   "patch": {
+    "fx": "x"
+   },
+   "error": "keystone.fx must be damage or classic: x"
+  }
+ ],
+ "stored": [
+  {
+   "text": null,
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "nope",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "[]",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "null",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "3",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"sound\":false}",
+   "settings": {
+    "sound": false,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"sound\":\"off\"}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"look\":\"real\"}",
+   "settings": {
+    "sound": true,
+    "look": "real",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"look\":\"candy\"}",
+   "settings": {
+    "sound": true,
+    "look": "candy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"look\":\"nope\"}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"look\":3}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"sharp\":1}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 1,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"sharp\":2}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"sharp\":3}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"sharp\":\"1\"}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"camera\":\"dynamic\"}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "dynamic",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"camera\":true}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"rapid\":false}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": false,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"rapid\":\"off\"}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"duelView\":false}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": false,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"duelView\":0}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"handoff\":false}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": false,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"handoff\":\"no\"}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"launch\":\"level\"}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "level",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"launch\":\"low\"}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"marks\":false}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": false,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"marks\":\"off\"}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"layout\":\"classic\"}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "classic",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"layout\":\"dock\"}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"quality\":\"high\"}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "high"
+   }
+  },
+  {
+   "text": "{\"quality\":\"mid\"}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "mid"
+   }
+  },
+  {
+   "text": "{\"quality\":\"low\"}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "low"
+   }
+  },
+  {
+   "text": "{\"quality\":\"ultra\"}",
+   "settings": {
+    "sound": true,
+    "look": "hazy",
+    "sharp": 2,
+    "camera": "still",
+    "rapid": true,
+    "duelView": true,
+    "handoff": true,
+    "launch": "high",
+    "marks": true,
+    "layout": "docked",
+    "quality": "auto"
+   }
+  },
+  {
+   "text": "{\"sound\":false,\"look\":\"real\",\"sharp\":1,\"camera\":\"dynamic\",\"rapid\":false,\"duelView\":false,\"handoff\":false,\"launch\":\"level\",\"marks\":false,\"layout\":\"classic\",\"quality\":\"low\",\"extra\":1}",
+   "settings": {
+    "sound": false,
+    "look": "real",
+    "sharp": 1,
+    "camera": "dynamic",
+    "rapid": false,
+    "duelView": false,
+    "handoff": false,
+    "launch": "level",
+    "marks": false,
+    "layout": "classic",
+    "quality": "low"
+   }
+  }
+ ],
+ "urls": [
+  {
+   "search": "",
+   "ok": {}
+  },
+  {
+   "search": "sound=on",
+   "ok": {
+    "sound": true
+   }
+  },
+  {
+   "search": "sound=off",
+   "ok": {
+    "sound": false
+   }
+  },
+  {
+   "search": "sound=1",
+   "error": "sound must be on or off: 1"
+  },
+  {
+   "search": "sharp=1",
+   "ok": {
+    "sharp": 1
+   }
+  },
+  {
+   "search": "sharp=2",
+   "ok": {
+    "sharp": 2
+   }
+  },
+  {
+   "search": "sharp=3",
+   "error": "sharp must be 1 or 2: 3"
+  },
+  {
+   "search": "look=real",
+   "ok": {
+    "look": "real"
+   }
+  },
+  {
+   "search": "look=anything",
+   "ok": {
+    "look": "anything"
+   }
+  },
+  {
+   "search": "quality=auto",
+   "ok": {
+    "quality": "auto"
+   }
+  },
+  {
+   "search": "quality=high",
+   "ok": {
+    "quality": "high"
+   }
+  },
+  {
+   "search": "quality=mid",
+   "ok": {
+    "quality": "mid"
+   }
+  },
+  {
+   "search": "quality=low",
+   "ok": {
+    "quality": "low"
+   }
+  },
+  {
+   "search": "quality=ultra",
+   "error": "quality must be one of auto, high, mid, low: ultra"
+  },
+  {
+   "search": "sound=off&sharp=1&look=candy&quality=mid",
+   "ok": {
+    "look": "candy",
+    "sound": false,
+    "sharp": 1,
+    "quality": "mid"
+   }
+  }
+ ],
+ "settingFeel": [
+  {
+   "setting": "camera",
+   "value": "still",
+   "search": "",
+   "out": {
+    "follow": false,
+    "shake": false
+   }
+  },
+  {
+   "setting": "camera",
+   "value": "still",
+   "search": "keystone.hitstop=1&keystone.slowmo=1&keystone.budget=0&keystone.tailskip=0&keystone.follow=1&keystone.shake=1&keystone.frames=half&keystone.rapid=0&keystone.turnview=0&keystone.arcs=0&keystone.handoff=0&keystone.undo=0&keystone.launch=level&keystone.balls=plain&keystone.marks=0&keystone.fx=classic&keystone.spent=0&keystone.pullanim=0&keystone.frozenlook=0",
+   "out": {
+    "follow": true,
+    "shake": true
+   }
+  },
+  {
+   "setting": "camera",
+   "value": "still",
+   "search": "keystone.follow=1&keystone.shake=1",
+   "out": {
+    "follow": true,
+    "shake": true
+   }
+  },
+  {
+   "setting": "camera",
+   "value": "dynamic",
+   "search": "",
+   "out": {
+    "follow": true,
+    "shake": true
+   }
+  },
+  {
+   "setting": "camera",
+   "value": "dynamic",
+   "search": "keystone.hitstop=1&keystone.slowmo=1&keystone.budget=0&keystone.tailskip=0&keystone.follow=1&keystone.shake=1&keystone.frames=half&keystone.rapid=0&keystone.turnview=0&keystone.arcs=0&keystone.handoff=0&keystone.undo=0&keystone.launch=level&keystone.balls=plain&keystone.marks=0&keystone.fx=classic&keystone.spent=0&keystone.pullanim=0&keystone.frozenlook=0",
+   "out": {
+    "follow": true,
+    "shake": true
+   }
+  },
+  {
+   "setting": "camera",
+   "value": "dynamic",
+   "search": "keystone.follow=1&keystone.shake=1",
+   "out": {
+    "follow": true,
+    "shake": true
+   }
+  },
+  {
+   "setting": "rapid",
+   "value": true,
+   "search": "",
+   "out": {
+    "rapid": true
+   }
+  },
+  {
+   "setting": "rapid",
+   "value": true,
+   "search": "keystone.hitstop=1&keystone.slowmo=1&keystone.budget=0&keystone.tailskip=0&keystone.follow=1&keystone.shake=1&keystone.frames=half&keystone.rapid=0&keystone.turnview=0&keystone.arcs=0&keystone.handoff=0&keystone.undo=0&keystone.launch=level&keystone.balls=plain&keystone.marks=0&keystone.fx=classic&keystone.spent=0&keystone.pullanim=0&keystone.frozenlook=0",
+   "out": {
+    "rapid": false
+   }
+  },
+  {
+   "setting": "rapid",
+   "value": true,
+   "search": "keystone.rapid=1",
+   "out": {
+    "rapid": true
+   }
+  },
+  {
+   "setting": "rapid",
+   "value": false,
+   "search": "",
+   "out": {
+    "rapid": false
+   }
+  },
+  {
+   "setting": "rapid",
+   "value": false,
+   "search": "keystone.hitstop=1&keystone.slowmo=1&keystone.budget=0&keystone.tailskip=0&keystone.follow=1&keystone.shake=1&keystone.frames=half&keystone.rapid=0&keystone.turnview=0&keystone.arcs=0&keystone.handoff=0&keystone.undo=0&keystone.launch=level&keystone.balls=plain&keystone.marks=0&keystone.fx=classic&keystone.spent=0&keystone.pullanim=0&keystone.frozenlook=0",
+   "out": {
+    "rapid": false
+   }
+  },
+  {
+   "setting": "rapid",
+   "value": false,
+   "search": "keystone.rapid=1",
+   "out": {
+    "rapid": true
+   }
+  },
+  {
+   "setting": "duelView",
+   "value": true,
+   "search": "",
+   "out": {
+    "turnView": true
+   }
+  },
+  {
+   "setting": "duelView",
+   "value": true,
+   "search": "keystone.hitstop=1&keystone.slowmo=1&keystone.budget=0&keystone.tailskip=0&keystone.follow=1&keystone.shake=1&keystone.frames=half&keystone.rapid=0&keystone.turnview=0&keystone.arcs=0&keystone.handoff=0&keystone.undo=0&keystone.launch=level&keystone.balls=plain&keystone.marks=0&keystone.fx=classic&keystone.spent=0&keystone.pullanim=0&keystone.frozenlook=0",
+   "out": {
+    "turnView": false
+   }
+  },
+  {
+   "setting": "duelView",
+   "value": true,
+   "search": "keystone.turnview=1",
+   "out": {
+    "turnView": true
+   }
+  },
+  {
+   "setting": "duelView",
+   "value": false,
+   "search": "",
+   "out": {
+    "turnView": false
+   }
+  },
+  {
+   "setting": "duelView",
+   "value": false,
+   "search": "keystone.hitstop=1&keystone.slowmo=1&keystone.budget=0&keystone.tailskip=0&keystone.follow=1&keystone.shake=1&keystone.frames=half&keystone.rapid=0&keystone.turnview=0&keystone.arcs=0&keystone.handoff=0&keystone.undo=0&keystone.launch=level&keystone.balls=plain&keystone.marks=0&keystone.fx=classic&keystone.spent=0&keystone.pullanim=0&keystone.frozenlook=0",
+   "out": {
+    "turnView": false
+   }
+  },
+  {
+   "setting": "duelView",
+   "value": false,
+   "search": "keystone.turnview=1",
+   "out": {
+    "turnView": true
+   }
+  },
+  {
+   "setting": "handoff",
+   "value": true,
+   "search": "",
+   "out": {
+    "handoff": true
+   }
+  },
+  {
+   "setting": "handoff",
+   "value": true,
+   "search": "keystone.hitstop=1&keystone.slowmo=1&keystone.budget=0&keystone.tailskip=0&keystone.follow=1&keystone.shake=1&keystone.frames=half&keystone.rapid=0&keystone.turnview=0&keystone.arcs=0&keystone.handoff=0&keystone.undo=0&keystone.launch=level&keystone.balls=plain&keystone.marks=0&keystone.fx=classic&keystone.spent=0&keystone.pullanim=0&keystone.frozenlook=0",
+   "out": {
+    "handoff": false
+   }
+  },
+  {
+   "setting": "handoff",
+   "value": true,
+   "search": "keystone.handoff=1",
+   "out": {
+    "handoff": true
+   }
+  },
+  {
+   "setting": "handoff",
+   "value": false,
+   "search": "",
+   "out": {
+    "handoff": false
+   }
+  },
+  {
+   "setting": "handoff",
+   "value": false,
+   "search": "keystone.hitstop=1&keystone.slowmo=1&keystone.budget=0&keystone.tailskip=0&keystone.follow=1&keystone.shake=1&keystone.frames=half&keystone.rapid=0&keystone.turnview=0&keystone.arcs=0&keystone.handoff=0&keystone.undo=0&keystone.launch=level&keystone.balls=plain&keystone.marks=0&keystone.fx=classic&keystone.spent=0&keystone.pullanim=0&keystone.frozenlook=0",
+   "out": {
+    "handoff": false
+   }
+  },
+  {
+   "setting": "handoff",
+   "value": false,
+   "search": "keystone.handoff=1",
+   "out": {
+    "handoff": true
+   }
+  },
+  {
+   "setting": "launch",
+   "value": "high",
+   "search": "",
+   "out": {
+    "launch": "high"
+   }
+  },
+  {
+   "setting": "launch",
+   "value": "high",
+   "search": "keystone.hitstop=1&keystone.slowmo=1&keystone.budget=0&keystone.tailskip=0&keystone.follow=1&keystone.shake=1&keystone.frames=half&keystone.rapid=0&keystone.turnview=0&keystone.arcs=0&keystone.handoff=0&keystone.undo=0&keystone.launch=level&keystone.balls=plain&keystone.marks=0&keystone.fx=classic&keystone.spent=0&keystone.pullanim=0&keystone.frozenlook=0",
+   "out": {
+    "launch": "level"
+   }
+  },
+  {
+   "setting": "launch",
+   "value": "high",
+   "search": "keystone.launch=1",
+   "out": {
+    "launch": "high"
+   }
+  },
+  {
+   "setting": "launch",
+   "value": "level",
+   "search": "",
+   "out": {
+    "launch": "level"
+   }
+  },
+  {
+   "setting": "launch",
+   "value": "level",
+   "search": "keystone.hitstop=1&keystone.slowmo=1&keystone.budget=0&keystone.tailskip=0&keystone.follow=1&keystone.shake=1&keystone.frames=half&keystone.rapid=0&keystone.turnview=0&keystone.arcs=0&keystone.handoff=0&keystone.undo=0&keystone.launch=level&keystone.balls=plain&keystone.marks=0&keystone.fx=classic&keystone.spent=0&keystone.pullanim=0&keystone.frozenlook=0",
+   "out": {
+    "launch": "level"
+   }
+  },
+  {
+   "setting": "launch",
+   "value": "level",
+   "search": "keystone.launch=1",
+   "out": {
+    "launch": "high"
+   }
+  },
+  {
+   "setting": "marks",
+   "value": true,
+   "search": "",
+   "out": {
+    "marks": true
+   }
+  },
+  {
+   "setting": "marks",
+   "value": true,
+   "search": "keystone.hitstop=1&keystone.slowmo=1&keystone.budget=0&keystone.tailskip=0&keystone.follow=1&keystone.shake=1&keystone.frames=half&keystone.rapid=0&keystone.turnview=0&keystone.arcs=0&keystone.handoff=0&keystone.undo=0&keystone.launch=level&keystone.balls=plain&keystone.marks=0&keystone.fx=classic&keystone.spent=0&keystone.pullanim=0&keystone.frozenlook=0",
+   "out": {
+    "marks": false
+   }
+  },
+  {
+   "setting": "marks",
+   "value": true,
+   "search": "keystone.marks=1",
+   "out": {
+    "marks": true
+   }
+  },
+  {
+   "setting": "marks",
+   "value": false,
+   "search": "",
+   "out": {
+    "marks": false
+   }
+  },
+  {
+   "setting": "marks",
+   "value": false,
+   "search": "keystone.hitstop=1&keystone.slowmo=1&keystone.budget=0&keystone.tailskip=0&keystone.follow=1&keystone.shake=1&keystone.frames=half&keystone.rapid=0&keystone.turnview=0&keystone.arcs=0&keystone.handoff=0&keystone.undo=0&keystone.launch=level&keystone.balls=plain&keystone.marks=0&keystone.fx=classic&keystone.spent=0&keystone.pullanim=0&keystone.frozenlook=0",
+   "out": {
+    "marks": false
+   }
+  },
+  {
+   "setting": "marks",
+   "value": false,
+   "search": "keystone.marks=1",
+   "out": {
+    "marks": true
+   }
+  }
+ ],
+ "keys": {
+  "CAMERA_KEYS": [
+   "keystone.follow",
+   "keystone.shake"
+  ],
+  "RAPID_KEYS": [
+   "keystone.rapid"
+  ],
+  "TURN_VIEW_KEYS": [
+   "keystone.turnview"
+  ],
+  "HANDOFF_KEYS": [
+   "keystone.handoff"
+  ],
+  "LAUNCH_KEYS": [
+   "keystone.launch"
+  ],
+  "MARKS_KEYS": [
+   "keystone.marks"
+  ]
+ },
+ "doorCases": [
+  {
+   "settings": "default",
+   "detected": null,
+   "rows": [
+    "<span class=\"group\"><span class=\"lbl\">Sound</span><span class=\"seg\"><button data-act=\"sound\" class=\"on\">On</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Look</span><span class=\"seg\"><button data-act=\"look\" data-arg=\"hazy\" class=\"on\">Maquette</button><button data-act=\"look\" data-arg=\"real\" class=\"\">Photoreal</button><button data-act=\"look\" data-arg=\"candy\" class=\"\">Candy</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Camera</span><span class=\"seg\"><button data-act=\"camera\" data-arg=\"still\" class=\"on\" title=\"Moves only when you move it\">Still</button><button data-act=\"camera\" data-arg=\"dynamic\" class=\"\" title=\"Follows the collapse and shakes on hits\">Dynamic</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Rapid fire</span><span class=\"seg\"><button data-act=\"rapid\" data-arg=\"on\" class=\"on\" title=\"Fire again before the last shot settles\">On</button><button data-act=\"rapid\" data-arg=\"off\" class=\"\" title=\"Each shot waits for the last to settle\">Off</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Duel turns</span><span class=\"seg\"><button data-act=\"duelview\" data-arg=\"on\" class=\"on\" title=\"The camera turns to the side whose turn it is\">Turn the view</button><button data-act=\"duelview\" data-arg=\"off\" class=\"\" title=\"The camera stays where the last player left it\">Leave it</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Hand-over</span><span class=\"seg\"><button data-act=\"handoff\" data-arg=\"on\" class=\"on\" title=\"Between duel turns a card says whose turn it is: tap it to start\">Card</button><button data-act=\"handoff\" data-arg=\"off\" class=\"\" title=\"The next turn starts at once, with a banner\">Skip</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Launch height</span><span class=\"seg\"><button data-act=\"launch\" data-arg=\"high\" class=\"on\" title=\"Shots leave from over the structure's top, clear of the rubble (keys W and S move it)\">High</button><button data-act=\"launch\" data-arg=\"level\" class=\"\" title=\"Shots leave from the level's own launcher, near the ground, where its par lines were recorded\">Level's</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Stone marks</span><span class=\"seg\"><button data-act=\"marks\" data-arg=\"on\" class=\"on\" title=\"A crosshair carved on the blocks to bring down, a shield on the blocks to keep\">Carved</button><button data-act=\"marks\" data-arg=\"off\" class=\"\" title=\"Plain stones: only their colour says which are which\">Off</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Layout</span><span class=\"seg\"><button data-act=\"layout\" data-arg=\"docked\" class=\"on\" title=\"On a phone the HUD docks to the screen's edges; the result card waits a moment after the round, then docks aside so the collapse stays in view\">Docked</button><button data-act=\"layout\" data-arg=\"classic\" class=\"\" title=\"One HUD panel at the top left, and the result card in the middle as soon as the round ends\">Classic</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Sharpness</span><span class=\"seg\"><button data-act=\"sharp\" data-arg=\"2\" class=\"on\">Full</button><button data-act=\"sharp\" data-arg=\"1\" class=\"\">Fast</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Quality</span><span class=\"seg\"><button data-act=\"quality\" data-arg=\"auto\" class=\"on\" title=\"Picked for this device when the page loads\">Auto</button><button data-act=\"quality\" data-arg=\"high\" class=\"\" title=\"Full resolution, every effect\">High</button><button data-act=\"quality\" data-arg=\"mid\" class=\"\" title=\"One pixel per screen point: a quarter of the pixels on a sharp screen\">Medium</button><button data-act=\"quality\" data-arg=\"low\" class=\"\" title=\"Half resolution, no ambient occlusion, no sparks or dust\">Low</button></span></span>"
+   ]
+  },
+  {
+   "settings": "default",
+   "detected": "mid",
+   "rows": [
+    "<span class=\"group\"><span class=\"lbl\">Sound</span><span class=\"seg\"><button data-act=\"sound\" class=\"on\">On</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Look</span><span class=\"seg\"><button data-act=\"look\" data-arg=\"hazy\" class=\"on\">Maquette</button><button data-act=\"look\" data-arg=\"real\" class=\"\">Photoreal</button><button data-act=\"look\" data-arg=\"candy\" class=\"\">Candy</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Camera</span><span class=\"seg\"><button data-act=\"camera\" data-arg=\"still\" class=\"on\" title=\"Moves only when you move it\">Still</button><button data-act=\"camera\" data-arg=\"dynamic\" class=\"\" title=\"Follows the collapse and shakes on hits\">Dynamic</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Rapid fire</span><span class=\"seg\"><button data-act=\"rapid\" data-arg=\"on\" class=\"on\" title=\"Fire again before the last shot settles\">On</button><button data-act=\"rapid\" data-arg=\"off\" class=\"\" title=\"Each shot waits for the last to settle\">Off</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Duel turns</span><span class=\"seg\"><button data-act=\"duelview\" data-arg=\"on\" class=\"on\" title=\"The camera turns to the side whose turn it is\">Turn the view</button><button data-act=\"duelview\" data-arg=\"off\" class=\"\" title=\"The camera stays where the last player left it\">Leave it</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Hand-over</span><span class=\"seg\"><button data-act=\"handoff\" data-arg=\"on\" class=\"on\" title=\"Between duel turns a card says whose turn it is: tap it to start\">Card</button><button data-act=\"handoff\" data-arg=\"off\" class=\"\" title=\"The next turn starts at once, with a banner\">Skip</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Launch height</span><span class=\"seg\"><button data-act=\"launch\" data-arg=\"high\" class=\"on\" title=\"Shots leave from over the structure's top, clear of the rubble (keys W and S move it)\">High</button><button data-act=\"launch\" data-arg=\"level\" class=\"\" title=\"Shots leave from the level's own launcher, near the ground, where its par lines were recorded\">Level's</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Stone marks</span><span class=\"seg\"><button data-act=\"marks\" data-arg=\"on\" class=\"on\" title=\"A crosshair carved on the blocks to bring down, a shield on the blocks to keep\">Carved</button><button data-act=\"marks\" data-arg=\"off\" class=\"\" title=\"Plain stones: only their colour says which are which\">Off</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Layout</span><span class=\"seg\"><button data-act=\"layout\" data-arg=\"docked\" class=\"on\" title=\"On a phone the HUD docks to the screen's edges; the result card waits a moment after the round, then docks aside so the collapse stays in view\">Docked</button><button data-act=\"layout\" data-arg=\"classic\" class=\"\" title=\"One HUD panel at the top left, and the result card in the middle as soon as the round ends\">Classic</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Sharpness</span><span class=\"seg\"><button data-act=\"sharp\" data-arg=\"2\" class=\"on\">Full</button><button data-act=\"sharp\" data-arg=\"1\" class=\"\">Fast</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Quality</span><span class=\"seg\"><button data-act=\"quality\" data-arg=\"auto\" class=\"on\" title=\"Picked for this device when the page loads\">Auto (Medium)</button><button data-act=\"quality\" data-arg=\"high\" class=\"\" title=\"Full resolution, every effect\">High</button><button data-act=\"quality\" data-arg=\"mid\" class=\"\" title=\"One pixel per screen point: a quarter of the pixels on a sharp screen\">Medium</button><button data-act=\"quality\" data-arg=\"low\" class=\"\" title=\"Half resolution, no ambient occlusion, no sparks or dust\">Low</button></span></span>"
+   ]
+  },
+  {
+   "settings": "flipped",
+   "detected": "high",
+   "rows": [
+    "<span class=\"group\"><span class=\"lbl\">Sound</span><span class=\"seg\"><button data-act=\"sound\" class=\"\">Off</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Look</span><span class=\"seg\"><button data-act=\"look\" data-arg=\"hazy\" class=\"\">Maquette</button><button data-act=\"look\" data-arg=\"real\" class=\"on\">Photoreal</button><button data-act=\"look\" data-arg=\"candy\" class=\"\">Candy</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Camera</span><span class=\"seg\"><button data-act=\"camera\" data-arg=\"still\" class=\"\" title=\"Moves only when you move it\">Still</button><button data-act=\"camera\" data-arg=\"dynamic\" class=\"on\" title=\"Follows the collapse and shakes on hits\">Dynamic</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Rapid fire</span><span class=\"seg\"><button data-act=\"rapid\" data-arg=\"on\" class=\"\" title=\"Fire again before the last shot settles\">On</button><button data-act=\"rapid\" data-arg=\"off\" class=\"on\" title=\"Each shot waits for the last to settle\">Off</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Duel turns</span><span class=\"seg\"><button data-act=\"duelview\" data-arg=\"on\" class=\"\" title=\"The camera turns to the side whose turn it is\">Turn the view</button><button data-act=\"duelview\" data-arg=\"off\" class=\"on\" title=\"The camera stays where the last player left it\">Leave it</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Hand-over</span><span class=\"seg\"><button data-act=\"handoff\" data-arg=\"on\" class=\"\" title=\"Between duel turns a card says whose turn it is: tap it to start\">Card</button><button data-act=\"handoff\" data-arg=\"off\" class=\"on\" title=\"The next turn starts at once, with a banner\">Skip</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Launch height</span><span class=\"seg\"><button data-act=\"launch\" data-arg=\"high\" class=\"\" title=\"Shots leave from over the structure's top, clear of the rubble (keys W and S move it)\">High</button><button data-act=\"launch\" data-arg=\"level\" class=\"on\" title=\"Shots leave from the level's own launcher, near the ground, where its par lines were recorded\">Level's</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Stone marks</span><span class=\"seg\"><button data-act=\"marks\" data-arg=\"on\" class=\"\" title=\"A crosshair carved on the blocks to bring down, a shield on the blocks to keep\">Carved</button><button data-act=\"marks\" data-arg=\"off\" class=\"on\" title=\"Plain stones: only their colour says which are which\">Off</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Layout</span><span class=\"seg\"><button data-act=\"layout\" data-arg=\"docked\" class=\"\" title=\"On a phone the HUD docks to the screen's edges; the result card waits a moment after the round, then docks aside so the collapse stays in view\">Docked</button><button data-act=\"layout\" data-arg=\"classic\" class=\"on\" title=\"One HUD panel at the top left, and the result card in the middle as soon as the round ends\">Classic</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Sharpness</span><span class=\"seg\"><button data-act=\"sharp\" data-arg=\"2\" class=\"\">Full</button><button data-act=\"sharp\" data-arg=\"1\" class=\"on\">Fast</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Quality</span><span class=\"seg\"><button data-act=\"quality\" data-arg=\"auto\" class=\"\" title=\"Picked for this device when the page loads\">Auto (High)</button><button data-act=\"quality\" data-arg=\"high\" class=\"\" title=\"Full resolution, every effect\">High</button><button data-act=\"quality\" data-arg=\"mid\" class=\"\" title=\"One pixel per screen point: a quarter of the pixels on a sharp screen\">Medium</button><button data-act=\"quality\" data-arg=\"low\" class=\"on\" title=\"Half resolution, no ambient occlusion, no sparks or dust\">Low</button></span></span>"
+   ]
+  },
+  {
+   "settings": "candy",
+   "detected": null,
+   "rows": [
+    "<span class=\"group\"><span class=\"lbl\">Sound</span><span class=\"seg\"><button data-act=\"sound\" class=\"on\">On</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Look</span><span class=\"seg\"><button data-act=\"look\" data-arg=\"hazy\" class=\"\">Maquette</button><button data-act=\"look\" data-arg=\"real\" class=\"\">Photoreal</button><button data-act=\"look\" data-arg=\"candy\" class=\"on\">Candy</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Camera</span><span class=\"seg\"><button data-act=\"camera\" data-arg=\"still\" class=\"on\" title=\"Moves only when you move it\">Still</button><button data-act=\"camera\" data-arg=\"dynamic\" class=\"\" title=\"Follows the collapse and shakes on hits\">Dynamic</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Rapid fire</span><span class=\"seg\"><button data-act=\"rapid\" data-arg=\"on\" class=\"on\" title=\"Fire again before the last shot settles\">On</button><button data-act=\"rapid\" data-arg=\"off\" class=\"\" title=\"Each shot waits for the last to settle\">Off</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Duel turns</span><span class=\"seg\"><button data-act=\"duelview\" data-arg=\"on\" class=\"on\" title=\"The camera turns to the side whose turn it is\">Turn the view</button><button data-act=\"duelview\" data-arg=\"off\" class=\"\" title=\"The camera stays where the last player left it\">Leave it</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Hand-over</span><span class=\"seg\"><button data-act=\"handoff\" data-arg=\"on\" class=\"on\" title=\"Between duel turns a card says whose turn it is: tap it to start\">Card</button><button data-act=\"handoff\" data-arg=\"off\" class=\"\" title=\"The next turn starts at once, with a banner\">Skip</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Launch height</span><span class=\"seg\"><button data-act=\"launch\" data-arg=\"high\" class=\"on\" title=\"Shots leave from over the structure's top, clear of the rubble (keys W and S move it)\">High</button><button data-act=\"launch\" data-arg=\"level\" class=\"\" title=\"Shots leave from the level's own launcher, near the ground, where its par lines were recorded\">Level's</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Stone marks</span><span class=\"seg\"><button data-act=\"marks\" data-arg=\"on\" class=\"on\" title=\"A crosshair carved on the blocks to bring down, a shield on the blocks to keep\">Carved</button><button data-act=\"marks\" data-arg=\"off\" class=\"\" title=\"Plain stones: only their colour says which are which\">Off</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Layout</span><span class=\"seg\"><button data-act=\"layout\" data-arg=\"docked\" class=\"on\" title=\"On a phone the HUD docks to the screen's edges; the result card waits a moment after the round, then docks aside so the collapse stays in view\">Docked</button><button data-act=\"layout\" data-arg=\"classic\" class=\"\" title=\"One HUD panel at the top left, and the result card in the middle as soon as the round ends\">Classic</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Sharpness</span><span class=\"seg\"><button data-act=\"sharp\" data-arg=\"2\" class=\"on\">Full</button><button data-act=\"sharp\" data-arg=\"1\" class=\"\">Fast</button></span></span>",
+    "<span class=\"group\"><span class=\"lbl\">Quality</span><span class=\"seg\"><button data-act=\"quality\" data-arg=\"auto\" class=\"\" title=\"Picked for this device when the page loads\">Auto</button><button data-act=\"quality\" data-arg=\"high\" class=\"\" title=\"Full resolution, every effect\">High</button><button data-act=\"quality\" data-arg=\"mid\" class=\"on\" title=\"One pixel per screen point: a quarter of the pixels on a sharp screen\">Medium</button><button data-act=\"quality\" data-arg=\"low\" class=\"\" title=\"Half resolution, no ambient occlusion, no sparks or dust\">Low</button></span></span>"
+   ]
+  }
+ ]
+}

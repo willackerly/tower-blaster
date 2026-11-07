@@ -33,13 +33,15 @@ describe('AVBD reference: relative spawns', () => {
     expect(b.at(-1)).toEqual(a.at(-1));
   });
 
-  it('refuses a parent that is spawned at the same step, is removed before it, or does not exist', async () => {
+  it('refuses a parent that is spawned at the same step, is removed before it, or does not exist, and a pinned child', async () => {
     const s = spawnScene(true), child = s.bodies[3]!;
     const bad = (inputs: SceneDesc['inputs']) => new AvbdReferenceEngine().init({ ...s, inputs });
     await expect(bad([{ step: 2, kind: 'spawn', body: child }, { step: 2, kind: 'spawn', body: child, from: { body: 5 } }])).rejects.toThrow(/does not exist at the start/);
     await expect(bad([{ step: 1, kind: 'remove', id: 0 }, { step: 2, kind: 'spawn', body: child, from: { body: 0 } }])).rejects.toThrow(/removed before/);
     await expect(bad([{ step: 2, kind: 'spawn', body: child, from: { body: 9 } }])).rejects.toThrow(/does not exist/);
     await expect(bad([{ step: 2, kind: 'spawn', body: child, from: { body: 0, axes: 'sideways' as 'body' } }])).rejects.toThrow(/axes/);
+    // A pinned body is bolted to the world (engine-api pinned.ts): it is placed in world coordinates, never a parent's.
+    await expect(bad([{ step: 2, kind: 'spawn', body: { ...child, pinned: true }, from: { body: 0 } }])).rejects.toThrow(/pinned and relative/);
     // The parent's removal at the same step, before or after, is fine: it reads the parent as the step starts.
     await expect(bad([{ step: 2, kind: 'remove', id: 0 }, { step: 2, kind: 'spawn', body: child, from: { body: 0 } }])).resolves.toBeUndefined();
     // Pushed late, events due at past steps share the next step's start: a parent spawned by one of them is not there yet.

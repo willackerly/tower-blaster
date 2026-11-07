@@ -3,6 +3,7 @@
 // The game and the benchmark harness both drive engines only through this.
 import type { Blast } from './blast.ts';
 import type { ForceEvent } from './force.ts';
+import type { FieldEvent } from './field.ts';
 import type { ObserveOptions, Observer } from './observe.ts';
 import type { SpawnFrom } from './spawn.ts';
 
@@ -30,6 +31,11 @@ export interface BodyDesc {
   restitution: number;
   /** Free-form grouping used by metrics: tower index, or a TAG_* role. */
   tag: number;
+  /**
+   * Bolted to the world (pinned.ts, roadmap C8): it never moves, and every body touching it solves against it as
+   * an infinite mass. Its velocities are ignored. Absent or false: a free body.
+   */
+  pinned?: boolean;
 }
 
 export const TAG_BALL = -1;
@@ -37,10 +43,11 @@ export const TAG_DEBRIS = -2;
 
 /**
  * Something that happens at a given step: a body is added (a ball is fired), a blast pushes the bodies
- * around a point (blast.ts), a body is taken out of the world (remove.ts), or a body takes a force for a
- * number of steps (force.ts).
+ * around a point (blast.ts), a body is taken out of the world (remove.ts), a body takes a force for a
+ * number of steps (force.ts), or the world's gravity changes or every moving body is kicked (field.ts).
  */
-export type InputEvent = SpawnEvent | BlastEvent | RemoveEvent | ForceEvent;
+export type InputEvent = SpawnEvent | BlastEvent | RemoveEvent | ForceEvent | FieldEvent;
+export type { FieldEvent } from './field.ts';
 /**
  * A body is added. With `from` it is placed relative to a parent body's state when it is due (spawn.ts): its
  * pos, rot, linVel and angVel are then in the parent's frame, not the world's. Engines that do not place
@@ -60,6 +67,7 @@ export interface SceneDesc {
   id: string;
   params: Record<string, number | string | boolean>;
   seed: number;
+  /** Gravity before the first field event that sets it (field.ts). With field events, give it on their grid (quantiseVec3) so restoring it is exact. */
   gravity: Vec3;
   /** Fixed physics step in seconds. */
   dt: number;
@@ -72,7 +80,7 @@ export interface SceneDesc {
   /** How the restitution of two touching surfaces combines (ground included). Default DEFAULT_RESTITUTION_COMBINE. */
   restitutionCombine?: CombineRule;
   bodies: BodyDesc[];
-  /** Sorted by step. Spawned bodies get indices after `bodies`, in event order. */
+  /** Sorted by step. Spawned bodies get indices after `bodies`, in event order. Field events (field.ts) change gravity from their step on. */
   inputs: InputEvent[];
 }
 
@@ -315,12 +323,14 @@ export function inertiaOf(b: BodyDesc): Vec3 {
 }
 
 export * from './blast.ts';
+export * from './field.ts';
 export * from './force.ts';
 export * from './host.ts';
 export * from './grid.ts';
 export * from './island-observer.ts';
 export * from './islands.ts';
 export * from './observe.ts';
+export * from './pinned.ts';
 export * from './remove.ts';
 export * from './snapshot-observer.ts';
 export * from './spawn.ts';

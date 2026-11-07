@@ -2,7 +2,7 @@
 // contract. Used as a reference for quality metrics and as the number every
 // GPU variant has to beat by a wide margin.
 import RAPIER from '@dimforge/rapier3d-simd-compat';
-import { blastArea, blastCentre, blastVelocity, type BodyDesc, type BodyMotion, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineCheckpoint, type EngineInfo, ForceTable, forceKicks, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, queueInputs, type Snapshot, relativeBody, TIER_FREE } from '@tb/engine-api';
+import { blastArea, blastCentre, blastVelocity, type BodyDesc, type BodyMotion, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineCheckpoint, type EngineInfo, type FieldEvent, ForceTable, forceKicks, gravityChanges, type InputEvent, kicks, massOf, type PhysicsEngine, type SceneDesc, queueInputs, type Snapshot, relativeBody, TIER_FREE } from '@tb/engine-api';
 import { createBody, createGround, initRapier, RULES } from './bodies.ts';
 
 export interface RapierOptions {
@@ -65,7 +65,9 @@ export class RapierEngine implements PhysicsEngine {
   }
 
   private add(b: BodyDesc): void {
-    const { body, collider } = createBody(this.world!, b, this.sleep, RAPIER.RigidBodyDesc.dynamic());
+    // A pinned body (engine-api pinned.ts) is a Rapier fixed body, at rest whatever its description says.
+    const pinned = b.pinned === true;
+    const { body, collider } = createBody(this.world!, pinned ? { ...b, linVel: [0, 0, 0], angVel: [0, 0, 0] } : b, this.sleep, pinned ? RAPIER.RigidBodyDesc.fixed() : RAPIER.RigidBodyDesc.dynamic());
     // Every collider carries the scene's rules (Rapier uses the higher-priority rule of a pair).
     collider.setFrictionCombineRule(this.combine);
     collider.setRestitutionCombineRule(this.restitutionCombine);
@@ -105,13 +107,15 @@ export class RapierEngine implements PhysicsEngine {
         continue;
       }
       if (ev.kind === 'force') { this.forces.apply(ev, this.stepIndex); continue; }
+      if (ev.kind === 'field') { this.field(ev); continue; }
       // A blast (engine-api blast.ts): mass and volume from the description, as the AVBD engines.
       const b = checkBlast(ev.blast);
       const at = (rb: RAPIER.RigidBody): [number, number, number] => { const p = rb.translation(); return [p.x, p.y, p.z]; };
       const centre = blastCentre(b, b.body >= 0 ? at(this.bodies[b.body]!) : null);
       this.bodies.forEach((rb, id) => {
-        if (this.gone.has(id)) return;
-        const d = this.descs[id]!, u = rb.linvel();
+        const d = this.descs[id]!;
+        if (this.gone.has(id) || d.pinned) return;
+        const u = rb.linvel();
         const v = blastVelocity(b, centre, id, at(rb), [u.x, u.y, u.z], massOf(d), blastArea(d.shape));
         if (v) rb.setLinvel({ x: v[0], y: v[1], z: v[2] }, true);
       });
@@ -123,11 +127,29 @@ export class RapierEngine implements PhysicsEngine {
       return { pos: [p.x, p.y, p.z], rot: [q.x, q.y, q.z, q.w], linVel: [v.x, v.y, v.z], angVel: [a.x, a.y, a.z] };
     };
     for (const { id, dv } of forceKicks(this.forces.act(this.stepIndex), this.stepIndex, this.dt, motion, (id) => massOf(this.descs[id]!))) {
+      if (this.descs[id]!.pinned) continue; // a pinned (fixed) body feels no force (engine-api pinned.ts)
       const rb = this.bodies[id]!, u = rb.linvel();
       rb.setLinvel({ x: u.x + dv[0], y: u.y + dv[1], z: u.z + dv[2] }, true);
     }
     w.step();
     this.stepIndex++;
+  }
+
+  /**
+   * A field event (engine-api field.ts): the world's gravity from now on, and a kick to every moving body. A change of
+   * gravity or a kick wakes every body but the pinned and removed ones (Rapier does not wake sleepers when gravity
+   * changes).
+   */
+  private field(ev: FieldEvent): void {
+    const w = this.world!, g = w.gravity;
+    const changed = gravityChanges([g.x, g.y, g.z], ev.gravity), k = ev.kick;
+    if (ev.gravity) w.gravity = { x: ev.gravity[0], y: ev.gravity[1], z: ev.gravity[2] };
+    if (!changed && !kicks(ev)) return;
+    this.bodies.forEach((rb, id) => {
+      if (this.gone.has(id) || this.descs[id]!.pinned) return;
+      if (k && kicks(ev)) { const u = rb.linvel(); rb.setLinvel({ x: u.x + k[0], y: u.y + k[1], z: u.z + k[2] }, true); }
+      rb.wakeUp();
+    });
   }
 
   snapshot(): Snapshot {
@@ -138,7 +160,8 @@ export class RapierEngine implements PhysicsEngine {
       s.rot.set([q.x, q.y, q.z, q.w], 4 * i);
       s.linVel.set([v.x, v.y, v.z], 3 * i);
       s.angVel.set([a.x, a.y, a.z], 3 * i);
-      s.awake[i] = rb.isSleeping() || this.gone.has(i) ? 0 : 1;
+      // A pinned (fixed) body is not solved: awake 0, as on the AVBD engines (engine-api pinned.ts).
+      s.awake[i] = rb.isSleeping() || this.gone.has(i) || this.descs[i]!.pinned ? 0 : 1;
     });
     if (this.gone.size) s.tier = Uint8Array.from({ length: this.bodies.length }, (_, i) => (this.gone.has(i) ? TIER_FREE : 0));
     return s;
@@ -155,6 +178,8 @@ export class RapierEngine implements PhysicsEngine {
     if (!w) throw new Error('init() first');
     const bytes = w.takeSnapshot(), handles = this.bodies.map((b) => b.handle), descs = [...this.descs];
     const gone = [...this.gone], pending = [...this.pending], forces = this.forces.clone(), step = this.stepIndex, generation = this.generation;
+    // The gravity in force (field events change it); restored explicitly, whatever the snapshot keeps of it.
+    const gravity = { ...w.gravity };
     let live = true;
     return {
       step, bytes: bytes.byteLength + 64 * (handles.length + pending.length),
@@ -164,6 +189,7 @@ export class RapierEngine implements PhysicsEngine {
         const world = RAPIER.World.restoreSnapshot(bytes);
         this.world.free();
         this.world = world;
+        world.gravity = { ...gravity };
         this.bodies = handles.map((h) => world.getRigidBody(h));
         this.descs = [...descs];
         this.gone = new Set(gone);

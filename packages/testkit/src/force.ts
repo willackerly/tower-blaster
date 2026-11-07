@@ -67,7 +67,7 @@ export function forceErrors(base: Snapshot[], run: Snapshot[], substeps: number)
       if (ev.kind === 'spawn') { descs.push(ev.body); states.push({ pos: [...ev.body.pos], rot: [...ev.body.rot], linVel: [...ev.body.linVel], angVel: [...ev.body.angVel] }); }
       else if (ev.kind === 'remove') { gone.add(ev.id); table.remove(ev.id); }
       else if (ev.kind === 'force') table.apply(ev, k);
-      else {
+      else if (ev.kind === 'blast') {
         const b = checkBlast(ev.blast), c = blastCentre(b, b.body >= 0 ? states[b.body]!.pos : null);
         states.forEach((s, i) => { if (gone.has(i)) return; const v = blastVelocity(b, c, i, s.pos, s.linVel, massOf(descs[i]!), blastArea(descs[i]!.shape)); if (v) s.linVel = v; });
       }

@@ -3,7 +3,7 @@
 // one command buffer per step. Parameters are the reference solver's (physics-ref AvbdParams), so
 // the two engines can be run side by side on the same settings. With AvbdParams.restitution on,
 // the solve ends with the restitution pass (restitution.ts).
-import { type BodyDesc, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineCheckpoint, type EngineHealth, type EngineInfo, ForceTable, inertiaOf, type InputEvent, massOf, type PhysicsEngine, type SceneDesc, type Snapshot, queueInputs, spawnedBodies, TIER_FREE, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineCheckpoint, type EngineHealth, type EngineInfo, ForceTable, gravityChanges, inertiaOf, type InputEvent, isPinned, kicks, massOf, type PhysicsEngine, type SceneDesc, scenePins, type Snapshot, queueInputs, spawnedBodies, TIER_FREE, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { assertStorageFits, createDevice, isSoftwareAdapter, Readback } from '@tb/gpu';
 import { type AvbdParams, avbdVariant, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD, RESTITUTION_DEFAULTS } from '@tb/physics-ref';
@@ -19,6 +19,7 @@ import { Narrowphase } from './narrowphase.ts';
 import { ISLAND_BODY_BYTES, restitutionWord } from './restitution.ts';
 import { decodeBodies } from './snapshot.ts';
 import { checkSleepRule, DEFAULT_SLEEP, SleepPass, type SleepRule } from './sleep.ts';
+import { AWAKE, PINNED, PinSeed } from './pins.ts';
 import { AvbdSolver, DEFAULT_DISPATCH, defaultTailThreads, HESSIAN_FORMS, type HessianForm, type RecordMode, type SolverDispatch } from './solver.ts';
 
 export interface GpuEngineOptions {
@@ -109,6 +110,13 @@ export interface GpuEngineOptions {
    * test's kick) is not an input: a skipped step does not see it.
    */
   sleepSkip?: boolean;
+  /**
+   * Room for pinned bodies pushed after init (engine-api pinned.ts; pins.ts). A pinned body is an anchor, and the
+   * anchor path is compiled in at init when the engine sleeps or the scene holds or spawns a pinned body; set this
+   * to push one into a scene that does neither (push() throws otherwise). It changes no float of a scene without
+   * pins, only adds the seed pass's dispatch.
+   */
+  pins?: boolean;
 }
 
 /** The sleep rule these options set (DEFAULT_SLEEP where they leave a threshold out). */
@@ -257,6 +265,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
   private readonly onGpuError = (ev: Event) => { this.failure ??= `GPU error: ${(ev as GPUUncapturedErrorEvent).error.message}`; };
   private scene: SceneDesc | null = null;
   private pending: InputEvent[] = [];
+  /** The gravity in force (engine-api field.ts): SceneDesc.gravity until a field event sets another. */
+  private gravity: Vec3 = [0, 0, 0];
   /** Removed bodies (engine-api remove.ts): their slots are tombstones (tier free), which every stage skips. */
   private gone = new Set<number>();
   /** The forces force events have set (engine-api force.ts), applied by the force pass (force.ts). */
@@ -271,7 +281,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
   readonly records: RecordMode;
   /** The colouring's lattice preference (gpuColorMode(): AvbdParams.colorMode, unset 3). */
   readonly colorMode: number;
-  private parts: { bodies: GPUBuffer; shapes: GPUBuffer; props: GPUBuffer; spheres: GPUBuffer; sweep: GPUBuffer; prev: GPUBuffer; bp: Broadphase; np: Narrowphase; col: Coloring; solver: AvbdSolver; blast: BlastPass; spawn: RelativeSpawnPass; force: ForcePass; tomb: GPUBuffer; readback: Readback; sleep: SleepPass | null; pool: CheckpointPool } | null = null;
+  private parts: { bodies: GPUBuffer; shapes: GPUBuffer; props: GPUBuffer; spheres: GPUBuffer; sweep: GPUBuffer; prev: GPUBuffer; bp: Broadphase; np: Narrowphase; col: Coloring; solver: AvbdSolver; blast: BlastPass; spawn: RelativeSpawnPass; force: ForcePass; tomb: GPUBuffer; readback: Readback; sleep: SleepPass | null; pins: PinSeed | null; anchors: boolean; pool: CheckpointPool } | null = null;
   /** Counts dispose() calls (init() makes one), so an init() that awaited across another knows it was overtaken. */
   private generation = 0;
   /** Counts restore() calls: an awake count read before one belongs to a future that is gone. */
@@ -301,9 +311,10 @@ export class GpuAvbdEngine implements PhysicsEngine {
     check('settleSteps', (v) => Number.isInteger(v) && v >= 0, 'a non-negative integer');
     check('settleIterations', (v) => Number.isInteger(v) && v >= 1, 'a positive integer');
     if ((opts.settleSteps === undefined) !== (opts.settleIterations === undefined)) throw new Error('GpuAvbdEngine: GpuEngineOptions.settleSteps and settleIterations go together');
-    for (const k of ['indirectColors', 'sizedColors', 'awakeLists', 'boxBroadphase', 'sleep', 'sleepSkip'] as const) if (opts[k] !== undefined && typeof opts[k] !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be a boolean, got ${opts[k]}`);
+    for (const k of ['indirectColors', 'sizedColors', 'awakeLists', 'boxBroadphase', 'sleep', 'sleepSkip', 'pins'] as const) if (opts[k] !== undefined && typeof opts[k] !== 'boolean') throw new Error(`GpuAvbdEngine: GpuEngineOptions.${k} must be a boolean, got ${opts[k]}`);
     try { checkSleepRule(sleepRuleOf(opts)); } catch (e) { throw new Error(`GpuAvbdEngine: GpuEngineOptions.${(e as Error).message}`); }
     if (opts.sleep && this.params.restitution) throw new Error('GpuAvbdEngine: GpuEngineOptions.sleep is not implemented with AvbdParams.restitution yet');
+    if (opts.pins && this.params.restitution) throw new Error('GpuAvbdEngine: pinned bodies (GpuEngineOptions.pins) are not implemented with AvbdParams.restitution yet');
     if (opts.hessian !== undefined && !HESSIAN_FORMS.includes(opts.hessian)) throw new Error(`GpuAvbdEngine: GpuEngineOptions.hessian must be one of ${HESSIAN_FORMS.join(', ')}, got ${opts.hessian}`);
     // Manifold records (AvbdParams.records, checked above): the solver's contact layout, in the register form only;
     // unset, records 1, or points where only they are implemented (gpuRecordsLayout).
@@ -325,7 +336,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     this.colorMode = gpuColorMode(this.params);
     if (this.params.colorMode !== undefined) variant.colorMode = this.params.colorMode;
     // Options that size the buffers or shape the dispatch change the work per step (e.g. the broadphase's key bits), so they are part of the variant.
-    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase', 'sleep', 'sleepSpeed', 'sleepSteps', 'sleepDrift', 'wakeSpeed', 'wakeDepth', 'settleSteps', 'settleIterations', 'sleepSkip', 'sizedColors', 'awakeLists'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
+    for (const k of ['capacity', 'spare', 'pairsPerBody', 'maxRadius', 'colorTail', 'indirectColors', 'tailThreads', 'colorRounds', 'hessian', 'boxBroadphase', 'sleep', 'sleepSpeed', 'sleepSteps', 'sleepDrift', 'wakeSpeed', 'wakeDepth', 'settleSteps', 'settleIterations', 'sleepSkip', 'sizedColors', 'awakeLists', 'pins'] as const) if (opts[k] !== undefined) variant[k] = opts[k];
     this.info = { name: 'avbd-gpu', variant, backend: 'webgpu', integrator: { substeps: 1 } };
   }
 
@@ -334,6 +345,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
     const groundE = scene.ground?.restitution;
     if (groundE !== undefined && !(groundE >= 0 && groundE <= 1)) throw new Error(`GpuAvbdEngine: SceneDesc.ground.restitution must be in [0, 1], got ${groundE}`);
     checkInputQueue(scene.bodies.length, [...scene.inputs].sort((a, b) => a.step - b.step));
+    const pinned = scenePins(scene);
+    if (pinned && this.params.restitution) throw new Error('GpuAvbdEngine: pinned bodies are not implemented with AvbdParams.restitution yet (docs/design/gravity-and-pins.md)');
     this.failure = null;
     this.dispose();
     const generation = this.generation;
@@ -401,6 +414,8 @@ export class GpuAvbdEngine implements PhysicsEngine {
       const np = new Narrowphase(device, bodies, shapes, bp.pairs, bp.total, this.capacity, maxPairs, sweep, prev);
       // Sleep only where both the engine and the scene allow it.
       const sleeps = !!this.opts.sleep && scene.sleep;
+      // Anchors (the solver's sleepOn): sleepers, or pinned bodies (pins.ts), which without sleep get their own seed pass.
+      const anchors = sleeps || pinned || !!this.opts.pins;
       const col = new Coloring(device, np.manifolds, bp.total, this.capacity, maxPairs, this.opts.colorRounds, { colorMode: this.colorMode, colorPriority: p.colorPriority ?? 0, bodies, shapes });
       const solver = new AvbdSolver(device, this.capacity, maxPairs, {
         bodies, props, spheres, sweep, prev, manifolds: np.manifolds, groundManifolds: np.groundManifolds,
@@ -410,16 +425,18 @@ export class GpuAvbdEngine implements PhysicsEngine {
         threshold: p.restitutionThreshold ?? RESTITUTION_DEFAULTS.restitutionThreshold, rounds: p.restitutionRounds ?? RESTITUTION_DEFAULTS.restitutionRounds,
         groundRestitution: scene.ground?.restitution ?? 0, combine: scene.restitutionCombine ?? DEFAULT_RESTITUTION_COMBINE,
         anchors: p.restitutionAnchors ?? RESTITUTION_DEFAULTS.restitutionAnchors, anchorSpeed: p.restitutionAnchorSpeed ?? RESTITUTION_DEFAULTS.restitutionAnchorSpeed,
+        anchorCut: p.restitutionAnchorCut ?? RESTITUTION_DEFAULTS.restitutionAnchorCut,
         energyCap: p.restitutionEnergyCap ?? RESTITUTION_DEFAULTS.restitutionEnergyCap,
-      } : null, sleeps);
+      } : null, anchors);
       const sleep = sleeps ? new SleepPass(device, sleepRuleOf(this.opts), this.capacity, bodies, props, np.manifolds, bp.total) : null;
       // A removed body's linVel, flags and angVel (Body bytes 32 to 60), copied over its slot in the step's command buffer (remove()).
       const tomb = device.createBuffer({ size: TOMB_BYTES, usage: GPUBufferUsage.COPY_SRC, mappedAtCreation: true, label: 'tombstone' });
       new Uint32Array(tomb.getMappedRange()).set([0, 0, 0, TIER_FREE << 8, 0, 0, 0]);
       tomb.unmap();
+      const pins = anchors && !sleeps ? new PinSeed(device, this.capacity, bodies) : null;
       parts = {
         bodies, shapes, props, spheres, sweep, prev, bp, np, col, solver, blast: new BlastPass(device, bodies, props, shapes, solver.solver),
-        spawn: new RelativeSpawnPass(device, bodies, solver.solver, sleep?.state ?? null), force: new ForcePass(device, bodies, props, solver.solver, sleep?.state ?? null), tomb, readback: new Readback(device), sleep, pool: new CheckpointPool(device),
+        spawn: new RelativeSpawnPass(device, bodies, solver.solver, sleep?.state ?? null), force: new ForcePass(device, bodies, props, solver.solver, sleep?.state ?? null), tomb, readback: new Readback(device), sleep, pins, anchors, pool: new CheckpointPool(device),
       };
     } catch (e) {
       thrown = e;
@@ -446,6 +463,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     this.forces = new ForceTable();
     for (const b of scene.bodies) this.add(b);
     this.pending = [...scene.inputs].sort((a, b) => a.step - b.step);
+    this.gravity = [...scene.gravity];
     this.stepIndex = 0;
     this.quietStep = -1;
     this.eventStep = 0;
@@ -463,11 +481,13 @@ export class GpuAvbdEngine implements PhysicsEngine {
       device!.queue.writeBuffer(target, i * layout.size, v.buffer);
     };
     const m = massOf(b);
-    one(Body, { pos: b.pos, invMass: 1 / m, rot: b.rot, linVel: b.linVel, flags: 1, angVel: b.angVel, shape: i }, parts!.bodies);
+    // A pinned body (pins.ts): asleep from the start and never woken, at rest whatever its description says.
+    const pinned = isPinned(b), linVel: Vec3 = pinned ? [0, 0, 0] : b.linVel;
+    one(Body, { pos: b.pos, invMass: 1 / m, rot: b.rot, linVel, flags: pinned ? PINNED : AWAKE, angVel: pinned ? [0, 0, 0] : b.angVel, shape: i }, parts!.bodies);
     one(Shape, b.shape.kind === 'box' ? { half: b.shape.half, kind: 0 } : { half: [b.shape.radius, 0, 0], kind: 1 }, parts!.shapes);
     one(BodyProps, { inertia: inertiaOf(b), mass: m, friction: b.friction, radius: boundingRadius(b.shape), sphere: b.shape.kind === 'sphere' ? 1 : 0, restitution: restitutionWord(b.restitution) }, parts!.props);
     // prevVel = initial velocity, as the reference (no adaptive warm-start kick on the first step).
-    one(SolverBody, { prevVel: b.linVel }, parts!.solver.solver);
+    one(SolverBody, { prevVel: linVel }, parts!.solver.solver);
     parts!.sleep?.add(i, b.pos, b.rot);
   }
 
@@ -491,6 +511,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     if (room > this.capacity) throw new Error(`GpuAvbdEngine: push() needs room for ${room} bodies, capacity is ${this.capacity} (GpuEngineOptions.capacity or spare)`);
     for (const ev of events) {
       if (ev.kind !== 'spawn') continue;
+      if (isPinned(ev.body) && !this.parts.anchors) throw new Error('GpuAvbdEngine: push() of a pinned body, but the engine was built without anchors: set GpuEngineOptions.pins (or sleep), or put a pinned body in the scene');
       const r = boundingRadius(ev.body.shape);
       if (r > this.rmax) throw new Error(`GpuAvbdEngine: pushed body radius ${r} exceeds ${this.rmax}, the largest the broadphase cells were sized for (GpuEngineOptions.maxRadius)`);
     }
@@ -580,7 +601,16 @@ export class GpuAvbdEngine implements PhysicsEngine {
         // cap around it, which changes no velocity but sets the awake bit of every body in reach. The reach is two of
         // the largest bounding radii plus both bodies' margins, so it covers every body that can have touched it.
         if (parts.sleep) blasts.push({ blast: checkBlast({ centre: { body: ev.id }, radius: 2 * this.rmax + 2 * this.params.margin, impulse: 0, maxSpeed: Infinity }), count: this.n });
-      } else if (ev.kind === 'force') this.forces.apply(ev, this.stepIndex);
+      }
+      else if (ev.kind === 'force') this.forces.apply(ev, this.stepIndex);
+      else if (ev.kind === 'field') {
+        // A field event (engine-api field.ts): the gravity from this step on; a kick for every moving body (which wakes
+        // it); with sleep, a change of gravity wakes every moving body (blast.ts's wake record), and so their groups.
+        const changed = gravityChanges(this.gravity, ev.gravity);
+        if (ev.gravity) this.gravity = [...ev.gravity];
+        if (kicks(ev)) blasts.push({ kick: ev.kick!, count: this.n });
+        else if (changed && parts.sleep) blasts.push({ wake: true, count: this.n });
+      }
       else blasts.push({ blast: checkBlast(ev.blast), count: this.n });
     }
     // Forces act after every other event of the step (force.ts); a forced step is an event for the sleep skip.
@@ -588,7 +618,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     if (forced.length) this.eventStep = this.stepIndex + 1;
     const n = this.n, settling = this.stepIndex < (this.opts.settleSteps ?? 0);
     const p = settling ? { ...this.params, iterations: this.opts.settleIterations! } : this.params;
-    parts.solver.writeParams(n, scene.dt, scene.gravity, scene.ground, p, scene.frictionCombine);
+    parts.solver.writeParams(n, scene.dt, this.gravity, scene.ground, p, scene.frictionCombine);
     parts.sleep?.writeParams(n);
     const enc = device.createCommandEncoder();
     mark?.(enc, 'start');
@@ -612,8 +642,9 @@ export class GpuAvbdEngine implements PhysicsEngine {
     parts.np.encode(pass, n, { margin: p.margin, ground: scene.ground ? { y: scene.ground.y } : null });
     pass.end();
     parts.sleep?.encodeWake(enc, n);
+    parts.pins?.encode(enc, n);
     mark?.(enc, 'narrowphase');
-    parts.col.encode(enc, n, scene.ground?.y ?? 0, parts.sleep?.seed);
+    parts.col.encode(enc, n, scene.ground?.y ?? 0, parts.sleep?.seed ?? parts.pins?.seed);
     mark?.(enc, 'coloring');
     parts.solver.solve(enc, n, p.iterations, solveTimestamps, mark && ((at) => mark(enc, at)));
     parts.sleep?.encodeSleep(enc, n);
@@ -664,7 +695,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
     if (this.failure) throw new Error(`GpuAvbdEngine: ${this.failure}`);
     const regions = this.carried(), saved = saveRegions(device, parts.pool, regions);
     const cpu = {
-      n: this.n, stepIndex: this.stepIndex, pending: [...this.pending], gone: [...this.gone], forces: this.forces.clone(),
+      n: this.n, stepIndex: this.stepIndex, pending: [...this.pending], gone: [...this.gone], forces: this.forces.clone(), gravity: [...this.gravity] as Vec3,
       quietStep: this.quietStep, eventStep: this.eventStep, skipped: this.skipped, solver: parts.solver.cpuState,
     };
     const generation = this.generation;
@@ -682,6 +713,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
         this.pending = [...cpu.pending];
         this.gone = new Set(cpu.gone);
         this.forces = cpu.forces.clone();
+        this.gravity = [...cpu.gravity];
         this.quietStep = cpu.quietStep;
         this.eventStep = cpu.eventStep;
         this.skipped = cpu.skipped;
@@ -746,7 +778,7 @@ export class GpuAvbdEngine implements PhysicsEngine {
   }
 
   private static free(p: NonNullable<GpuAvbdEngine['parts']>): void {
-    p.solver.destroy(); p.blast.destroy(); p.spawn.destroy(); p.force.destroy(); p.tomb.destroy(); p.sleep?.destroy(); p.col.destroy(); p.np.destroy(); p.bp.destroy(); p.readback.destroy(); p.pool.destroy();
+    p.solver.destroy(); p.blast.destroy(); p.spawn.destroy(); p.force.destroy(); p.tomb.destroy(); p.sleep?.destroy(); p.pins?.destroy(); p.col.destroy(); p.np.destroy(); p.bp.destroy(); p.readback.destroy(); p.pool.destroy();
     for (const b of [p.bodies, p.shapes, p.props, p.spheres, p.sweep, p.prev]) b.destroy();
   }
 

@@ -1,131 +1,108 @@
-// The player's settings (roadmap G7: sound and quality), kept in the browser
-// beside progress. Each one is also a URL key, and the URL wins for that visit,
-// so every link and test opens as it says whatever the browser has stored:
-//   sound: on | off            (the M key toggles it in play)
-//   look:  hazy | real | candy (the URL's ?look=)
-//   sharp: 2 | 1               (the most device pixels per CSS pixel the canvas draws; 1 halves the work on a 2x screen)
-//   camera: still | dynamic    (dynamic: the camera follows the collapse and shakes on hits; the URL's say is
-//                               keystone.follow and keystone.shake, one each, see cameraFeel)
-//   rapid: true | false        (rapid fire: shoot before the last shot settles; on by default; the URL's say
-//                               is keystone.rapid, see rapidFeel)
-//   duelView: true | false     (a duel's turn view: the camera swings to the next player's side; on by default;
-//                               the URL's say is keystone.turnview, see turnViewFeel)
-//   launch: high | level       (where shots leave from, aim.ts LaunchMode; high by default; the URL's say is
-//                               keystone.launch, see launchFeel)
-//   marks: true | false        (stone marks: a crosshair carved on blocks to bring down, a shield on blocks to
-//                               keep, scene.ts markOf; on by default; the URL's say is keystone.marks, see marksFeel)
-//   quality: auto | high | mid | low (the quality tier, quality.ts: auto takes the probe's on load; the URL's
-//                               ?quality= for a visit; docs/game/quality-tiers.md)
-import { LOOKS } from '@tb/render';
-import { LAUNCH_MODES, type LaunchMode } from './aim.ts';
-import type { PaceFeel } from './pacing.ts';
-import { GAME_LOOK } from './params.ts';
+// The player's settings (roadmap G7: sound and quality), kept in the browser beside progress. Each is an
+// option with a setting part in ./options (O4, docs/design/options.md): its module says its values, its
+// default, its door row, the URL keys that say it for a visit and the feel fields it sets. The URL wins
+// for that visit, so every link and test opens as it says whatever the browser has stored. In the door's
+// order: sound, look, camera (keystone.follow and keystone.shake), rapid (keystone.rapid), duelView
+// (keystone.turnview), handoff (keystone.handoff), launch (keystone.launch), marks (keystone.marks), layout
+// (keystone.hud, keystone.card, keystone.carddelay, layout.ts layoutOf), sharp, quality (?quality=).
+import { feelOf, type PaceFeel, SETTING_OPTIONS, type Settings } from './options/registry.ts';
+import type { DoorContext, SettingOption } from './options/option.ts';
 import type { KeyValue } from './progress.ts';
-import { QUALITY_SETTINGS, qualityParam, type QualitySetting } from './quality.ts';
+import type { LaunchMode } from './aim.ts';
+import type { CameraSetting } from './options/camera.ts';
+
+export type { Settings } from './options/registry.ts';
+export type { CameraSetting } from './options/camera.ts';
+export { LOOK_CHOICES } from './options/look.ts';
+export { QUALITY_CHOICES } from './options/quality.ts';
 
 export const SETTINGS_KEY = 'tb.settings.v1';
 
-/** still: the camera moves only when the player moves it (the default since the 2026-11-02 playtest); dynamic: it follows and shakes too. */
-export type CameraSetting = 'still' | 'dynamic';
+/** Every setting's default: rapid fire on (Will, 2026-11-05), a duel's turn view and hand-over card, shots from high, stone marks (Will, 2026-11-06), the docked layout (PT3 and PT4), quality from the probe (P1). */
+export const DEFAULT_SETTINGS: Settings = Object.fromEntries(SETTING_OPTIONS.map((o) => [o.field, o.default])) as Settings;
 
-export interface Settings { sound: boolean; look: string; sharp: 1 | 2; camera: CameraSetting; rapid: boolean; duelView: boolean; launch: LaunchMode; marks: boolean; quality: QualitySetting }
-
-/** Rapid fire on (Will, 2026-11-05: in Advanced settings, defaulting to on); a duel's turn view on (Will, 2026-11-06); shots from high (Will, 2026-11-06); stone marks on (Will, 2026-11-06); quality from the probe (P1, 2026-11-06). */
-export const DEFAULT_SETTINGS: Settings = { sound: true, look: GAME_LOOK, sharp: 2, camera: 'still', rapid: true, duelView: true, launch: 'high', marks: true, quality: 'auto' };
-
-/** The quality choices the front door offers, in its order, with their names there. */
-export const QUALITY_CHOICES: ReadonlyArray<{ quality: QualitySetting; label: string }> = [
-  { quality: 'auto', label: 'Auto' },
-  { quality: 'high', label: 'High' },
-  { quality: 'mid', label: 'Medium' },
-  { quality: 'low', label: 'Low' },
-];
-
-/** The looks the front door offers, in its order, with their names there. */
-export const LOOK_CHOICES: ReadonlyArray<{ look: string; label: string }> = [
-  { look: 'hazy', label: 'Maquette' },
-  { look: 'real', label: 'Photoreal' },
-  { look: 'candy', label: 'Candy' },
-];
+/** A setting part by its Settings field. */
+export function settingOf(field: string): SettingOption {
+  const s = SETTING_OPTIONS.find((o) => o.field === field);
+  if (!s) throw new Error(`no setting ${field}`);
+  return s;
+}
 
 /** Stored settings, field by field: a field that is absent or not valid takes its default. */
 export function parseSettings(text: string | null): Settings {
   let o: Record<string, unknown> = {};
   try { const x = text ? JSON.parse(text) : {}; if (x && typeof x === 'object' && !Array.isArray(x)) o = x; } catch { /* defaults */ }
-  return {
-    sound: typeof o.sound === 'boolean' ? o.sound : DEFAULT_SETTINGS.sound,
-    look: typeof o.look === 'string' && LOOKS[o.look] ? o.look : DEFAULT_SETTINGS.look,
-    sharp: o.sharp === 1 || o.sharp === 2 ? o.sharp : DEFAULT_SETTINGS.sharp,
-    camera: o.camera === 'still' || o.camera === 'dynamic' ? o.camera : DEFAULT_SETTINGS.camera,
-    rapid: typeof o.rapid === 'boolean' ? o.rapid : DEFAULT_SETTINGS.rapid,
-    duelView: typeof o.duelView === 'boolean' ? o.duelView : DEFAULT_SETTINGS.duelView,
-    launch: (LAUNCH_MODES as readonly unknown[]).includes(o.launch) ? (o.launch as LaunchMode) : DEFAULT_SETTINGS.launch,
-    marks: typeof o.marks === 'boolean' ? o.marks : DEFAULT_SETTINGS.marks,
-    quality: (QUALITY_SETTINGS as readonly unknown[]).includes(o.quality) ? (o.quality as QualitySetting) : DEFAULT_SETTINGS.quality,
-  };
+  return Object.fromEntries(SETTING_OPTIONS.map((s) => {
+    const v = s.stored(o[s.field]);
+    return [s.field, v === undefined ? s.default : v];
+  })) as Settings;
 }
 
-/** The URL keys that say what the camera setting says (cameraFeel), dropped from the URL when the setting changes. */
-export const CAMERA_KEYS = ['keystone.follow', 'keystone.shake'] as const;
+/** The URL keys that say what a setting says, dropped from the page's URL when the player changes it. */
+export function settingUrlKeys(field: string): readonly string[] {
+  const s = settingOf(field);
+  return s.urlKeys ?? (s.drives ? s.drives.fields.map((f) => feelOf(f).url) : [field]);
+}
 
 /**
- * The camera motions in effect: each of keystone.follow and keystone.shake where the URL says it (feel was read
- * from that URL), else the Camera setting's (dynamic: both on, still: both off).
+ * The feel fields a setting sets, as in effect: each where its URL key says it (feel was read from that URL),
+ * else what the setting's value means. Nothing for a setting that sets no feel.
  */
-export function cameraFeel(feel: PaceFeel, q: URLSearchParams, camera: CameraSetting): Pick<PaceFeel, 'follow' | 'shake'> {
-  const on = camera === 'dynamic';
-  return { follow: q.has('keystone.follow') ? feel.follow : on, shake: q.has('keystone.shake') ? feel.shake : on };
+export function settingFeel(field: string, feel: PaceFeel, q: URLSearchParams, value: unknown): Partial<PaceFeel> {
+  const d = settingOf(field).drives;
+  if (!d) return {};
+  const to = d.feel(value);
+  return Object.fromEntries(d.fields.map((f) => [f, q.has(feelOf(f).url) ? (feel as Record<string, unknown>)[f] : to[f]])) as Partial<PaceFeel>;
 }
 
-/** The URL key that says what the Rapid fire setting says (rapidFeel), dropped from the URL when the setting changes. */
-export const RAPID_KEYS = ['keystone.rapid'] as const;
-
-/** Rapid fire in effect: keystone.rapid where the URL says it (feel was read from that URL), else the setting. */
-export function rapidFeel(feel: PaceFeel, q: URLSearchParams, rapid: boolean): Pick<PaceFeel, 'rapid'> {
-  return { rapid: q.has('keystone.rapid') ? feel.rapid : rapid };
-}
-
-/** The URL key that says what the Launch height setting says (launchFeel), dropped from the URL when the setting changes. */
-export const LAUNCH_KEYS = ['keystone.launch'] as const;
-
-/** Where shots leave from: keystone.launch where the URL says it (feel was read from that URL), else the setting. */
-export function launchFeel(feel: PaceFeel, q: URLSearchParams, launch: LaunchMode): Pick<PaceFeel, 'launch'> {
-  return { launch: q.has('keystone.launch') ? feel.launch : launch };
-}
-
-/** The URL key that says what the Stone marks setting says (marksFeel), dropped from the URL when the setting changes. */
-export const MARKS_KEYS = ['keystone.marks'] as const;
-
-/** Stone marks in effect: keystone.marks where the URL says it (feel was read from that URL), else the setting. */
-export function marksFeel(feel: PaceFeel, q: URLSearchParams, marks: boolean): Pick<PaceFeel, 'marks'> {
-  return { marks: q.has('keystone.marks') ? feel.marks : marks };
-}
-
-/** The URL key that says what the Duel turns setting says (turnViewFeel), dropped from the URL when the setting changes. */
-export const TURN_VIEW_KEYS = ['keystone.turnview'] as const;
-
-/** A duel's turn view in effect: keystone.turnview where the URL says it (feel was read from that URL), else the setting. */
-export function turnViewFeel(feel: PaceFeel, q: URLSearchParams, duelView: boolean): Pick<PaceFeel, 'turnView'> {
-  return { turnView: q.has('keystone.turnview') ? feel.turnView : duelView };
+/** Every setting's say over feel (main.ts, on load: q is the page's URL; on a change, an empty one). */
+export function feelFromSettings(feel: PaceFeel, q: URLSearchParams, settings: Settings): void {
+  for (const s of SETTING_OPTIONS) if (s.drives) Object.assign(feel, settingFeel(s.field, feel, q, (settings as Record<string, unknown>)[s.field]));
 }
 
 /** The URL's say over settings: ?look=, ?sound=on|off, ?sharp=1|2, ?quality=auto|high|mid|low (bad values are refused, as every game key is). */
 export function urlSettings(q: URLSearchParams): Partial<Settings> {
-  const out: Partial<Settings> = {};
-  const look = q.get('look'), sound = q.get('sound'), sharp = q.get('sharp');
-  if (look !== null) out.look = look; // checked by parseGameParams (lookName)
-  if (sound !== null) {
-    if (sound !== 'on' && sound !== 'off') throw new Error(`sound must be on or off: ${sound}`);
-    out.sound = sound === 'on';
+  const out: Record<string, unknown> = {};
+  for (const s of SETTING_OPTIONS) {
+    const v = s.url?.(q);
+    if (v !== undefined) out[s.field] = v;
   }
-  if (sharp !== null) {
-    if (sharp !== '1' && sharp !== '2') throw new Error(`sharp must be 1 or 2: ${sharp}`);
-    out.sharp = sharp === '1' ? 1 : 2;
-  }
-  const quality = qualityParam(q);
-  if (quality !== null) out.quality = quality;
-  return out;
+  return out as Partial<Settings>;
 }
+
+/** The door's Advanced settings rows, in order (door.ts). */
+export function settingRows(settings: Settings, ctx: DoorContext): string[] {
+  return SETTING_OPTIONS.map((s) => {
+    const v = (settings as Record<string, unknown>)[s.field], r = s.door;
+    const buttons = 'choices' in r
+      ? r.choices.map((c) => `<button data-act="${r.act}" data-arg="${c.arg}" class="${c.value === v ? 'on' : ''}"${c.title === undefined ? '' : ` title="${c.title}"`}>${c.text}</button>`).join('')
+      : r.buttons(v, ctx);
+    return `<span class="group"><span class="lbl">${r.label}</span><span class="seg">${buttons}</span></span>`;
+  });
+}
+
+/** What a door button (data-act, data-arg) changes, given the settings now; null when it is no setting's or names no value. */
+export function doorChange(act: string | undefined, arg: string, settings: Settings): Partial<Settings> | null {
+  const s = SETTING_OPTIONS.find((o) => o.door.act === act);
+  if (!s) return null;
+  const r = s.door, now = (settings as Record<string, unknown>)[s.field];
+  const v = 'choices' in r ? r.choices.find((c) => c.arg === arg)?.value : r.click(arg, now);
+  return v === undefined ? null : ({ [s.field]: v } as Partial<Settings>);
+}
+
+// The setting-to-feel pairs by name, as before the registry (O4 keeps them for their callers and tests).
+export const CAMERA_KEYS = settingUrlKeys('camera');
+export const RAPID_KEYS = settingUrlKeys('rapid');
+export const LAUNCH_KEYS = settingUrlKeys('launch');
+export const MARKS_KEYS = settingUrlKeys('marks');
+export const TURN_VIEW_KEYS = settingUrlKeys('duelView');
+export const HANDOFF_KEYS = settingUrlKeys('handoff');
+export const cameraFeel = (feel: PaceFeel, q: URLSearchParams, camera: CameraSetting) => settingFeel('camera', feel, q, camera) as Pick<PaceFeel, 'follow' | 'shake'>;
+export const rapidFeel = (feel: PaceFeel, q: URLSearchParams, rapid: boolean) => settingFeel('rapid', feel, q, rapid) as Pick<PaceFeel, 'rapid'>;
+export const launchFeel = (feel: PaceFeel, q: URLSearchParams, launch: LaunchMode) => settingFeel('launch', feel, q, launch) as Pick<PaceFeel, 'launch'>;
+export const marksFeel = (feel: PaceFeel, q: URLSearchParams, marks: boolean) => settingFeel('marks', feel, q, marks) as Pick<PaceFeel, 'marks'>;
+export const turnViewFeel = (feel: PaceFeel, q: URLSearchParams, duelView: boolean) => settingFeel('duelView', feel, q, duelView) as Pick<PaceFeel, 'turnView'>;
+export const handoffFeel = (feel: PaceFeel, q: URLSearchParams, handoff: boolean) => settingFeel('handoff', feel, q, handoff) as Pick<PaceFeel, 'handoff'>;
 
 /** Settings on a KeyValue: stored ones under the URL's, saved on every change (memory only when storage throws). */
 export class SettingsStore {

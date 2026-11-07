@@ -1,6 +1,6 @@
 # Undo last shot and restart (roadmap U6)
 
-Status 2026-11-06. Code: `@tb/game` play.ts (`GameHandle.undo`, `retry`), undo-marks.ts, hud.ts (the result card's Undo shot, the touch HUD's `TOUCH_ACTS`); `@tb/keystone` driver.ts (`Driver.checkpoint`); `@tb/physics-gpu` checkpoint.ts; `@tb/adapter-rapier` (`RapierEngine.checkpoint`).
+Status 2026-11-06. Code: `@tb/game` play.ts (`GameHandle.undo`, `retry`), undo-marks.ts, hud.ts (the result card's Undo shot, the touch HUD's `touchActs` icons); `@tb/keystone` driver.ts (`Driver.checkpoint`); `@tb/physics-gpu` checkpoint.ts; `@tb/adapter-rapier` (`RapierEngine.checkpoint`).
 
 ## What a player gets
 

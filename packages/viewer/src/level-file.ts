@@ -6,7 +6,7 @@
 // Whether the level is any good (overlaps, unsupported bodies, tunnelling ammo)
 // is validateLevel's question; the panel shows its issues without refusing.
 import {
-  checkPhysics, checkSettle, freezeProblem, checkShot, compileLevel, type CourseOverride, type Issue, type LevelDef, MATERIALS, type MaterialName, type Part, type PhysicsBlock, isRackItem, RACK_ITEM_NAMES, type RackItem, type Role, type RoleRule, ROLES, type ScenarioPart, SCORINGS, type Scoring, type Shot,
+  type BuildDef, CATALOG_NAMES, checkPhysics, checkSettle, freezeProblem, checkShot, compileLevel, type CourseOverride, type Issue, type LevelDef, MATERIALS, type MaterialName, type Part, type PhysicsBlock, isRackItem, RACK_ITEM_NAMES, type RackItem, type Role, type RoleRule, ROLES, type ScenarioPart, SCORINGS, type Scoring, type Shot,
   STAR_METRICS, type StarMetric, type StarsDef, validateLevel,
 } from '@tb/keystone';
 import { SCENARIOS } from '@tb/scenarios';
@@ -21,7 +21,7 @@ const MATERIAL_NAMES = MATERIALS.map((m) => m.name) as readonly string[];
 /** The LevelDef a JSON value describes, or an error saying where it is wrong. */
 export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   const o = object(v, where);
-  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars', 'autobank', 'settle', 'freeze', 'physics', 'custom'], where);
+  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars', 'autobank', 'settle', 'freeze', 'physics', 'custom', 'build'], where);
   if (o.format !== undefined && o.format !== LEVEL_FILE_FORMAT) throw new Error(`${where}.format should be "${LEVEL_FILE_FORMAT}"`);
   const id = str(o.id, `${where}.id`);
   if (!/^[\w-]{1,32}$/.test(id)) throw new Error(`${where}.id must be 1 to 32 letters, digits, - or _`);
@@ -55,6 +55,7 @@ export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   }
   if (o.custom !== undefined) def.custom = bool(o.custom, `${where}.custom`);
   if (o.physics !== undefined) def.physics = physics(o.physics, `${where}.physics`);
+  if (o.build !== undefined) def.build = build(o.build, `${where}.build`);
   return def;
 }
 
@@ -81,12 +82,52 @@ function physics(v: unknown, where: string): PhysicsBlock {
   return p;
 }
 
+/** A level's build rules (@tb/keystone BuildDef). */
+function build(v: unknown, where: string): BuildDef {
+  const o = object(v, where);
+  only(o, ['budget', 'pieces', 'brush', 'material'], where);
+  const b: BuildDef = {};
+  if (o.budget !== undefined) {
+    const n = int(o.budget, `${where}.budget`);
+    if (n < 0) throw new Error(`${where}.budget must be 0 or more`);
+    b.budget = n;
+  }
+  if (o.pieces !== undefined) b.pieces = arr(o.pieces, `${where}.pieces`).map((x, i) => oneOf(x, CATALOG_NAMES, `${where}.pieces[${i}]`));
+  if (o.brush !== undefined) b.brush = bool(o.brush, `${where}.brush`);
+  if (o.material !== undefined) b.material = oneOf(o.material, MATERIAL_NAMES, `${where}.material`) as MaterialName;
+  return b;
+}
+
+function positiveHalf(v: unknown, where: string): V3 {
+  const half = vec3(v, where);
+  if (half.some((x) => !(x > 0))) throw new Error(`${where} must be three numbers above 0`);
+  return half;
+}
+
 function part(v: unknown, where: string): Part {
   const o = object(v, where);
-  const kind = oneOf(o.kind, ['block', 'slab', 'rod', 'scenario'], `${where}.kind`);
+  const kind = oneOf(o.kind, ['block', 'slab', 'rod', 'scenario', 'piece', 'run'], `${where}.kind`);
   if (kind === 'scenario') return scenarioPart(o, where);
   const material = oneOf(o.material, MATERIAL_NAMES, `${where}.material`) as MaterialName;
   const role = o.role === undefined ? undefined : (oneOf(o.role, ROLES, `${where}.role`) as Role);
+  const placed = o.placed === undefined ? {} : o.placed === true ? { placed: true as const } : (() => { throw new Error(`${where}.placed must be true when given`); })();
+  if (kind === 'piece') {
+    only(o, ['kind', 'at', 'half', 'yaw', 'material', 'role', 'placed'], where);
+    return { kind, at: vec3(o.at, `${where}.at`), half: positiveHalf(o.half, `${where}.half`), ...(o.yaw !== undefined ? { yaw: num(o.yaw, `${where}.yaw`) } : {}), material, ...(role ? { role } : {}), ...placed };
+  }
+  if (kind === 'run') {
+    only(o, ['kind', 'path', 'pitch', 'half', 'y', 'material', 'role', 'omit', 'placed'], where);
+    const path = arr(o.path, `${where}.path`).map((x, i) => {
+      const a = arr(x, `${where}.path[${i}]`);
+      if (a.length !== 2) throw new Error(`${where}.path[${i}] must be two numbers (x, z)`);
+      return [num(a[0], `${where}.path[${i}][0]`), num(a[1], `${where}.path[${i}][1]`)] as [number, number];
+    });
+    if (!path.length) throw new Error(`${where}.path must have at least one point`);
+    const r: Part = { kind, path, pitch: positive(o.pitch, `${where}.pitch`), half: positiveHalf(o.half, `${where}.half`), material, ...(role ? { role } : {}), ...placed };
+    if (o.y !== undefined) r.y = num(o.y, `${where}.y`);
+    if (o.omit !== undefined) r.omit = arr(o.omit, `${where}.omit`).map((x, i) => int(x, `${where}.omit[${i}]`));
+    return r;
+  }
   if (kind === 'block') {
     only(o, ['kind', 'at', 'size', 'material', 'role', 'courses'], where);
     const size = vec3(o.size, `${where}.size`);

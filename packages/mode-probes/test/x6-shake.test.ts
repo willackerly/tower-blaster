@@ -1,6 +1,6 @@
-// X6, resonance under a gravity schedule and the far-blast shove: drive()
-// writes the schedule before every step (CPU, on the f64 reference: a free
-// cube's velocity is the schedule's sum), the envelope grows as stated, the
+// X6, resonance under a gravity schedule and the far-blast shove: the shake is
+// field events (engine-api field.ts; CPU, on the f64 reference: a free cube's
+// velocity is the schedule's sum), the envelope grows as stated, the
 // columns stand clear, and the far blast's own definition gives every body
 // exactly maxDv along its direction. At CI size on the GPU engine
 // (SwiftShader) the far kick is maxDv to 1 % on every free cube, a standing
@@ -11,7 +11,7 @@
 // the full probe's eight nudges per height and slow ramp decide it. The
 // full probe runs with pnpm probe:modes X6.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { blastKick, checkBlast, type BodyDesc, type Vec3 } from '@tb/engine-api';
+import { blastKick, checkBlast, type BodyDesc, FIELD_QUANTUM, fieldGravity, quantiseField, quantiseVec3, scheduleEvents, type Vec3 } from '@tb/engine-api';
 import { boxBoxSeparation, obb } from '@tb/geom';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
 import { requireWebGPU } from '@tb/testkit';
@@ -22,19 +22,17 @@ import { openProbePage, type ProbePage, runProbe } from '../src/session.ts';
 const ob = (b: BodyDesc) => obb(b.pos, b.rot, (b.shape as { half: [number, number, number] }).half);
 
 describe('X6 schedule, columns and shove', () => {
-  it('drive() writes the gravity schedule before every step: a free cube\'s velocity is its sum times dt', async () => {
-    const scene = gameScene('x6-free', {}, [box([0, 50, 0], [0.25, 0.25, 0.25])], [], { ground: null });
-    const sched = (i: number): Vec3 => [Math.sin(0.3 * i), -GRAVITY, 0.1 * i];
-    const spec: RunSpec = { scene, steps: 40, params: { iterations: 4 }, opts: {}, gravity: sched };
+  it('a gravity schedule as field events: a free cube\'s velocity is the quantised schedule\'s sum times dt', async () => {
+    const base = quantiseVec3([0, -GRAVITY, 0]), sched = (i: number): Vec3 => [Math.sin(0.3 * i), base[1], 0.1 * i];
+    const scene = gameScene('x6-free', {}, [box([0, 50, 0], [0.25, 0.25, 0.25])], scheduleEvents(0, 40, sched, base), { ground: null, gravity: base });
+    const spec: RunSpec = { scene, steps: 40, params: { iterations: 4 }, opts: {} };
     let vx = 0, vz = 0;
     const meter: Meter<null> = { every: 40, sample: (step, s) => { if (step === 40) { vx = s.linVel[0]!; vz = s.linVel[2]!; } }, result: () => null };
     await drive(new AvbdReferenceEngine({ iterations: 4 }), spec, meter);
     let ex = 0, ez = 0;
-    for (let i = 0; i < 40; i++) { ex += sched(i)[0] * DT; ez += sched(i)[2] * DT; }
+    for (let i = 0; i < 40; i++) { ex += quantiseField(sched(i)[0]) * DT; ez += quantiseField(sched(i)[2]) * DT; }
     expect(vx).toBeCloseTo(ex, 9);
     expect(vz).toBeCloseTo(ez, 9);
-    // With sleep on a schedule would leave sleepers behind: drive refuses it.
-    await expect(drive(new AvbdReferenceEngine(), { ...spec, opts: { sleep: true } }, meter)).rejects.toThrow(/sleep/);
   });
 
   it('the envelope starts at A0, grows by `growth` a cycle and tops out at A_MAX by shakeSteps', () => {
@@ -52,9 +50,12 @@ describe('X6 schedule, columns and shove', () => {
     const ci = X6.cases('ci').find((x) => x.kind === 'shake')!;
     expect(ci).toMatchObject({ a0: 0.1, aMax: 0.7 });
     expect(x6Spec(ci).steps).toBeLessThan(1000);
-    const spec = x6Spec({ kind: 'shake', ...c, nudges: 1, presettle: 10 });
-    expect(spec.gravity!(9)).toEqual([0, -GRAVITY, 0]);
-    expect(spec.gravity!(10)[0]).toBe(0);
+    const spec = x6Spec({ kind: 'shake', ...c, nudges: 1, presettle: 10 }), base = quantiseVec3([0, -GRAVITY, 0]);
+    expect(spec.scene.gravity).toEqual(base);
+    expect(fieldGravity(spec.scene, 9)).toEqual(base);
+    expect(fieldGravity(spec.scene, 10)[0]).toBe(0);
+    const t = DT, want = envelope(c, t) * GRAVITY * Math.sin(2 * Math.PI * c.f * t);
+    expect(Math.abs(fieldGravity(spec.scene, 11)[0] - want)).toBeLessThanOrEqual(FIELD_QUANTUM / 2);
     expect(spec.opts.sleep).toBeFalsy();
   });
 

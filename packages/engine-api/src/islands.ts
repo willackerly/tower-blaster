@@ -170,6 +170,8 @@ export class Islands {
   push(k: number, events: readonly InputEvent[]): void {
     this.check(k);
     for (const ev of events) {
+      // A field event (field.ts) sets the one solve's gravity or kicks every body in it: it cannot belong to one island.
+      if (ev.kind === 'field') throw new Error(`islands: island ${k} has a field event at step ${ev.step}; gravity and kicks are world-wide, so islands cannot carry one`);
       if (ev.kind === 'blast') {
         const c = ev.blast.centre, r = ev.blast.radius;
         if (Array.isArray(c) ? Math.max(Math.abs(c[0]), Math.abs(c[2])) + r > this.half : r > this.reach) {
@@ -319,6 +321,8 @@ export class Islands {
         const centre = Array.isArray(c) ? [c[0] + o[0], c[1] + o[1], c[2] + o[2]] as Vec3 : { ...c, body: this.idOf(k, c.body) };
         return { step, kind: 'blast', blast: { ...b, centre, ...(b.exclude ? { exclude: b.exclude.map((id) => this.idOf(k, id)) } : {}) } };
       }
+      case 'field':
+        throw new Error('islands: field events are refused by push()');
     }
   }
 }

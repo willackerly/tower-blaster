@@ -7,7 +7,7 @@
 // step's blasts, as on the reference), then applies forceKick in f32:
 //   linVel += h F / mass, SolverBody.prevVel += the same (as a blast's kick, so
 //   the adaptive warm start does not read the force as an acceleration),
-// and sets the awake bit. A sleeper set awake so is woken with its group by the
+// and sets the awake bit. A pinned body (pins.ts) is skipped: it feels no force. A sleeper set awake so is woken with its group by the
 // wake pass, as a blasted one is (sleep.ts); and SleepBody.forced keeps the body
 // from falling asleep at the end of a step it is forced.
 //
@@ -55,6 +55,8 @@ fn force(@builtin(global_invocation_id) id: vec3u) {
   let kind = forces[o + 1u];
   let v = vec3f(word(o + 4u), word(o + 5u), word(o + 6u));
   let b = bodies[i];
+  // A pinned body (Body.flags bit 1, pins.ts) feels no force and is never woken (engine-api pinned.ts).
+  if ((b.flags & 2u) != 0u) { return; }
   var F = v;
   if (kind == 1u) {
     F = qrot(b.rot, v);
