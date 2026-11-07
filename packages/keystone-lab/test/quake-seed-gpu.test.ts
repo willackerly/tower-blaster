@@ -9,6 +9,7 @@ import { type BrowserCastPlayer, openBrowserCastPlayer } from '../src/cast-brows
 
 const MINUTES = 60_000;
 const SEEDED = AFTERSHOCK_LEVELS.filter((l) => quakeRulesOf(l).start);
+const SLOW = !!process.env.TB_CHANNEL || process.env.PHYSICS_GPU_SLOW === '1';
 
 let player: BrowserCastPlayer | null = null;
 beforeAll(async () => {
@@ -25,7 +26,8 @@ describe('the seeded dials on the GPU solver', () => {
     expect(SEEDED.map((l) => l.id)).toContain('A2');
   });
 
-  for (const level of SEEDED) {
+  // On PRs, A2 stands for the family; every seeded level on Metal (TB_CHANNEL) or with PHYSICS_GPU_SLOW=1 (nightly).
+  for (const level of SEEDED.filter((l) => SLOW || l.id === 'A2')) {
     it(`${level.id} ${level.name}: Start on the seeded dial scores above 0 and leaves the level to clear`, async (ctx) => {
       if (!player) return ctx.skip();
       const seed: QuakeShot = { ammo: 'quake', ...quakeRulesOf(level).start! }, [r] = await player.play(level, [[seed]]);

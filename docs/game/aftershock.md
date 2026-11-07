@@ -390,7 +390,9 @@ The search's wall times on 4 cores: 330 s, 1,296 s and 1,131 s (results/retrofit
   view unmoved; the running panel with its playhead; dust at every foot in the real look; on an upright phone the
   four labels and at most 30%), `keystone/test/quake.test.ts` (`start` checked against the dial, out of the hash),
   `keystone-lab/test/quake-seed.test.ts` (each seed on 8 nudged reference builds) and
-  `keystone-lab/test/quake-seed-gpu.test.ts` (each seed on the GPU solver scores above 0 and does not clear).
+  `keystone-lab/test/quake-seed-gpu.test.ts` (each seed on the GPU solver scores above 0 and does not clear). On a
+  PR both seed tests run A2 only, the family's representative; every seeded level runs with PHYSICS_GPU_SLOW=1
+  (nightly) or, on the GPU, with TB_CHANNEL set.
 
 ## Follow-ups
 

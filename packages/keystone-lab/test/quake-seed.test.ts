@@ -38,8 +38,11 @@ describe('the seed search', () => {
   });
 });
 
+// On PRs, one level of the family (A2, the playtest's zero); every seeded level with PHYSICS_GPU_SLOW=1 (nightly).
+const SLOW = process.env.PHYSICS_GPU_SLOW === '1';
+
 describe('the shipped seeds on the reference engine', () => {
-  for (const level of SEEDED) {
+  for (const level of SEEDED.filter((l) => SLOW || l.id === 'A2')) {
     it(`${level.id} ${level.name}: the seed does part of the job on ${SEED_ROBUST} of ${SEED_NUDGES} builds and clears it on at most ${SEED_CLEAR_MAX}`, async () => {
       const c = compileLevel(level), seed = shot(quakeRulesOf(level).start!);
       expect(quakeRefusal(c, seed)).toBeNull();
