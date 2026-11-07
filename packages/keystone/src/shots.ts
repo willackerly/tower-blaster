@@ -269,10 +269,12 @@ export interface Aim { shot: LaunchShot; error: number }
 /**
  * Inverse ballistics: the quantised launch shot (at the given azimuth, height
  * and power) whose arc passes closest to `target`. Yaw is exact up to
- * quantisation; pitch is searched coarse-to-fine over [-45, 80] degrees,
- * preferring the flatter arc on ties. Unreachable targets return the closest miss.
+ * quantisation; pitch is searched coarse-to-fine over [opts.minPitch (default -45), 80] degrees,
+ * preferring the flatter arc on ties. Unreachable targets return the closest miss. The game aims with a
+ * steeper floor (aim.ts AIM_MIN_PITCH): from a launcher over the structure, a target low on its near face
+ * needs more than 45 degrees down at full power. Bots and casts keep -45, so their lines replay as recorded.
  */
-export function aimAt(f: ShotFrame, ammo: LaunchItem, at: { az: number; y: number; power: number }, target: Vec3, opts: { dt?: number; maxSteps?: number; substeps?: number } = {}): Aim {
+export function aimAt(f: ShotFrame, ammo: LaunchItem, at: { az: number; y: number; power: number }, target: Vec3, opts: { dt?: number; maxSteps?: number; substeps?: number; minPitch?: number } = {}): Aim {
   const dt = opts.dt ?? 1 / 60, maxSteps = opts.maxSteps ?? 240, substeps = opts.substeps ?? 1;
   const p = launcherPos(f, at.az, at.y);
   const th = Math.atan2(target[2] - p[2], target[0] - p[0]);
@@ -291,7 +293,8 @@ export function aimAt(f: ShotFrame, ammo: LaunchItem, at: { az: number; y: numbe
   };
   // Coarse pass every degree, then every quantum around each local minimum:
   // about 300 arcs instead of 1,251, with the same answer for smooth error curves.
-  const lo = -450, hi = 800, coarse: number[] = [];
+  const lo = Math.round(10 * (opts.minPitch ?? -45)), hi = 800, coarse: number[] = [];
+  if (!(lo >= -890 && lo < hi)) throw new Error(`aimAt: minPitch must be from -89 to under 80 degrees: ${opts.minPitch}`);
   for (let p = lo; p <= hi; p += 10) coarse.push(p);
   coarse.forEach((p, i) => {
     const e = err(p);

@@ -103,7 +103,7 @@ export class Session {
   watchIdx: Int32Array;
   /** Par (end at clear) or outcome (end at a bank or an empty rack; LevelDef.autobank ends at the first clear too). */
   readonly scoring: Scoring;
-  /** How this level's shots settle (settleOf: v1 for par levels, v3 for outcome levels unless the level says). */
+  /** How this level's shots settle (settleOf: v1 for par levels, v4 for outcome levels unless the level says). */
   readonly settleRule: SettleRule;
   /** A wave level's run window in steps (LevelDef.runWindow, rules.ts runWindowSteps); undefined: the rule's cap. */
   readonly runWindow: number | undefined;

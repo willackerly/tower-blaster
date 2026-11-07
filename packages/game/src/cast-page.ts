@@ -5,10 +5,10 @@
 // --engine gpu drives it (keystone-lab cast-browser.ts): SwiftShader in CI,
 // Metal with --channel chrome on a Mac. No rendering: physics only.
 // ?engine=rapier plays on Rapier instead, for comparison.
-import { type CastPlay, castPlay, type CompiledLevel, compileLevel, type LevelDef, nudgedLevel, physicsOf, readShots, type RubeResult, rubePlay, type WaveOptions, type WaveResult, wavePlay } from '@tb/keystone';
+import { type CastPlay, castPlay, type CompiledLevel, compileLevel, judgeMason, type LevelDef, type MasonVerdict, nudgedLevel, physicsOf, readShots, type RubeResult, rubePlay, type WaveOptions, type WaveResult, wavePlay } from '@tb/keystone';
 import { limitProblems } from '@tb/engine-api';
 import { createDevice, isSoftwareAdapter } from '@tb/gpu';
-import { driverOptions, engineKind, makeEngine } from './engines.ts';
+import { driverOptions, engineKind, makeEngine, makeMasonEngine } from './engines.ts';
 
 export interface CastHandle {
   status: 'loading' | 'ready' | 'error';
@@ -32,6 +32,8 @@ export interface CastHandle {
   rube(level: LevelDef): Promise<RubeResult & { ms: number }>;
   /** A Wavefront level (keystone wave-play.ts) played with one line (writeShots text) on a fresh engine, the wave metered. */
   wave(level: LevelDef, line: string, opts?: Pick<WaveOptions, 'groups' | 'fell' | 'maxSteps'>): Promise<WaveResult & { ms: number }>;
+  /** A Mason level as built, judged in `worlds` (MasonDef worlds' indices) at once on a fresh engine (keystone judgeMason); limits as rest's. */
+  mason(level: LevelDef, worlds: number[]): Promise<MasonVerdict & { limits: string[]; ms: number }>;
 }
 
 export interface RestReport { presettle: number; steps: number; maxMove: number; topDrop: number; limits: string[]; ms: number }
@@ -40,7 +42,7 @@ declare global { interface Window { __cast: CastHandle } }
 
 const log = document.getElementById('log')!;
 const notReady = async (): Promise<never> => { throw new Error('the cast page is not ready'); };
-const handle: CastHandle = { status: 'loading', adapter: '', software: false, engine: '', play: notReady, rest: notReady, rube: notReady, wave: notReady };
+const handle: CastHandle = { status: 'loading', adapter: '', software: false, engine: '', play: notReady, rest: notReady, rube: notReady, wave: notReady, mason: notReady };
 window.__cast = handle;
 
 async function main() {
@@ -91,6 +93,13 @@ async function main() {
   handle.wave = async (level, line, opts = {}) => {
     const c = compileLevel(level), e = makeEngine(kind, c, device), t0 = performance.now();
     try { return { ...(await wavePlay(e, c, readShots(line), { ...driverOptions(kind), ...opts })), ms: performance.now() - t0 }; } finally { e.dispose(); }
+  };
+  handle.mason = async (level, worlds) => {
+    const c = compileLevel(level), e = makeMasonEngine(kind, c, worlds.length, device), t0 = performance.now();
+    try {
+      const v = await judgeMason(e, c, worlds);
+      return { ...v, limits: limitProblems(e.health ? await e.health() : null, e.info.name), ms: performance.now() - t0 };
+    } finally { e.dispose(); }
   };
   handle.status = 'ready';
   log.textContent = `${handle.adapter} (${kind}): ready`;

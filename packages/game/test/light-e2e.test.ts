@@ -1,6 +1,6 @@
-// The real look's sun turned with the level's opening view (light.ts, PT15): B2 opens with the eye at
-// azimuth 144, where the look's own sun stands 4 degrees off straight behind the eye and every tower's
-// shadow falls behind it; turned, the shadows fall on the floor in front of the towers. L3 opens with the
+// The real look's sun turned with the level's opening view (light.ts, PT15): B2's classic opening view
+// (keystone.view=classic; the goals view, PT1, looks from another side) has the eye at azimuth 144, where
+// the look's own sun stands 4 degrees off straight behind the eye and every tower's shadow falls behind it; turned, the shadows fall on the floor in front of the towers. L3 opens with the
 // eye at azimuth 0 and draws exactly as before. Rapier, headless Chromium; grain off (it reseeds every
 // frame) so two captures can be compared pixel for pixel.
 import { describe, expect, it } from 'vitest';
@@ -42,7 +42,7 @@ describe('the real look\'s sun from the opening view', () => {
     if (!game.browser()) return ctx.skip();
     const got: Record<string, ReturnType<typeof floorShadow>> = {};
     for (const sun of ['view', 'look']) {
-      const o = await game.open(`/?level=B2&look=real&real.grain=0&engine=rapier&offscreen=1&progress=off&door=0&keystone.sun=${sun}`, 5 * MINUTES);
+      const o = await game.open(`/?level=B2&look=real&real.grain=0&engine=rapier&offscreen=1&progress=off&door=0&keystone.view=classic&keystone.sun=${sun}`, 5 * MINUTES);
       if (!o) return ctx.skip();
       await ready(o.page, 5 * MINUTES);
       expect(await o.page.evaluate(() => window.__game.feel.sun)).toBe(sun);

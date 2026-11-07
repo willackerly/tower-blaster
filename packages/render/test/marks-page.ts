@@ -117,6 +117,61 @@ export async function marksFrames(c: MarksCase) {
   };
 }
 
+/**
+ * The x-ray (Renderer.xray, fx.ts XRAY bits): a wall (half 1.5 x 1 x 0.1) 3 m ahead hides three cubes 5 m ahead: a crown
+ * (x-ray 1) at x -0.5, a plain cube at x 0, a heritage cube (x-ray 2) at x 0.5; a fourth, a crown left in sight, stands at
+ * x 3.2 beside the wall. Frames with the x-ray off, on, and on after a restyle (a setFx flash and a bulk scale write, which
+ * must keep the kinds), in `look`. Returns the colour change at each cube's face centre and near its face's edge, and how
+ * many pixels changed outside the two hidden objectives' outlines.
+ */
+export async function xrayFrames(c: { look: 'hazy' | 'real' | 'candy' }) {
+  const [W, H] = [320, 200];
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const y = 1, X = [-0.5, 0, 0.5, 3.2], Z = -5;
+  const descs = [...X.map((x) => box([x, y, Z], [HALF, HALF, HALF])), box([0, y, -3], [1.5, 1, 0.1])];
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  src.update(snapshotOf(descs), descs);
+  const rend = new Renderer(device, { size: [W, H] });
+  rend.look = { ...LOOKS[c.look]!, bloomMix: 0, vignette: 0 };
+  rend.toggles.trail = false;
+  rend.setSource(src);
+  rend.setShadowBounds([0, y, -4], 4);
+  rend.setXray(0, [1, 0, 2, 1, 0]);
+  const eye: V3 = [0, y, 0];
+  const f: FrameParams = { viewProj: multiply(perspective(FOV, W / H, 0.1, 400), lookAt(eye, [0, y, Z])), eye, groundY: 0, time: 3 };
+  const off = (await rend.render(f, true, true))!.pixels!;
+  rend.xray = true;
+  const on = (await rend.render(f, true, true))!.pixels!;
+  rend.setFx(0, { tint: GOLD, emissive: 0.1, flash: 0 });
+  rend.setFx(0, null, new Float32Array(descs.length).fill(1), false);
+  const restyled = (await rend.render(f, true, true))!.pixels!;
+  const kinds = descs.map((_, i) => rend.fxOf(i).xray);
+  const err = await device.popErrorScope();
+  rend.destroy();
+  const vp = f.viewProj;
+  const px = (p: V3): [number, number] => {
+    const q = [0, 1, 2, 3].map((r) => vp[r]! * p[0] + vp[4 + r]! * p[1] + vp[8 + r]! * p[2] + vp[12 + r]!);
+    return [Math.round(((q[0]! / q[3]! + 1) / 2) * W - 0.5), Math.round(((1 - q[1]! / q[3]!) / 2) * H - 0.5)];
+  };
+  const rgb = (fr: typeof on, [x, yy]: [number, number]) => { const o = yy * fr.bytesPerRow + 4 * x; return [fr.data[o]!, fr.data[o + 1]!, fr.data[o + 2]!]; };
+  const delta = (fr: typeof on, p: [number, number]) => { const a = rgb(fr, p), b = rgb(off, p); return [a[0]! - b[0]!, a[1]! - b[1]!, a[2]! - b[2]!]; };
+  // The front face (+z) of cube i: its centre, and a point 92% of the way to its left edge.
+  const at = (i: number, u: number) => px([X[i]! + u * HALF, y, Z + HALF]);
+  const cubes = X.map((_, i) => ({ centre: delta(on, at(i, 0)), edge: delta(on, at(i, -0.92)), restyled: delta(restyled, at(i, 0)) }));
+  // Outside the hidden objectives' outlines (the front face's square grown by 3 px), nothing changes.
+  const boxPx = (i: number) => { const a = px([X[i]! - HALF, y + HALF, Z + HALF]), b = px([X[i]! + HALF, y - HALF, Z + HALF]); return [a[0] - 3, a[1] - 3, b[0] + 3, b[1] + 3]; };
+  const inside = [boxPx(0), boxPx(2)];
+  let outsideChanged = 0;
+  for (let yy = 0; yy < H; yy++) for (let x = 0; x < W; x++) {
+    if (inside.some(([l, t, r, b]) => x >= l! && x <= r! && yy >= t! && yy <= b!)) continue;
+    const d = delta(on, [x, yy]);
+    if (Math.max(...d.map(Math.abs)) > 1) outsideChanged++;
+  }
+  return { error: err?.message ?? null, cubes, outsideChanged, kinds };
+}
+
 /** The WGSL engrave against its TypeScript twin on random points of random box faces, marks and pixel sizes: the largest differences. */
 export async function engraveMatches(n = 4096) {
   const { device } = await sharedDevice({ timestamps: false });

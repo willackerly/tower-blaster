@@ -4,6 +4,7 @@
 // whose rack holds a plunger and whose charges it arms. It never moves the camera (Will's camera rule).
 import type { CompiledLevel, PlungerShot } from '@tb/keystone';
 import { delayCss, MAX_SNAPS, northOnScreen, panelTimeline, RELAY_CSS, SWEEP_DIRS, type Timeline } from './fuse-timeline.ts';
+import { FUSE_PANEL_SHARE } from './view.ts';
 
 export const FUSE_CSS = `
   .kg-fuse { right: 12px; bottom: 12px; width: 300px; max-height: calc(100vh - 140px); overflow-y: auto; font: 13px/1.35 system-ui, sans-serif; display: none; }
@@ -33,7 +34,7 @@ export const FUSE_CSS = `
   .kg-fuse .relays i { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 50%; vertical-align: -1px; }
   .kg-fuse button.plunger { width: 100%; font: 700 15px/1 system-ui, sans-serif; padding: 9px 0; border: 0; border-radius: 7px; background: #c8402e; color: #fff; cursor: pointer; }
   .kg-fuse button.plunger:disabled { background: #4a3a3a; color: #9aa3b8; cursor: default; }
-  @media (max-width: 640px) { .kg-fuse { left: 8px; right: 8px; width: auto; bottom: 8px; max-height: 45vh; } }
+  @media (max-width: 640px) { .kg-fuse { left: 8px; right: 8px; width: auto; bottom: 8px; max-height: ${FUSE_PANEL_SHARE * 100}vh; } }
 `;
 
 export interface FusePanelHooks {

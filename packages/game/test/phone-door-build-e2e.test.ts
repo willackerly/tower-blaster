@@ -98,11 +98,13 @@ describe('the Build panel in the docked phone HUD (PT18, C9)', () => {
     else expect(b.panel!.w / b.vw).toBeLessThanOrEqual(0.5);
 
     // The scene is still there to build on: a tap in the free band (between the strip and the panel upright, right of
-    // the rail and left of the panel sideways) places a piece.
+    // the rail and left of the panel sideways) places a piece. Sideways the tap goes low in the band, on the ground
+    // in front of the lot: the opening view's fit (PT1) puts the near crown domino at the band's middle height, and
+    // a domino laid on its face would go into the ground.
     const n0 = (await page.evaluate(() => window.__game.edit.def()))!.parts.length;
     const [x, y] = name === 'upright'
       ? [b.vw / 2, (b.st!.y + b.st!.h + b.panel!.y) / 2]
-      : [(b.st!.x + b.st!.w + b.panel!.x) / 2, b.vh / 2];
+      : [(b.st!.x + b.st!.w + b.panel!.x) / 2, 0.8 * b.vh];
     await finger(await page.context().newCDPSession(page)).tap(x, y);
     await page.waitForFunction((n) => window.__game.edit.def()!.parts.length === n + 1, n0, { timeout: 10_000, polling: 50 });
 

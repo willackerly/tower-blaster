@@ -13,6 +13,7 @@ import { type ScenarioPart, scenarioBodies, scenarioKey } from './scenario-part.
 import { ammoBody, type LauncherDef, launcherPos, type Shot, type ShotFrame } from './shots.ts';
 import { checkIce, type IceBlock, IceBreaker, iceOf } from './ice.ts';
 import type { BuildDef } from './build.ts';
+import { masonIssues, type MasonDef } from './mason.ts';
 import { obbAabb, obbOfBody, obbOverlap, pieceQuat } from './placement.ts';
 import { runPoses } from './stroke.ts';
 
@@ -80,6 +81,11 @@ export type Objective =
    * levels only; a settle with a crown down ends the level there, failed. Scored on what was pulled.
    */
   | { kind: 'hold'; footprintMax?: number }
+  /**
+   * Mason's Trial (LevelDef.mason, mason.ts): the build passes its test in at least half of the worlds it is judged
+   * in. Decided by the judge (mason-judge.ts), never by a settle.
+   */
+  | { kind: 'trial'; footprintMax?: number }
   /**
    * Aftershock (docs/game/aftershock.md): every crown down (the condemned towers' tops) and no heritage broken (the
    * protected towers' tops, judged standing at the settle: LevelDef.heritage 'standing'). Outcome levels only.
@@ -194,9 +200,11 @@ export interface LevelDef {
   autobank?: boolean;
   /**
    * How a shot settles (rules.ts SETTLE_RULES; URL key keystone.settle). Default by scoring (settleOf):
-   * v1 for par levels, whose lines are pinned on it, and v3 for outcome levels, whose big structures
-   * keep blocks rocking long after the collapse is over. In the hash unless par's v1 or outcome's v2
-   * (the rules those levels were hashed under before v3), so a v3 level hashes apart from its v2 self.
+   * v1 for par levels, whose lines are pinned on it, and v4 for outcome levels, whose big structures
+   * keep blocks rocking (and debris rolling) long after the collapse is over. Outcome levels were v3
+   * until agent playtest PT6b; v4 is v3 or a steady collapse, and the replays that flipped it are in
+   * docs/game/settle-v4.md. In the hash unless par's v1 or outcome's v2 (the rules those levels were
+   * hashed under before v3), so a v4 level hashes apart from its v3 self and stars cast under v3 never show.
    */
   settle?: SettleRule;
   /**
@@ -239,6 +247,12 @@ export interface LevelDef {
    * parts par is build.par, which any build level may name (scored by rules.ts partsStars).
    */
   rube?: true;
+  /**
+   * Mason's Trial (M8, mason.ts, docs/game/masons-trial.md): the test that runs once the build is done, its pass
+   * rule, the jitter of the worlds it is judged in, and the star points. Hashed (the stars too, as rube.partsPar).
+   * Such a level always plays at MASON_ITERATIONS.
+   */
+  mason?: MasonDef;
   /**
    * Made from an authored level by overrides (URL keys keystone.*): it plays, but cast stars do not
    * apply (the game's CUSTOM_NOTE). Not part of the hash: the overrides already are.
@@ -295,10 +309,17 @@ export interface PhysicsBlock {
 export const PHYSICS_DEFAULTS = { iterations: 40, gapSlop: 3e-5, bounce: null, presettle: 300, sleep: false, asleep: false } as const satisfies PhysicsBlock;
 export type ResolvedPhysics = { iterations: number; gapSlop: number; bounce: number | null; presettle: number; sleep: boolean; asleep: boolean; pairsPerBody?: number };
 
+/**
+ * Solver iterations every Mason level plays at (LevelDef.mason, mason.ts), whatever its physics block, a URL override
+ * or the quality tier says: probe X4 found a 95 % harmonic overhang holds and a corbelled span carries the ball at
+ * 40, while at 20 the overhang topples and an arch wall creeps 1.1 cm (docs/game/mode-probes.md). physicsOf pins it.
+ */
+export const MASON_ITERATIONS = 40;
+
 export function physicsOf(d: LevelDef): ResolvedPhysics {
   const p = d.physics ?? {};
   return {
-    iterations: p.iterations ?? PHYSICS_DEFAULTS.iterations, gapSlop: p.gapSlop ?? PHYSICS_DEFAULTS.gapSlop,
+    iterations: d.mason ? MASON_ITERATIONS : p.iterations ?? PHYSICS_DEFAULTS.iterations, gapSlop: p.gapSlop ?? PHYSICS_DEFAULTS.gapSlop,
     bounce: p.bounce === undefined ? PHYSICS_DEFAULTS.bounce : p.bounce, presettle: p.presettle ?? PHYSICS_DEFAULTS.presettle,
     sleep: p.sleep ?? PHYSICS_DEFAULTS.sleep, asleep: p.asleep ?? PHYSICS_DEFAULTS.asleep,
     ...(p.pairsPerBody !== undefined ? { pairsPerBody: p.pairsPerBody } : {}),
@@ -347,8 +368,8 @@ export function castStars(c: CompiledLevel): StarsDef | undefined {
 }
 
 export const scoringOf = (d: LevelDef): Scoring => d.scoring ?? 'par';
-/** The settle rule a level plays by: its own, else v1 for par scoring and v3 for outcome scoring. */
-export const settleOf = (d: LevelDef): SettleRule => d.settle ?? (scoringOf(d) === 'outcome' ? 'v3' : 'v1');
+/** The settle rule a level plays by: its own, else v1 for par scoring and v4 for outcome scoring (v3 until PT6b). */
+export const settleOf = (d: LevelDef): SettleRule => d.settle ?? (scoringOf(d) === 'outcome' ? 'v4' : 'v1');
 /** Throws unless v is a settle rule, naming `where`. */
 export function checkSettle(v: unknown, where = 'settle'): SettleRule {
   if (!(SETTLE_RULES as readonly unknown[]).includes(v)) throw new Error(`${where} must be ${SETTLE_RULES.join(' or ')}: ${String(v)}`);
@@ -525,7 +546,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   if (geometry.scoring === 'par') delete geometry.scoring;
   if (geometry.autobank === false) delete geometry.autobank;
   // The settle rule a level plays by hashes as absent when it is the one its scoring used before v3 (par v1, outcome v2), so those
-  // levels hash as they did; any other, outcome levels' default v3 included, is written out, so stars cast under v2 never show under v3.
+  // levels hash as they did; any other, outcome levels' default v4 included, is written out, so stars cast under one rule never show under another.
   const settleRule = settleOf(def);
   if (settleRule === (scoringOf(def) === 'outcome' ? 'v2' : 'v1')) delete geometry.settle; else geometry.settle = settleRule;
   const physics = physicsKey(geometry.physics);
@@ -583,7 +604,7 @@ function bodiesDigest(bodies: readonly BodyDesc[]): string {
 }
 
 export interface Issue {
-  code: 'count' | 'capacity' | 'launcher' | 'overlap' | 'unsupported' | 'mass-ratio' | 'ammo-ratio' | 'dud' | 'tunnelling' | 'crown-start' | 'rack' | 'weapon' | 'empty' | 'watched' | 'flat' | 'objective' | 'freeze' | 'charge';
+  code: 'count' | 'capacity' | 'launcher' | 'overlap' | 'unsupported' | 'mass-ratio' | 'ammo-ratio' | 'dud' | 'tunnelling' | 'crown-start' | 'rack' | 'weapon' | 'empty' | 'watched' | 'flat' | 'objective' | 'freeze' | 'charge' | 'mason';
   message: string;
   bodies?: number[];
   /** Legal but worth knowing (a dud item): the level still plays as authored. */
@@ -670,8 +691,13 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
     const ice = IceBreaker.budget(c);
     issues.push({ code: 'capacity', message: `${m.n} bodies + ${rackBodies(def.rack.filter(isRackItem), c.arms)} the rack can add${ice ? ` + ${ice} ice pieces` : ''} > ${max} (the ${engine} engine's budget)` });
   }
-  const size = rackSizeProblem(def.rack);
-  if (size || def.par < 1 || def.par > def.rack.length) issues.push({ code: 'rack', message: `rack of ${def.rack.length} with par ${def.par}: need 1 <= par <= rack, at most ${MAX_RACK} fired items and ${MAX_PULLS} pulls${size ? ` (${size})` : ''}` });
+  // A Mason level fires nothing: its test (mason.ts) takes the rack's place, so its rack must be empty.
+  if (def.mason) {
+    for (const message of masonIssues(def)) issues.push({ code: 'mason', message });
+    if (def.rack.length) issues.push({ code: 'mason', message: `a Mason level's test replaces the rack, so its rack must be empty: ${def.rack.join(', ')}` });
+  }
+  const size = def.mason ? null : rackSizeProblem(def.rack);
+  if (!def.mason && (size || def.par < 1 || def.par > def.rack.length)) issues.push({ code: 'rack', message: `rack of ${def.rack.length} with par ${def.par}: need 1 <= par <= rack, at most ${MAX_RACK} fired items and ${MAX_PULLS} pulls${size ? ` (${size})` : ''}` });
   const fz = def.freeze === undefined ? null : freezeProblem(def.freeze);
   if (fz) issues.push({ code: 'freeze', message: fz });
   for (const message of chargeIssues(c)) issues.push({ code: 'charge', message });
@@ -767,7 +793,7 @@ export function validateLevel(c: CompiledLevel, opts: ValidateOptions = {}): Iss
     for (let i = 0; i < m.n; i++) if (!pinned(i)) { pe0 += peOf_mJ(m.mass[i]!, m.home[3 * i + 1]!); floor += peOf_mJ(m.mass[i]!, Math.min(m.half[3 * i]!, m.half[3 * i + 1]!, m.half[3 * i + 2]!)); }
     const block = commonMass(m), least = peOf_mJ(block, h);
     // A bell level brings nothing down: what it must do is ring the bell.
-    if (pe0 - floor < least && def.objective.kind !== 'bell') issues.push({ code: 'flat', message: `the structure holds ${((pe0 - floor) / 1000).toFixed(1)} J over lying flat, under one ${block.toFixed(1)} kg block falling 1 h (${(least / 1000).toFixed(1)} J): nothing to bring down` });
+    if (pe0 - floor < least && def.objective.kind !== 'bell' && !def.mason) issues.push({ code: 'flat', message: `the structure holds ${((pe0 - floor) / 1000).toFixed(1)} J over lying flat, under one ${block.toFixed(1)} kg block falling 1 h (${(least / 1000).toFixed(1)} J): nothing to bring down` });
   }
 
   issues.push(...rackIssues(c, engine));
