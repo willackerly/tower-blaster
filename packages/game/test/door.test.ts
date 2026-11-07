@@ -1,6 +1,6 @@
 // The front door's formatting (door.ts) and the settings it edits (settings.ts): pure.
 import { describe, expect, it } from 'vitest';
-import { AFTERSHOCK_LEVELS, B1, B2, B3, BIG_LEVELS, CHORUS_LEVELS, compileLevel, FUSE_LEVELS, L1, L3, type LevelDef, LEVELS, RUBE_LEVELS, SERIES, TRIAL_LEVELS, UNDERCUT_LEVELS } from '@tb/keystone';
+import { AFTERSHOCK_LEVELS, B1, B2, B3, BIG_LEVELS, CHORUS_LEVELS, compileLevel, FUSE_LEVELS, L1, L3, type LevelDef, LEVELS, RUBE_LEVELS, SERIES, type Shot, TRIAL_LEVELS, U1, U2, UNDERCUT_LEVELS, WAVE_LEVELS } from '@tb/keystone';
 import { bestText, BULLET_TIME_HOW, doorHtml, doorLevels, doorMode, doorOnLoad, nextLevel, openerFor, preaimMode, rackText, seriesTitle, starTargets, thresholdText, TRIALS_BLURB } from '../src/door.ts';
 // PT18's own names, on a line of their own so the line above merges as main's.
 import { DOOR_CSS, SIEGE_TABLE_HOW } from '../src/door.ts';
@@ -27,7 +27,10 @@ describe('door options', () => {
   });
   it('keystone.preaim: auto offers the first level\'s opener on a first visit only; 1 every level with a line; 0 none', () => {
     const ace0 = B1.solutions!.ace![0];
-    expect(openerFor(B1, 0, 'auto', false)).toBe(ace0);
+    expect(openerFor(B1, 0, 'auto', false)).toBe(B1.solutions!.opener ?? ace0);
+    // A chosen opener (PT13) wins over the ace's first shot.
+    const chosen = { ...ace0!, power: 50 } as Shot;
+    expect(openerFor({ ...B1, solutions: { ...B1.solutions, opener: chosen } }, 0, 'auto', false)).toBe(chosen);
     expect(openerFor(B1, 0, 'auto', true)).toBeNull();
     expect(openerFor(B2, 1, 'auto', false)).toBeNull();
     expect(openerFor(B2, 1, '1', true)).toBe(B2.solutions!.ace![0]);
@@ -51,17 +54,20 @@ describe('door text', () => {
     expect(rackText(B1.rack)).toBe('3 bombs');
     expect(rackText(B2.rack)).toBe('1 bomb, 2 rams');
   });
-  it('star targets: objective, then the cast T2 and T3; uncast levels say so; heritage named for three stars', () => {
+  it('star targets: objective, then the cast T2 and T3; uncast levels the objective alone; heritage named for three stars', () => {
     expect(starTargets(compileLevel(B1), B1.stars)).toEqual({ targets: ['Bring 40% down', '70% down', '94% down'], short: ['40%', '70%', '94%'], cast: true });
     // Chorus (chorus.ts): fixed thresholds on the worlds cleared, so it counts as cast.
     expect(starTargets(compileLevel(CHORUS_LEVELS[0]!), undefined)).toEqual({ targets: ['Clear 32 of 64 worlds (fell every crown in each)', '…48 of 64', '…60 of 64'], short: ['32/64', '48/64', '60/64'], cast: true });
     const b2 = starTargets(compileLevel(B2), B2.stars);
     expect(b2.targets).toEqual(['Fell every crown', '770 points', '3,000 points, heritage intact']);
     expect(b2.short).toEqual(['all crowns', '770', '3,000']);
-    expect(starTargets(compileLevel(B3), undefined)).toEqual({ targets: ['Bring 40% down', 'targets coming soon', 'targets coming soon'], short: ['40%', '?', '?'], cast: false });
+    expect(starTargets(compileLevel(B3), undefined)).toEqual({ targets: ['Bring 40% down', '', ''], short: ['40%', '', ''], cast: false });
     // Par levels (parStars): two stars one shot over par, three in par; heritage named where the level has some.
     expect(starTargets(compileLevel(L1), undefined)).toMatchObject({ targets: [expect.any(String), '…in 2 shots', '…in par (1 shot)'], short: [expect.any(String), '2 shots', 'par 1'], cast: true });
     expect(starTargets(compileLevel(L3), undefined).targets.slice(1)).toEqual(['…in 3 shots', '…in par (2 shots), heritage intact']);
+    // Undercut's par puzzles count pulls.
+    expect(starTargets(compileLevel(U1), undefined)).toEqual({ targets: ['Fell every crown', '…in 3 pulls', '…in par (2 pulls)'], short: ['all crowns', '3 pulls', 'par 2'], cast: true });
+    expect(starTargets(compileLevel(U2), undefined).targets[2]).toBe('…in par (2 pulls), heritage intact');
   });
   it('B3\'s stars show from stars.json the moment they land (simulated drop-in, then the landed stars)', () => {
     const cast = { ...UNCAST, stars: { metric: 'collapse' as const, t2: 0.5, t3: 0.62, hash: compileLevel(B3).hash } };
@@ -101,16 +107,16 @@ describe('door levels', () => {
   });
   it('every series shows under its title, in the game\'s order; the trials behind a toggle, closed and uncompiled until opened', () => {
     expect(GAME_SERIES.flat().map((d) => d.id).sort()).toEqual(SERIES.flat().map((d) => d.id).sort());
-    expect([seriesTitle('b2'), seriesTitle('L1'), seriesTitle('U3'), seriesTitle('F1'), seriesTitle('a2'), seriesTitle('t-s4'), seriesTitle('S4')]).toEqual(['Spectacle', 'Chamber', 'Undercut', 'Fuse & Fold', 'Aftershock', 'Trials · unrated', '']);
+    expect([seriesTitle('b2'), seriesTitle('L1'), seriesTitle('U3'), seriesTitle('F1'), seriesTitle('a2'), seriesTitle('w4'), seriesTitle('t-s4'), seriesTitle('S4')]).toEqual(['Spectacle', 'Chamber', 'Undercut', 'Fuse & Fold', 'Aftershock', 'Wavefront', 'Trials · unrated', '']);
     const all = GAME_SERIES.flat(), compiled: string[] = [];
     const compile = (d: (typeof all)[number]) => { compiled.push(d.id); return compileLevel(d); };
     const closed = doorLevels(all, () => null, compile, (d) => d.id.startsWith('T-'));
-    expect(compiled).toEqual([...BIG_LEVELS, ...LEVELS, ...UNDERCUT_LEVELS, ...RUBE_LEVELS, ...FUSE_LEVELS, ...AFTERSHOCK_LEVELS, ...CHORUS_LEVELS].map((d) => d.id));
+    expect(compiled).toEqual([...BIG_LEVELS, ...LEVELS, ...UNDERCUT_LEVELS, ...RUBE_LEVELS, ...FUSE_LEVELS, ...AFTERSHOCK_LEVELS, ...WAVE_LEVELS, ...CHORUS_LEVELS].map((d) => d.id));
     // A card's data-arg is its index in the page's whole list, skipped trials or not.
     expect(closed.map((l) => l.index)).toEqual(compiled.map((_, i) => i));
     const shut = doorHtml({ levels: closed, current: 3, settings: DEFAULT_SETTINGS, howTo: false, advanced: false, trials: { count: TRIAL_LEVELS.length, open: false } });
-    expect([...shut.matchAll(/<h2 class="series-head">([^<]*)</g)].map((x) => x[1])).toEqual(['Spectacle', 'Chamber', 'Undercut', 'Rube Lab', 'Fuse &#38; Fold', 'Aftershock', 'Chorus']);
-    expect(shut.match(/class="card[ "]/g)).toHaveLength(11 + RUBE_LEVELS.length + FUSE_LEVELS.length + AFTERSHOCK_LEVELS.length + CHORUS_LEVELS.length);
+    expect([...shut.matchAll(/<h2 class="series-head">([^<]*)</g)].map((x) => x[1])).toEqual(['Spectacle', 'Chamber', 'Undercut', 'Rube Lab', 'Fuse &#38; Fold', 'Aftershock', 'Wavefront', 'Chorus']);
+    expect(shut.match(/class="card[ "]/g)).toHaveLength(11 + RUBE_LEVELS.length + FUSE_LEVELS.length + AFTERSHOCK_LEVELS.length + WAVE_LEVELS.length + CHORUS_LEVELS.length);
     expect(shut).toContain(`data-act="trials" class="series-head trials-head" aria-expanded="false">Trials · unrated (${TRIAL_LEVELS.length}) ▸</button>`);
     expect(shut).not.toContain(TRIALS_BLURB.slice(0, 20));
     expect(shut).toContain('class="card current" data-act="level" data-arg="3"');
@@ -126,7 +132,7 @@ describe('door levels', () => {
     // Play still opens the first rated level (B1), though a trial is loaded; Back names the trial.
     expect(html).toContain(`Play · ${B1.name}`);
     expect(html).toContain('Back to Domino Run');
-    // A trial is uncast: one row for two and three stars.
+    // A trial is uncast: the objective's row alone.
     expect(open.find((l) => l.id === 'T-S4')).toMatchObject({ trial: true, cast: false, series: 'Trials · unrated', blocks: 10000 });
   });
   it('markup: a card per level marking earned stars, the next and the loaded one, every action wired', () => {
@@ -164,10 +170,22 @@ describe('door levels', () => {
     expect(closed).toContain('data-act="how"');
     expect(closed.match(/class="card[ "]/g)).toHaveLength(5);
   });
-  it('an uncast level shows one row for two and three stars', () => {
+  it('an uncast level shows the objective\'s row and one star slot, and no placeholder (PT7)', () => {
     const html = doorHtml({ levels: doorLevels([UNCAST], () => null), current: 0, settings: DEFAULT_SETTINGS, howTo: false, advanced: false });
-    expect(html.match(/<li /g)).toHaveLength(2);
-    expect(html.match(/targets coming soon/g)).toHaveLength(1);
+    expect(html.match(/<li /g)).toHaveLength(1);
+    expect(html).toContain('<span class="earned"></span><span class="unearned">☆</span>');
+    expect(html).not.toMatch(/coming soon|★★/);
+  });
+  it('no card on the door, rated or trial, says "coming soon" or shows a "?" target (PT7)', () => {
+    const levels = doorLevels(SERIES.flat(), () => null);
+    const html = doorHtml({ levels, current: 0, settings: DEFAULT_SETTINGS, howTo: false, advanced: false, trials: { count: TRIAL_LEVELS.length, open: true } });
+    const cards = html.match(/<button class="card[\s\S]*?<\/button>/g)!;
+    expect(cards.length).toBe(SERIES.flat().length);
+    for (const card of cards) {
+      expect(card, card.slice(0, 120)).not.toMatch(/coming soon/i);
+      const targets = card.match(/<ul class="targets">([\s\S]*?)<\/ul>/)![1]! + card.match(/<div class="short">([\s\S]*?)<\/div>/)![1]!;
+      expect(targets, card.slice(0, 120)).not.toContain('?');
+    }
   });
   it('escapes level text', () => {
     const [l] = doorLevels([{ ...L1, name: '<b>x</b>' }], () => null);

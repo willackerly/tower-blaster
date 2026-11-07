@@ -10,14 +10,17 @@ import { camera } from './camera.ts';
 import { coats } from './coats.ts';
 import { follow } from './follow.ts';
 import { frames } from './frames.ts';
+import { frozenAim } from './frozenaim.ts';
 import { frozenLook } from './frozenlook.ts';
 import { fx } from './fx.ts';
 import { handoff } from './handoff.ts';
 import { hitStop } from './hitstop.ts';
+import { impact } from './impact.ts';
 import { launch } from './launch.ts';
 import { layout } from './layout.ts';
 import { look } from './look.ts';
 import { marks } from './marks.ts';
+import { view } from './openview.ts';
 import { pullAnim } from './pullanim.ts';
 import { quality } from './quality.ts';
 import { rapid } from './rapid.ts';
@@ -31,6 +34,7 @@ import { spent } from './spent.ts';
 import { tailSkip } from './tailskip.ts';
 import { turnView } from './turnview.ts';
 import { undoMB } from './undo.ts';
+import { xray } from './xray.ts';
 
 export const OPTIONS = [
   hitStop,
@@ -51,6 +55,9 @@ export const OPTIONS = [
   launch,
   balls,
   marks,
+  view,
+  impact,
+  xray,
   coats,
   sun,
   layout,
@@ -62,4 +69,5 @@ export const OPTIONS = [
   pullAnim,
   frozenLook,
   chorusViewOption,
+  frozenAim,
 ] as const;

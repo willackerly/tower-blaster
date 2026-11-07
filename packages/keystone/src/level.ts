@@ -4,7 +4,7 @@
 // hash pins the exact scene a recorded solution was made against.
 import { type BodyDesc, massOf, quantiseVec3, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { DEFAULT_GAP, DEFAULT_UNIT, encodeTag, GRAVITY, MATERIALS, materialId, type MaterialName, type Role, ROLES } from './materials.ts';
-import { peOf_mJ, SETTLE_RULES, type SettleRule } from './rules.ts';
+import { checkRunWindow, peOf_mJ, SETTLE_RULES, type SettleRule } from './rules.ts';
 import { type Arm, armLoad, chargeIssues, levelArm, rackArms } from './arsenal.ts';
 import { loadIssues, loadTier } from '@tb/weapons';
 import { chargeWeaponOf, isLaunchItem, isRackItem, itemRef, type LevelWeapon, PLUNGER, QUAKE, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY, weaponOf } from './rack.ts';
@@ -34,8 +34,13 @@ export interface CourseOverride {
  * cube of it to the world (C8, engine-api pinned.ts): bedrock, a plinth or a curb that never moves.
  */
 export interface BlockPart { kind: 'block'; at: Vec3; size: Vec3; material: MaterialName; role?: Role; courses?: CourseOverride[]; pinned?: true }
-/** One box body; `at` is (centre x, bottom y, centre z) and `half` its half-extents, in h. `pinned` as BlockPart's. */
-export interface BoxPart { kind: 'slab' | 'rod'; at: Vec3; half: Vec3; material: MaterialName; role?: Role; pinned?: true }
+/**
+ * One box body; `at` is (centre x, bottom y, centre z) and `half` its half-extents, in h. `pinned` as BlockPart's.
+ * `fixed`: a pull cannot take it (Session.pullRefusal), as crowns and heritage; unlike a pinned part it moves and
+ * falls like any body. Undercut's table tops and beams are fixed, so a level of pulls is solved under them, not
+ * by pulling them out.
+ */
+export interface BoxPart { kind: 'slab' | 'rod'; at: Vec3; half: Vec3; material: MaterialName; role?: Role; pinned?: true; fixed?: true }
 /**
  * One box at a free pose (the build tool's piece, placement.ts): `at` is its centre in h (not cells: the
  * lattice pitch does not apply, so a piece goes exactly where it was placed), `half` its half-extents in h,
@@ -130,8 +135,13 @@ export const lowerIsBetter = (metric: StarMetric): boolean => metric === 'skylin
 /**
  * A level's star thresholds, as a cast set them. `waived` names cast gates that failed and were accepted as a
  * documented call (keystone-lab `--waive`; the level's notes say why), so the stars file says which stars rest on one.
+ * `agrees` names engines other than `engine` whose cloud of the cast's best line passed the cross-device gate
+ * (keystone-lab `--cloud-of`, cloudCheck): the stars hold there too, so the game records them there (game onEngine).
  */
-export interface StarsDef { metric: StarMetric; t2: number; t3: number; best?: number; castOn?: string; engine?: string; hash?: string; n?: number; seed?: number; waived?: string[] }
+export interface StarsDef { metric: StarMetric; t2: number; t3: number; best?: number; castOn?: string; engine?: string; agrees?: string[]; hash?: string; n?: number; seed?: number; waived?: string[] }
+
+/** Whether stars `s` hold on engine `kind`: cast there, or checked there by the cross-device gate (StarsDef.agrees). */
+export const starsHoldOn = (s: StarsDef, kind: string): boolean => s.engine === undefined || s.engine === kind || (s.agrees ?? []).includes(kind);
 
 /**
  * x as a StarsDef, or throws naming `where` and the field at fault: the check a stars file (big-levels.ts
@@ -146,7 +156,8 @@ export function checkStars(x: unknown, where = 'stars'): StarsDef {
   for (const k of ['best', 'n', 'seed']) if (o[k] !== undefined && (typeof o[k] !== 'number' || !Number.isFinite(o[k]))) throw new Error(`${where}.${k} must be a finite number when given: ${String(o[k])}`);
   for (const k of ['castOn', 'engine', 'hash']) if (o[k] !== undefined && typeof o[k] !== 'string') throw new Error(`${where}.${k} must be a string when given: ${String(o[k])}`);
   if (o.waived !== undefined && (!Array.isArray(o.waived) || !o.waived.length || !o.waived.every((g) => typeof g === 'string' && g.length > 0))) throw new Error(`${where}.waived must be a non-empty list of gate names when given: ${JSON.stringify(o.waived)}`);
-  const known = new Set(['metric', 't2', 't3', 'best', 'castOn', 'engine', 'hash', 'n', 'seed', 'waived']);
+  if (o.agrees !== undefined && (!Array.isArray(o.agrees) || !o.agrees.length || !o.agrees.every((g) => typeof g === 'string' && g.length > 0 && g !== o.engine))) throw new Error(`${where}.agrees must be a non-empty list of engines other than its own when given: ${JSON.stringify(o.agrees)}`);
+  const known = new Set(['metric', 't2', 't3', 'best', 'castOn', 'engine', 'agrees', 'hash', 'n', 'seed', 'waived']);
   for (const k of Object.keys(o)) if (!known.has(k)) throw new Error(`${where}: unknown field ${k}`);
   const lower = lowerIsBetter(o.metric as StarMetric), t2 = o.t2 as number, t3 = o.t3 as number;
   if (lower ? t3 > t2 : t3 < t2) throw new Error(`${where}: t3 (${t3}) is easier than t2 (${t2}) for ${String(o.metric)}`);
@@ -191,8 +202,13 @@ export interface LevelDef {
   launcher: LauncherDef;
   /** Leverage for the gold badge (LevelScore.gold; it gates no star since 2026-11-06, docs/game/stars.md), set from bot runs; DEFAULT_GOLD when absent. */
   lGold?: number;
-  /** Recorded solutions, replayed by tests. */
-  solutions?: { par?: Shot[]; ace?: Shot[] };
+  /**
+   * Recorded solutions, replayed by tests. `opener` is the pre-aimed first shot a first visit is offered
+   * (the door's Fire button), chosen to win the level alone (PT13: keystone-lab opener.ts); absent, the
+   * opener is the ace's or the par line's first shot. `teach`: the opener shows the level's mechanic without winning it
+   * (Wavefront's starter push, PT39), so a first visit is offered it on any level of its series, not only the first.
+   */
+  solutions?: { par?: Shot[]; ace?: Shot[]; opener?: Shot; teach?: true };
   /** Default 'par': every level before the spectacle mode, scored as before. */
   scoring?: Scoring;
   /** Outcome levels: the cast star thresholds; absent, stars are uncast (only the objective's star). */
@@ -209,12 +225,29 @@ export interface LevelDef {
    */
   settle?: SettleRule;
   /**
+   * A wave level's run window (roadmap C22, docs/game/wavefront.md), seconds over 30 and at most RUN_WINDOW_MAX: a shot
+   * settles by it at the latest instead of the settle rule's cap, and not before its wave's front has died (rules.ts
+   * RUN_WINDOW_MAX's note: no stragglers, and v4's steady collapse only while nothing is fast). Same settle rule
+   * otherwise. Absent: the rule's cap. Part of the hash when given.
+   */
+  runWindow?: number;
+  /**
    * Bullet Time (C2, docs/game/undercut-bullet-time.md): the most shots that may go in while another
    * runs, each cutting it (rapid fire, Session.fire); 0 allows none. Absent: no limit. The game lets
    * the player freeze the world to aim them; a freeze costs nothing until a shot goes in. Part of the
    * hash (URL key keystone.freeze), so stars cast without a budget never show with one.
    */
   freeze?: number;
+  /**
+   * Wavefront's Cut (docs/game/wavefront.md): a pull goes in only while a shot runs, so a wave is cut live,
+   * never before it starts (with rapid fire, or in Bullet Time when the player has rapid fire off). Part of the hash.
+   */
+  cut?: true;
+  /**
+   * Parts the player is meant to push first (Wavefront's starter slabs, PT39): the game marks their bodies with the
+   * crosshair and the HUD names them until the first shot. Presentation only, so not part of the hash.
+   */
+  push?: number[];
   /** The physics the level plays at (default Keystone's: PHYSICS_DEFAULTS). Part of the level hash, so stars cast at one setting never show at another. */
   physics?: PhysicsBlock;
   /** Aftershock (quake.ts): what the quake dial allows, for a level whose rack holds a quake. Part of the hash. */
@@ -287,14 +320,21 @@ export interface PhysicsBlock {
    * (the restitution pass does not know sleepers yet). Rapier sleeps either way (SceneDesc.sleep).
    */
   sleep?: boolean;
+  /**
+   * Every structure body starts asleep (engine-api asleep.ts, BodyDesc.asleep; roadmap C22): a sleeper from the first
+   * step until the wave reaches it, never solved before then, so a 10k field costs nothing to stand and its pre-settle
+   * steps are skipped. Needs sleep (an engine that does not sleep runs the bodies awake; Rapier does). Part of the
+   * hash when on.
+   */
+  asleep?: boolean;
 }
 
 /**
  * Keystone's settings, as every par line is pinned at: 40 iterations, 3e-5 m slop, no Bounce, 300
  * pre-settle steps (driver.ts AVBD_ITERATIONS, AVBD_GAP_SLOP, PRESETTLE_STEPS give the reasons).
  */
-export const PHYSICS_DEFAULTS = { iterations: 40, gapSlop: 3e-5, bounce: null, presettle: 300, sleep: false } as const satisfies PhysicsBlock;
-export type ResolvedPhysics = { iterations: number; gapSlop: number; bounce: number | null; presettle: number; sleep: boolean; pairsPerBody?: number };
+export const PHYSICS_DEFAULTS = { iterations: 40, gapSlop: 3e-5, bounce: null, presettle: 300, sleep: false, asleep: false } as const satisfies PhysicsBlock;
+export type ResolvedPhysics = { iterations: number; gapSlop: number; bounce: number | null; presettle: number; sleep: boolean; asleep: boolean; pairsPerBody?: number };
 
 /**
  * Solver iterations every Mason level plays at (LevelDef.mason, mason.ts), whatever its physics block, a URL override
@@ -308,7 +348,7 @@ export function physicsOf(d: LevelDef): ResolvedPhysics {
   return {
     iterations: d.mason ? MASON_ITERATIONS : p.iterations ?? PHYSICS_DEFAULTS.iterations, gapSlop: p.gapSlop ?? PHYSICS_DEFAULTS.gapSlop,
     bounce: p.bounce === undefined ? PHYSICS_DEFAULTS.bounce : p.bounce, presettle: p.presettle ?? PHYSICS_DEFAULTS.presettle,
-    sleep: p.sleep ?? PHYSICS_DEFAULTS.sleep,
+    sleep: p.sleep ?? PHYSICS_DEFAULTS.sleep, asleep: p.asleep ?? PHYSICS_DEFAULTS.asleep,
     ...(p.pairsPerBody !== undefined ? { pairsPerBody: p.pairsPerBody } : {}),
   };
 }
@@ -325,6 +365,8 @@ export function checkPhysics(p: PhysicsBlock, where = 'physics'): void {
   if (p.bounce !== undefined && p.bounce !== null && !(p.bounce >= 0 && p.bounce <= 1)) throw new Error(`${where}.bounce must be from 0 to 1, or null for off: ${p.bounce}`);
   if (p.ice !== undefined) checkIce(p.ice, `${where}.ice`);
   if (p.sleep !== undefined && typeof p.sleep !== 'boolean') throw new Error(`${where}.sleep must be true or false: ${p.sleep}`);
+  if (p.asleep !== undefined && typeof p.asleep !== 'boolean') throw new Error(`${where}.asleep must be true or false: ${p.asleep}`);
+  if (p.asleep === true && p.sleep !== true) throw new Error(`${where}.asleep needs ${where}.sleep: true (bodies start asleep only where the engine sleeps)`);
   if (p.sleep === true && p.bounce !== undefined && p.bounce !== null) throw new Error(`${where}.sleep does not go with bounce yet (the restitution pass does not know sleepers): bounce ${p.bounce}`);
 }
 
@@ -338,6 +380,7 @@ function physicsKey(p: PhysicsBlock | undefined): PhysicsBlock | undefined {
   if (p.presettle !== undefined && p.presettle !== PHYSICS_DEFAULTS.presettle) out.presettle = p.presettle;
   if (p.pairsPerBody !== undefined) out.pairsPerBody = p.pairsPerBody;
   if (p.sleep !== undefined && p.sleep !== PHYSICS_DEFAULTS.sleep) out.sleep = p.sleep;
+  if (p.asleep !== undefined && p.asleep !== PHYSICS_DEFAULTS.asleep) out.asleep = p.asleep;
   return Object.keys(out).length ? out : undefined;
 }
 
@@ -405,6 +448,8 @@ export interface BodyMeta {
   part: Uint16Array;
   crowns: Int32Array;
   heritage: Int32Array;
+  /** Bodies of fixed parts (BoxPart.fixed): no pull takes them. */
+  fixed: Int32Array;
 }
 
 export interface CompiledLevel {
@@ -446,12 +491,13 @@ export function hashString(s: string): string {
 export function compileLevel(def: LevelDef): CompiledLevel {
   if (def.physics) checkPhysics(def.physics);
   if (def.settle !== undefined) checkSettle(def.settle);
+  if (def.runWindow !== undefined) checkRunWindow(def.runWindow);
   if (def.quake !== undefined) checkQuakeRules(def.quake);
   if (def.heritage !== undefined && def.heritage !== 'pose' && def.heritage !== 'standing') throw new Error(`heritage must be pose or standing: ${String(def.heritage)}`);
   const h = unitOf(def), p = pitchOf(def) * h;
   const bounce = physicsOf(def).bounce;
   const bodies: BodyDesc[] = [];
-  const roles: number[] = [], mats: number[] = [], parts: number[] = [];
+  const roles: number[] = [], mats: number[] = [], parts: number[] = [], fixed: number[] = [];
   const add = (b: BodyDesc, role: Role, material: MaterialName, part: number) => { bodies.push(b); roles.push(ROLE_ID[role]); mats.push(materialId(material)); parts.push(part); };
 
   def.parts.forEach((part, pi) => {
@@ -487,6 +533,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
       const half = part.half.map((x) => x * h) as Vec3;
       const pos: Vec3 = [part.at[0] * p, part.at[1] * h + half[1], part.at[2] * p];
       const role = part.role ?? 'plain';
+      if (part.fixed) fixed.push(bodies.length);
       add(body(pos, half, part.material, role, pi, undefined, part.pinned === true), role, part.material, pi);
     }
   });
@@ -497,6 +544,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
     half: new Float64Array(3 * n), home: new Float64Array(3 * n), band: new Uint8Array(n), part: Uint16Array.from(parts),
     crowns: Int32Array.from(roles.flatMap((r, i) => (r === ROLE_ID.crown ? [i] : []))),
     heritage: Int32Array.from(roles.flatMap((r, i) => (r === ROLE_ID.heritage ? [i] : []))),
+    fixed: Int32Array.from(fixed),
   };
   let height = 0;
   bodies.forEach((b, i) => {
@@ -518,12 +566,14 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   };
   // Bounce: the structure and the ground at e (the engine's restitution pass is turned on from the same block).
   if (bounce !== null) for (const b of bodies) b.restitution = bounce;
+  // physics.asleep: the structure starts asleep (engine-api asleep.ts).
+  if (physicsOf(def).asleep) for (const b of bodies) if (!b.pinned) b.asleep = true;
   const lot = { min: [def.lot.min[0] * p, def.lot.min[1] * p] as [number, number], max: [def.lot.max[0] * p, def.lot.max[1] * p] as [number, number] };
   const frame: ShotFrame = { unit: h, pitch: pitchOf(def), centre: [(lot.min[0] + lot.max[0]) / 2, (lot.min[1] + lot.max[1]) / 2], launcher: def.launcher };
   // Solutions don't change the scene, and the stars are cast against the hash (StarsDef.hash).
   // scoring 'par', autobank false, the scoring's settle rule and physics at its defaults are the defaults, so writing them out names the same level;
   // custom marks overrides the hash already holds.
-  const { solutions: _omit, stars: _stars, custom: _custom, ...geometry } = def;
+  const { solutions: _omit, stars: _stars, custom: _custom, push: _push, ...geometry } = def;
   if (geometry.scoring === 'par') delete geometry.scoring;
   if (geometry.autobank === false) delete geometry.autobank;
   // The settle rule a level plays by hashes as absent when it is the one its scoring used before v3 (par v1, outcome v2), so those

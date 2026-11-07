@@ -121,7 +121,8 @@ Every ★★ left is a clear that broke heritage, under both rules.
 
 Unchanged. B1 and B2 star on their cast metric (collapse, points) at the bot's T2 and T3, which the
 HUD's Down bar marks while you play, and nothing ends an outcome level at one shot but the
-player's own bank. Levels with no cast yet (B3 to B5, Undercut's U1 to U3, the trials) earn only
-the objective's star and say "targets coming soon"; a clean minimum-pull clear of U1 is ★ of
-three until a pull cast lands. Giving Undercut's crown levels a par-style fallback (they have
-meaningful pars) is the follow-up, not done here.
+player's own bank. Levels with no cast yet (U3 until its pull cast lands, the trials) earn only
+the objective's star, and the door shows that star alone: one target row and one star slot, no
+placeholder (2026-11-06, the agent playtest's PT7, which read "targets coming soon" as unfinished).
+Undercut's crown levels U1 and U2 are par puzzles since then (undercut-bullet-time.md): three
+stars in par, one less per pull over it.

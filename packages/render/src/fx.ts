@@ -10,6 +10,8 @@
 //           a ball and never as a bomb, and its spin shows)
 //           bits 20-21 mark: on a box, an engraved glyph (marks.ts: 1 hit, 2 save, 3 keep); kept by setFx until clearFx
 //           bits 22-23 coat: on a box, its own colour instead of the look's (coats.ts: 1 gilt, 2 glaze, 3 paint: the tint is its colour); kept likewise
+//           bits 24-25 xray: on a box, an objective drawn through what hides it while Renderer.xray is on (1 crown,
+//           2 heritage, 3 a crown to hold: drawn as heritage); kept likewise
 //   word 2  f32 flash start (frame time, seconds)
 //   word 3  f32 flash duration (seconds); 0 = emissive is steady
 //
@@ -20,12 +22,30 @@ import { COAT_MASK, COAT_SHIFT, type CoatId } from './coats.ts';
 import { MARK_MASK, MARK_SHIFT, type MarkId } from './marks.ts';
 
 export const FX_WORDS = 4;
+/**
+ * The scene target's alpha on what the frozen grade leaves in colour (Bullet Time, PT33; post.ts): an objective,
+ * a fired ball, the overlays (the aim's beads). Opaque passes write 1 everywhere else and the clear is 1; the
+ * blended passes leave alpha alone, except the aim's reach and impact marker, which add their coverage
+ * (reach.ts). The composite reads the keep as clamp(alpha - 1, 0, 1), so nothing at or under 1 is kept.
+ */
+export const KEEP_ALPHA = 2;
 /** HDR multiple of the albedo at emissive 1 (blooms well above 1). */
 export const FX_EMISSIVE_MAX = 16;
 export const FX_ANCHOR = 1 << 16;
 export const FX_PAINT = 1 << 17;
 export const FX_MATTE = 1 << 18;
 export const FX_BAND = 1 << 19;
+/** The x-ray kind's bits in fx word 1 (Renderer.setXray, shaders.ts fsXray): 1 crown, 2 heritage. */
+export const XRAY_SHIFT = 24;
+export const XRAY_MASK = 3 << XRAY_SHIFT;
+/** Bits of fx word 1 that a bulk setFx keeps (the engraved mark, the coat and the x-ray kind): set by their own calls, cleared by clearFx. */
+export const FX_KEEP = MARK_MASK | COAT_MASK | XRAY_MASK;
+/** The x-ray's colours, linear, times the look's sun luminance: crown gold and heritage teal, the same in every look (PT15). */
+export const XRAY_HIT: readonly number[] = [1.0, 0.6, 0.06];
+export const XRAY_SAVE: readonly number[] = [0.04, 0.7, 0.66];
+/** The x-ray's opacity: a faint fill, and this much more along a face's edges. */
+export const XRAY_FILL = 0.14;
+export const XRAY_EDGE = 0.66;
 /** The band's half-height on a unit sphere (|y| below it, in body space): a band of 30% of the diameter. */
 export const BAND_HALF = 0.3;
 
@@ -91,7 +111,7 @@ export function packFx(fx: FxOptions, out: Uint32Array, o = 0, now = 0): void {
   out[o + 3] = fx.flash ? bits(fx.flash) : 0;
 }
 
-export interface Fx { tint: V3; emissive: number; scale: number; anchor: boolean; paint: boolean; matte: boolean; band: boolean; mark: MarkId; coat: CoatId; flashAt: number; flash: number }
+export interface Fx { tint: V3; emissive: number; scale: number; anchor: boolean; paint: boolean; matte: boolean; band: boolean; mark: MarkId; coat: CoatId; xray: number; flashAt: number; flash: number }
 
 export function unpackFx(w: Uint32Array, o = 0): Fx {
   const w0 = w[o]!, w1 = w[o + 1]!;
@@ -105,6 +125,7 @@ export function unpackFx(w: Uint32Array, o = 0): Fx {
     band: (w1 & FX_BAND) !== 0,
     mark: ((w1 & MARK_MASK) >>> MARK_SHIFT) as MarkId,
     coat: ((w1 & COAT_MASK) >>> COAT_SHIFT) as CoatId,
+    xray: (w1 & XRAY_MASK) >>> XRAY_SHIFT,
     flashAt: float(w[o + 2]!),
     flash: float(w[o + 3]!),
   };
@@ -123,6 +144,12 @@ fn fxScale(w1: u32) -> FxScale {
 }
 fn fxTint(w0: u32) -> vec3f {
   return 1.0 - unpack4x8unorm(w0).rgb;
+}
+// The scene target's alpha for this record (post.ts KEEP_*): above 1 marks a pixel the frozen grade leaves in
+// colour (Bullet Time, PT33). An objective box (an x-ray kind: a crown, heritage, a crown to hold) or a fired
+// ball (painted or banded) writes KEEP_ALPHA; everything else 1, as before.
+fn fxKeep(w1: u32) -> f32 {
+  return select(1.0, ${KEEP_ALPHA}, (w1 & (${XRAY_MASK >>> 0}u | ${FX_PAINT}u | ${FX_BAND}u)) != 0u);
 }
 // Emissive multiple of the albedo at frame time t.
 fn fxGlow(w: vec4u, t: f32) -> f32 {

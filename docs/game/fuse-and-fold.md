@@ -38,6 +38,32 @@ A fold level ships only if, over 8 nudged builds on the reference engine, the be
 - Markers on the charges' columns, coloured by delay (yellow at 0 s through orange to red at 2 s), so the sweep reads in the scene. The selected row's marker is larger.
 - **Plunger** (button, key Enter) fires every charge at its delay. The camera does not move (Will's rule: only on player input).
 
+### Panel layout (agent playtest round 2, PT21)
+
+In round 2 the panel covered the result card on 9- and 12-charge levels at desktop size, and on every phone run. On F4 at phone size, its 12 rows also pushed the Plunger off the screen. The layout rules now:
+
+- **The card owns the screen at the result.** The panel hides while the card shows (`body.ended`): the plunger has fired by then, so the panel has nothing left to do. Undo or Retry brings it back. The card also gets `z-index: 5`, so it stays above every panel.
+- **Only the rows scroll.** The panel is a flex column, and only `.rows` scrolls. The head (compass), the Sweep buttons, the spacing and the Plunger stay in sight at any panel height.
+- **Phones fold the rows.** On a phone (`max-width: 640px`, or `max-height: 500px` on its side), the per-charge rows hide behind a "Delays ▸ N charges" button, and the eight directions sit in one row. The Sweep sets every delay, so most rounds never open the rows.
+- **Upright, the panel stands on the HUD's tray.** On a docked phone HUD (`FusePanel.dock`, set each frame by `play.ts placeFuse`) it sits on the tray and its hints, which hold the rack, Undo and Retry, instead of covering them. It is capped at `FUSE_PANEL_SHARE` of the height, now 35% (it was 45%). When the HUD is not docked (Layout classic), the upright framing still uses that share as its guess for the panel's band.
+- **Sideways, the panel runs down the right side** under the Menu button, 300 px wide. The docked HUD's rail is on the left.
+- **The opening view frames around the panel.** On a docked phone, the measured band (`dockedHud`, `__game.openingHud`) includes the panel's box. The opening view then frames the lot clear of it, set at load with no camera move.
+
+Alternatives considered:
+
+- **Raise the card above the panel and leave the panel shown.** Rejected: on a phone the panel would still sit under the card's edges and take taps meant for the scene. A panel left showing after the plunger has fired also only invites a press that the game refuses.
+- **A sticky Plunger inside one scrolling panel.** Tried first. It needs an opaque backing so the rows do not show through it, and that backing reads as a dark band against the translucent panel. The flex column does the same job without a backing.
+- **Hide the docked tray on plunger levels.** Rejected: the tray holds Undo, Retry and the rack's chip, and the round needs them.
+- **Make the rows smaller instead of folding them.** Rejected: 12 rows at a usable touch height do not fit in a third of a phone screen. Folding keeps them full size when the player opens them.
+
+`packages/game/test/fuse-layout-e2e.test.ts` checks these rules:
+
+- F4 at 1280 x 800, at 390 x 844 and at 844 x 390. At load, the Plunger is inside the screen and on top at its centre. At the result, the panel is gone, and every card button, Next included, is inside the screen and on top. After Retry, the Plunger is back.
+- F2, F4 and F5 upright. The Plunger is in sight with the rows folded, with them unfolded, and after scrolling to the last row. The panel is under the strip, on the tray, at most 35% of the height, and inside the opening view's band.
+- F4 sideways. The panel is on the right, inside the band.
+
+All seven cases fail on the old layout.
+
 ## Every charge fires
 
 A fold level's plunger must name every plunger charge (`Session.plungerRefusal`). Alternatives weighed:
@@ -88,6 +114,13 @@ Casts on the reference engine (Node, f64; seed 1; short recipe, 210 plays each).
 
 On F1 to F3 the GPU lands on the reference's T3 to the third decimal.
 
+**The game records these stars on the GPU (PT20).** The stars were cast on the reference, and the game plays on the GPU solver. So until agent playtest round 2, `onEngine` marked every F level custom ("Custom settings, so no stars are recorded"), and no player could earn a star. Each entry in stars.json now lists `"agrees": ["gpu"]`: the GPU's cloud of the best line passed the cross-device gate above, and the game records stars on an engine the cast was made on or checked on (keystone `starsHoldOn`). Write `agrees` only after a passing `--cloud-of` on that engine, with its numbers in this table. A game test runs over every rated level in the series: none opens custom on the default engine. Alternatives:
+- Hide the star rows until a GPU cast exists (PT7's rule for uncast levels). Rejected: the GPU check already holds the stars to the GPU, and F4's T3 already comes from the GPU's cloud. Hiding them would take away stars that the evidence supports.
+- Recast on SwiftShader in CI. Rejected: about 3 h a level, and CI test files must stay under 300 s.
+- Relabel the casts `engine: gpu`. Rejected: the file would no longer say where the cast ran.
+
+The Metal recast queued for the Mac will replace these entries with GPU casts.
+
 F5 needs two notes.
 - **Its T2 is above all at once** (0.33 against 0.26). Half its competent sweeps end at 0.34 or more, above the all-at-once 0.26: a sweep that misses the yard often still brings part of the tower down. On F1 to F4 the median competent sweep ends at the all-at-once value. Two stars still need a clear: stars require the objective.
 - **Its cast took 88 min here, over the 60 min budget gate.** The gate is judged on the M5 Max. Here the reference engine ran on this container's CPU at 36.7 ms a step over 144k steps. Every star gate passed (fair 0.84, skill 0.40, stable 0.017, no limits, complete), so the stars went into the file as cast. The alternative was recasting with `--budget-min 90`. That gives the same stars, because a cast is deterministic for its seed, and costs another 88 min. The budget is a property of the machine, and the Metal recast will measure it on the M5.
@@ -100,7 +133,32 @@ F4 is the exception. It is the wide frame with a two-sided window, and the noisi
 - Cast F4 on SwiftShader end to end (about 3 h here). Not needed: the GPU cloud of the best line is what T3 measures, and T2 does not move (it is the all-at-once value on every device). The cast's best lines are sweeps that the climb nudged a snap here and there: F1's best goes A2, A1, B2 and B1 at 0, 0.1, 0.9 and 1.2 s. A Metal recast of each level is queued for the Mac.
 
 
-## Sympathetic charges (step e)
+## Settle rule: v3, not v4
+
+Outcome levels settle by v4 since PT6b ([settle-v4.md](settle-v4.md)). F1 to F5 stay on v3, by decision, not as a pin waiting for a recast. v4 is v3, or a steady collapse: the shot ends once D has held within 0.005 for 2 s, however much still moves. A frame building can drop a storey, stand for longer than that, and then topple. v4 scores it standing.
+
+The evidence is a full v4 recast of all five on the reference engine (2026-11-07, seed 1, 210 plays each, the v3 casts' recipe):
+
+| level | v4 T2 / T3 (v3's) | plays compared | ends moved by more than 0.01 | of them: stand, then fall | charges cut short |
+|---|---|---|---|---|---|
+| F1 | 0.24 / 0.89 (same) | 210 | 0 | 0 | 0 |
+| F2 | 0.24 / 0.85 (same) | 136 | 8 | 2 | 6 |
+| F3 | 0.28 / 0.81 (0.29 / 0.81) | 210 | 8 | 2 | 6 |
+| F4 | 0.28 / 0.72 (same reference T3; the GPU's 0.69 stands) | 210 | 8 | 0 | 8 |
+| F5 | 0.33 / 0.74 (same) | 210 | 6 | 1 | 5 |
+
+A play is compared when both casts played the same line on the same build; F2's climb took another path after 136 plays.
+
+The order gate under v4 picks the same best lines with the same folds to the third decimal. The stars barely move because the moved plays are competent misses, not best lines. They come in two kinds:
+- **The frame stands, then falls.** F3's competent line 16 drops the frame a storey; v4 ends it 212 steps after its last charge at 0.291, and v3 waits for the fall at 0.717. F3 line 25 (0.290 against 0.678), F2 line 37 (0.222 against 0.388) and F5 line 45 (0.262 against 0.294) are the same. A player who timed a slow sweep would be scored on a building that falls seconds later, in front of them. This is the case that keeps v3 (fuse-levels.test reproduces line 16 on its build).
+- **Charges cut short.** Five to eight plays on each of F2 to F5 end on the step their last charge fires: the early charges drop nothing, so D holds, and v4's window keeps counting while the shot is held for the charges still to come. This is a v4 bug, not a property of the mode, and it can hit any outcome level whose shot is held for a charge or fuse still to go off (`Session.observe`'s `hold`). It is reported to the settle thread, with a fix: restart v4's windows when a hold ends.
+
+Alternatives:
+- Recast under v4 and drop the pin, as planned. Rejected: the stand-then-fall case scores a fall as a stand.
+- Lengthen v4's window on fold levels (`STEADY_STEPS` per level). Rejected: a new knob for one mode, and the stand can last longer than any fixed window that still helps the big levels.
+- Keep v3. **Chosen**: the casts, the gate and the stars all came from v3, so nothing moves, and Skip (K) already shortens a long wait.
+
+
 
 F5 puts relays on the fifth storey of an 8-storey 3 x 3 tower. A relay is C5's `relay`: armed at start, it cuts its host once jolted past 0.05 m or 0.5 m/s. A west sweep tips the tower, the jolt fires the relays, and the tower folds in two, landing shorter than its 20-cell height. The panel lists the relays under the timeline ("9 relays on storey 5: they go off when jolted") and the scene marks them in blue. The player cannot set them: they are part of the building.
 

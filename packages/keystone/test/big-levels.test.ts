@@ -2,7 +2,7 @@
 // compiles and validates clean on the GPU budget, is reachable by id and plays
 // on in its own series, and the shared building blocks hold their shapes.
 import { describe, expect, it } from 'vitest';
-import { AFTERSHOCK_LEVELS, B1, B2, B3, BIG_LEVELS, castStars, CHORUS_LEVELS, cathedralLevel, compileLevel, findLevel, FUSE_LEVELS, L2, LEVELS, levelById, RUBE_LEVELS, SERIES, SERIES_TITLES, seriesOf, thirdBondWall, TRIAL_LEVELS, UNDERCUT_LEVELS, validateLevel } from '@tb/keystone';
+import { AFTERSHOCK_LEVELS, B1, B2, B3, BIG_LEVELS, castStars, CHORUS_LEVELS, cathedralLevel, compileLevel, findLevel, FUSE_LEVELS, L2, LEVELS, levelById, RUBE_LEVELS, SERIES, SERIES_TITLES, seriesOf, thirdBondWall, TRIAL_LEVELS, UNDERCUT_LEVELS, validateLevel, WAVE_LEVELS } from '@tb/keystone';
 
 describe('big levels', () => {
   it.each(BIG_LEVELS.map((d) => d.id))('%s compiles and validates clean on the GPU, scored on outcome', (id) => {
@@ -80,7 +80,7 @@ describe('big levels', () => {
   it('ids are unique across the series; lookups find either series in any case, and refuse unknown ids naming both', () => {
     const ids = SERIES.flat().map((d) => d.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(SERIES).toEqual([LEVELS, BIG_LEVELS, UNDERCUT_LEVELS, RUBE_LEVELS, FUSE_LEVELS, AFTERSHOCK_LEVELS, CHORUS_LEVELS, TRIAL_LEVELS]);
+    expect(SERIES).toEqual([LEVELS, BIG_LEVELS, UNDERCUT_LEVELS, RUBE_LEVELS, FUSE_LEVELS, AFTERSHOCK_LEVELS, WAVE_LEVELS, CHORUS_LEVELS, TRIAL_LEVELS]);
     expect(SERIES_TITLES.length).toBe(SERIES.length);
     expect(seriesOf('u3')).toBe(UNDERCUT_LEVELS);
     expect(seriesOf('rl2')).toBe(RUBE_LEVELS);
@@ -91,9 +91,9 @@ describe('big levels', () => {
     expect(findLevel('B9')).toBeUndefined();
     expect(seriesOf('S4')).toBeUndefined();
     // Trial ids (T-...) carry a lower-case letter only in their drafts' names: the lookup is case-blind both ways.
-    expect(seriesOf('t-b1a')).toBe(TRIAL_LEVELS);
+    expect(seriesOf('t-b1b')).toBe(TRIAL_LEVELS);
     expect(levelById('t-s4').id).toBe('T-S4');
-    expect(() => levelById('B9')).toThrow(/unknown level B9; known: L1, L2, L3, L4, L5, B1, B2, B3, U1, U2, U3, RL1, RL2, RL3, RL4, RL5(, F\d)+, A1, A2, A3(, A\d)*, CH1, CH2, CH3 and \d+ trials \(T-S1 to T-W1\)/);
+    expect(() => levelById('B9')).toThrow(/unknown level B9; known: L1, L2, L3, L4, L5, B1, B2, B3, U1, U2, U3, RL1, RL2, RL3, RL4, RL5(, F\d)+, A1, A2, A3(, A\d)*(, W\d)+, CH1, CH2, CH3 and \d+ trials \(T-S3 to T-W1\)/);
   });
 
   it('a third-bond wall shifts every other course a third of a cube', () => {
