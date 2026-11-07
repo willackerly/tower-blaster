@@ -292,6 +292,16 @@ export function quietUnder(rule: SettleRule, r: Reductions, n: number, wave = fa
 export const frozenCandidate = (r: Reductions): boolean => r.maxSpeed < FROZEN_SPEED;
 
 /**
+ * Whether no settle run counts this step (settleUpdate's `inFlight`): the shot's ammo is still in free flight, or,
+ * under v4, a fired weapon is still to go off (`hold`: a live fuse, a charge or blast due later, a quake still
+ * shaking; Driver). Under v4 a steady D run kept counting through a hold, so a shot settled on the very step its
+ * last charge fired, before the charge did anything (F3's plunger line: v4 ended at step 421 with D 0.002, v3 at
+ * 492 with 0.289). v1 to v3 keep counting through a hold, as their casts were made: Session.observe still refuses
+ * their settle until the hold ends.
+ */
+export const settleHeld = (rule: SettleRule, inFlight: boolean, hold: boolean): boolean => inFlight || (hold && rule === 'v4');
+
+/**
  * One step of the settle rule (v1 unless given; v2 and v3 need the structure's body count n, v3 the
  * collapse D now, Session.liveCollapse). Settled SETTLE_QUIET consecutive quiet steps in, or (v3)
  * FROZEN_STEPS frozen ones, but never before SETTLE_MIN steps after the spawn, at once when nothing

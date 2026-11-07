@@ -208,7 +208,21 @@ export function objectiveText(o: Objective): string {
 }
 
 /** Why a pull is refused (Session.pullRefusal: crowns and heritage are the objective's). */
-export const PULL_HINT = 'Crowns and heritage stay: pull a plain block';
+export const PULL_HINT = 'Crowns, heritage and fixed beams stay: pull a plain block';
+/**
+ * A par level judged on collapse (Wavefront's Steer and Cut levels): D now against the objective's share, so the
+ * player can read how far the wave got (agent playtest 2: no row showed it, and the crown row read 0 / 0).
+ */
+function parCollapseRow(min: number, s: HudState): string {
+  const d = s.collapse ?? 0;
+  return `<div class="row obj"><span>Down <b class="down${d > 0 ? '' : ' none'}">${pct(d)}</b></span><span class="${s.met ? 'ok' : ''}">bring ${pct(min)} down${s.met ? ' ✓' : ''}</span></div>`;
+}
+
+/** What to do first on a level with starter slabs (LevelDef.push: Wavefront, PT39), until the first shot. */
+export const PUSH_HINT = 'Hit a ⌖ marked slab high up to push it over and start the wave';
+
+/** Why a pull is refused on a Cut level while no shot runs (LevelDef.cut: pulls go in only while the wave runs). */
+export const CUT_HINT = 'Cut level: push first, then pull while the wave runs';
 
 /**
  * A hold level's crown row (Undercut's Hollow): its crowns are to be kept up, so the row says whether they
@@ -307,7 +321,7 @@ export function hudHtml(s: HudState, sheet = ''): string {
   // A Mason level fires nothing (its test is the shot): no power or height.
   const power = d.mason ? '' : sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake' ? (sel === 'quake' ? s.quake ?? '' : '') : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
   const height = d.mason || sel === 'drop' || sel === 'pull' || sel === 'plunger' || sel === 'quake' || s.launch === undefined ? '' : launchRow(s.launch);
-  const reach = s.pullRefused ? `<div class="${s.pullRefused === 'tapped' ? 'bad' : 'hint'} small pull-hint">${PULL_HINT}</div>` : s.reachable === false ? '<div class="bad small reach">Out of reach at this power</div>' : '';
+  const reach = s.pullRefused ? `<div class="${s.pullRefused === 'tapped' ? 'bad' : 'hint'} small pull-hint">${d.cut && s.phase !== 'running' ? CUT_HINT : PULL_HINT}</div>` : s.reachable === false ? '<div class="bad small reach">Out of reach at this power</div>' : '';
   const ctl = `<div class="ctl">${power}${height}</div>`;
   const pace = s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : '';
   if (s.duel !== undefined) {
@@ -326,11 +340,11 @@ export function hudHtml(s: HudState, sheet = ''): string {
     ? `<div class="row"><span>Shot ${s.strokes}</span>${d.objective.kind === 'hold' ? `<span>Pulled <b class="down${(s.pulled ?? 0) > 0 ? '' : ' none'}">${pct(s.pulled ?? 0)}</b></span>` : `<span>Down <b class="down${(s.collapse ?? 0) > 0 ? '' : ' none'}">${pct(s.collapse ?? 0)}</b></span>`}</div>
     ${s.ticks?.length ? meterHtml(d.objective.kind === 'hold' ? s.pulled ?? 0 : s.collapse ?? 0, s.ticks, d.objective.kind === 'hold' ? 'pulled' : 'down') : ''}
     <div class="row obj"><span>Objective</span><span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span></div>`
-    : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>`;
+    : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>${d.objective.kind === 'collapse' ? parCollapseRow(d.objective.min, s) : ''}${d.push?.length && s.strokes === 0 ? `<div class="hint small push-hint">${PUSH_HINT}</div>` : ''}`;
   const fz = s.freezes;
   const freezes = fz ? `<div class="row"><span>Freezes</span><span class="${fz.left ? '' : 'spent'}">${fz.left} / ${fz.total}</span></div>` : '';
   const crowns = d.mason ? '' : d.objective.kind === 'hold' ? keepRow(s.crownsDown, s.crownsTotal)
-    : !outcome || s.crownsTotal ? `<div class="row"><span>${d.objective.kind === 'quake' ? 'Condemned down' : 'Crowns'}</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
+    : s.crownsTotal ? `<div class="row"><span>${d.objective.kind === 'quake' ? 'Condemned down' : 'Crowns'}</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
   const act = slotAction(s);
   const button = slotHtml(act, s);
   const slot = `<div class="row slot-row${act ? '' : ' idle'}"><span class="slot${act ? '' : ' empty'}">${button}</span><span class="small note">${act ? SLOT_NOTE[act] : ''}</span>${touchActs(s.strokes)}</div>`;

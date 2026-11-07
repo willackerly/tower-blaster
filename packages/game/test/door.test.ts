@@ -1,6 +1,6 @@
 // The front door's formatting (door.ts) and the settings it edits (settings.ts): pure.
 import { describe, expect, it } from 'vitest';
-import { AFTERSHOCK_LEVELS, B1, B2, B3, BIG_LEVELS, compileLevel, FUSE_LEVELS, L1, L3, type LevelDef, LEVELS, MASON_LEVELS, MT4, RL1, RUBE_LEVELS, SERIES, TRIAL_LEVELS, UNDERCUT_LEVELS, WAVE_LEVELS } from '@tb/keystone';
+import { AFTERSHOCK_LEVELS, B1, B2, B3, BIG_LEVELS, compileLevel, FUSE_LEVELS, L1, L3, type LevelDef, LEVELS, MASON_LEVELS, MT4, RL1, RUBE_LEVELS, SERIES, type Shot, TRIAL_LEVELS, U1, U2, UNDERCUT_LEVELS, WAVE_LEVELS } from '@tb/keystone';
 import { bestText, BULLET_TIME_HOW, HOW_TO_PLAY, MASON_HOW, doorHtml, doorLevels, doorMode, doorOnLoad, nextLevel, openerFor, preaimMode, rackText, seriesTitle, starTargets, thresholdText, TRIALS_BLURB } from '../src/door.ts';
 // PT18's own names, on a line of their own so the line above merges as main's.
 import { DOOR_CSS, SIEGE_TABLE_HOW } from '../src/door.ts';
@@ -27,7 +27,10 @@ describe('door options', () => {
   });
   it('keystone.preaim: auto offers the first level\'s opener on a first visit only; 1 every level with a line; 0 none', () => {
     const ace0 = B1.solutions!.ace![0];
-    expect(openerFor(B1, 0, 'auto', false)).toBe(ace0);
+    expect(openerFor(B1, 0, 'auto', false)).toBe(B1.solutions!.opener ?? ace0);
+    // A chosen opener (PT13) wins over the ace's first shot.
+    const chosen = { ...ace0!, power: 50 } as Shot;
+    expect(openerFor({ ...B1, solutions: { ...B1.solutions, opener: chosen } }, 0, 'auto', false)).toBe(chosen);
     expect(openerFor(B1, 0, 'auto', true)).toBeNull();
     expect(openerFor(B2, 1, 'auto', false)).toBeNull();
     expect(openerFor(B2, 1, '1', true)).toBe(B2.solutions!.ace![0]);
@@ -51,15 +54,18 @@ describe('door text', () => {
     expect(rackText(B1.rack)).toBe('3 bombs');
     expect(rackText(B2.rack)).toBe('1 bomb, 2 rams');
   });
-  it('star targets: objective, then the cast T2 and T3; uncast levels say so; heritage named for three stars', () => {
+  it('star targets: objective, then the cast T2 and T3; uncast levels the objective alone; heritage named for three stars', () => {
     expect(starTargets(compileLevel(B1), B1.stars)).toEqual({ targets: ['Bring 40% down', '70% down', '94% down'], short: ['40%', '70%', '94%'], cast: true });
     const b2 = starTargets(compileLevel(B2), B2.stars);
     expect(b2.targets).toEqual(['Fell every crown', '770 points', '3,000 points, heritage intact']);
     expect(b2.short).toEqual(['all crowns', '770', '3,000']);
-    expect(starTargets(compileLevel(B3), undefined)).toEqual({ targets: ['Bring 40% down', 'targets coming soon', 'targets coming soon'], short: ['40%', '?', '?'], cast: false });
+    expect(starTargets(compileLevel(B3), undefined)).toEqual({ targets: ['Bring 40% down', '', ''], short: ['40%', '', ''], cast: false });
     // Par levels (parStars): two stars one shot over par, three in par; heritage named where the level has some.
     expect(starTargets(compileLevel(L1), undefined)).toMatchObject({ targets: [expect.any(String), '…in 2 shots', '…in par (1 shot)'], short: [expect.any(String), '2 shots', 'par 1'], cast: true });
     expect(starTargets(compileLevel(L3), undefined).targets.slice(1)).toEqual(['…in 3 shots', '…in par (2 shots), heritage intact']);
+    // Undercut's par puzzles count pulls.
+    expect(starTargets(compileLevel(U1), undefined)).toEqual({ targets: ['Fell every crown', '…in 3 pulls', '…in par (2 pulls)'], short: ['all crowns', '3 pulls', 'par 2'], cast: true });
+    expect(starTargets(compileLevel(U2), undefined).targets[2]).toBe('…in par (2 pulls), heritage intact');
     // Mason's Trial: worlds and points, no shots; the card's meta is the budget, not a rack.
     expect(starTargets(compileLevel(MT4), undefined)).toEqual({ targets: ['Stand in 32 of 64 worlds', '630 points (worlds stood, budget left)', '670 points'], short: ['32 of 64 worlds', '630', '670'], cast: true });
     expect(doorLevels([MT4], () => null)[0]!.rack).toBe('budget 10');
@@ -130,7 +136,7 @@ describe('door levels', () => {
     // Play still opens the first rated level (B1), though a trial is loaded; Back names the trial.
     expect(html).toContain(`Play · ${B1.name}`);
     expect(html).toContain('Back to Domino Run');
-    // A trial is uncast: one row for two and three stars.
+    // A trial is uncast: the objective's row alone.
     expect(open.find((l) => l.id === 'T-S4')).toMatchObject({ trial: true, cast: false, series: 'Trials · unrated', blocks: 10000 });
   });
   it('markup: a card per level marking earned stars, the next and the loaded one, every action wired', () => {
@@ -168,10 +174,22 @@ describe('door levels', () => {
     expect(closed).toContain('data-act="how"');
     expect(closed.match(/class="card[ "]/g)).toHaveLength(5);
   });
-  it('an uncast level shows one row for two and three stars', () => {
+  it('an uncast level shows the objective\'s row and one star slot, and no placeholder (PT7)', () => {
     const html = doorHtml({ levels: doorLevels([UNCAST], () => null), current: 0, settings: DEFAULT_SETTINGS, howTo: false, advanced: false });
-    expect(html.match(/<li /g)).toHaveLength(2);
-    expect(html.match(/targets coming soon/g)).toHaveLength(1);
+    expect(html.match(/<li /g)).toHaveLength(1);
+    expect(html).toContain('<span class="earned"></span><span class="unearned">☆</span>');
+    expect(html).not.toMatch(/coming soon|★★/);
+  });
+  it('no card on the door, rated or trial, says "coming soon" or shows a "?" target (PT7)', () => {
+    const levels = doorLevels(SERIES.flat(), () => null);
+    const html = doorHtml({ levels, current: 0, settings: DEFAULT_SETTINGS, howTo: false, advanced: false, trials: { count: TRIAL_LEVELS.length, open: true } });
+    const cards = html.match(/<button class="card[\s\S]*?<\/button>/g)!;
+    expect(cards.length).toBe(SERIES.flat().length);
+    for (const card of cards) {
+      expect(card, card.slice(0, 120)).not.toMatch(/coming soon/i);
+      const targets = card.match(/<ul class="targets">([\s\S]*?)<\/ul>/)![1]! + card.match(/<div class="short">([\s\S]*?)<\/div>/)![1]!;
+      expect(targets, card.slice(0, 120)).not.toContain('?');
+    }
   });
   it('escapes level text', () => {
     const [l] = doorLevels([{ ...L1, name: '<b>x</b>' }], () => null);

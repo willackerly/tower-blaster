@@ -1,12 +1,12 @@
 // PT1 on the city levels (sightlines-gpu.test.ts has the chambers): B2, whose first visit scored -15,361 with
-// the cathedral and the crowns hidden, plus one each of the other towns with objectives (16 roof crowns: T-B2A;
-// Domino Boulevard: T-B4A). The other copies of B2's town open on the same view (view.test.ts, CPU).
+// the cathedral and the crowns hidden, plus one each of the other towns with objectives (B2's draft c with its
+// cathedral: T-B2C, since PT11 dropped the 16-roof-crown T-B2A; Domino Boulevard: T-B4A). The other copies of B2's town open on the same view (view.test.ts, CPU).
 import { describe, expect, it } from 'vitest';
 import { gamePage } from './page.ts';
 import { expectObjectivesInSight, SHAPES, sightOf } from './sightlines-gpu.ts';
 
 const game = gamePage();
-const CITIES = ['B2', 'T-B2A', 'T-B4A'];
+const CITIES = ['B2', 'T-B2C', 'T-B4A'];
 
 describe('PT1: objectives in sight at the opening view (ID pass, city levels)', () => {
   for (const id of CITIES) for (const shape of Object.keys(SHAPES) as (keyof typeof SHAPES)[]) {

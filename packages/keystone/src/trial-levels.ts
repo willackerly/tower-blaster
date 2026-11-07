@@ -15,6 +15,11 @@
 //            build phase, where the player lays pieces before the first shot.
 // Every trial is an outcome level with no cast stars: it plays for its
 // objective's star and the tally, and the door lists it under Trials, unrated.
+// Pruned 2026-11-06 by the agent playtest (PT11, docs/game/agent-playtest-1.md and
+// docs/game/trials.md): duplicates and duds dropped (TRIAL_DROPS, each with its
+// reason), the arch rebuilt as a doorway (it broke in the pre-settle on every engine),
+// and every level now stands at load (keystone-lab level-stability tests). The
+// promotions to rated levels (TRIAL_PROMOTE) wait for the objective and spark fixes.
 // Left out, and why (docs/game/trials.md): S5 (S4 with the scenario's own
 // ball: the player is the ball), S6, S7 and S11 (loose cubes dropped into a
 // heap: no structure to bring down), S9 (its point is the heavy top, and a
@@ -73,23 +78,23 @@ function scenarioTrial(id: string, name: string, scenario: string, params: Param
 }
 
 const MASS_RATIO = { codes: ['mass-ratio'], why: 'slabs on rods or columns, many times their mass: the structure the scenario or probe was built to test' };
-const OVERHANG = { codes: ['unsupported'], why: 'a running bond\'s end cubes overhang half a cube and tip in the pre-settle' };
 
 const SCENARIO_TRIALS: LevelDef[] = [
-  scenarioTrial('T-S1', 'Tall Tower', 'S1', {}, 'small'),
-  scenarioTrial('T-S2', 'Stepped Pyramid', 'S2', {}, 'small'),
   scenarioTrial('T-S3', 'Stack-Bond Wall', 'S3', {}, 'small'),
-  scenarioTrial('T-S3R', 'Running-Bond Wall', 'S3', { running: true }, 'small', { issues: OVERHANG }),
   scenarioTrial('T-S4', 'City of Towers', 'S4', {}, 'big'),
   // Its rods (0.2 cells thick, 1.3 kg) are the lightest bodies of any trial: even a marble is 26 x one, over AMMO_RATIO.
   scenarioTrial('T-S8', 'Slab and Rod Tower', 'S8', {}, 'light', { issues: { codes: ['mass-ratio', 'ammo-ratio'], why: `${MASS_RATIO.why}; and a marble is 26 x a rod (AMMO_RATIO 20), so a direct hit can drive a rod into the ground (roadmap E4)` } }),
-  scenarioTrial('T-S12', 'Wall with a Hole', 'S12', { running: true }, 'small', { issues: { codes: ['unsupported'], why: 'a running bond\'s end cubes, and those at the hole\'s sides, overhang half a cube and tip in the pre-settle' } }),
   scenarioTrial('T-S14', 'Buildings', 'S14', {}, 'small'),
   scenarioTrial('T-S14T', 'Town', 'S14', { towers: 25, H: 16, vary: 0.4 }, 'big'),
 ];
 
-/** The drafts as trials, named for what they vary. B1c and B3d are left out: B1 and B3 as rated, but for the objective. */
-const DRAFT_TRIALS: LevelDef[] = Object.entries(DRAFTS).filter(([k]) => k !== 'B1c' && k !== 'B3d').map(([k, d]) =>
+/**
+ * The drafts kept as trials (TRIAL_DRAFTS), named for what they vary. B1c and B3d were never in: B1 and B3 as
+ * rated, but for the objective. The rest were dropped on 2026-11-06 (TRIAL_DROPS). B5a to B5c (Kapla Spire, G5)
+ * came after the pruning and join as drafted, to be judged in the next agent round.
+ */
+export const TRIAL_DRAFTS: readonly string[] = ['B1b', 'B2c', 'B3b', 'B4a', 'B5a', 'B5b', 'B5c'];
+const DRAFT_TRIALS: LevelDef[] = Object.entries(DRAFTS).filter(([k]) => TRIAL_DRAFTS.includes(k)).map(([k, d]) =>
   trial({ ...d, id: `T-${k.toUpperCase()}`, name: `${d.name} (${k})`, world: 5 }, { from: `draft ${k} (drafts.ts)` }));
 
 /** A box part (slab or rod) by centre-bottom `at` and half extents, in cells, plaster. */
@@ -168,19 +173,50 @@ export function archWall(W: number, H: number, R: number): Part[] {
   return parts;
 }
 
+/**
+ * The arch trial's wall since 2026-11-06 (the agent playtest's PT11): archWall's running bond, W bricks long
+ * and H courses high, with a doorway instead of the half disc: an opening `open` m either side of the middle
+ * and `rise` courses high, its jambs plumb (a brick the opening cuts is cut, as a mason cuts one, and kept
+ * if 0.2 m or more of it is left) under a stone lintel one course deep that bears 1 m into the wall each
+ * side, the bond carrying on over it (plaster, as the bricks: a stone one is 38 x a brick, over the mass ratio). The half disc's sides step in by more than half a brick near its
+ * crown, so those bricks tipped into the hole in the pre-settle and the arch was broken at shot 0, on the
+ * reference, Rapier and the GPU solver alike. A doorway stands by the bond alone and keeps the trial's
+ * point: a bomb through the opening brings the wall down (X4's 60%).
+ */
+export function gateWall(W: number, H: number, open: number, rise: number): Part[] {
+  const parts: Part[] = [], P = 1.01, x0 = -(W * P) / 2, MIN = 0.2;
+  // Positions in metres as archWall's; a part is in cells (h = 0.5 m).
+  const brick = (a: number, b: number, yb: number) => parts.push(rod([a + b, 2 * yb, 0], [b - a, 0.5, 0.5]));
+  for (let y = 0; y < H; y++) {
+    const yb = 0.5 * y, gap = y < rise ? open : y === rise ? open + 1 : 0;
+    const lay = (a: number, b: number) => {
+      if (gap > 0 && a < gap && b > -gap) {
+        if (-gap - a >= MIN) brick(a, -gap, yb);
+        if (b - gap >= MIN) brick(gap, b, yb);
+      } else brick(a, b, yb);
+    };
+    if (y % 2 === 0) for (let x = 0; x < W; x++) lay(x0 + P * x, x0 + P * x + 1);
+    else {
+      lay(x0, x0 + 0.5);
+      for (let x = 0; x < W - 1; x++) lay(x0 + 0.51 + P * x, x0 + 0.51 + P * x + 1);
+      lay(x0 + 0.51 + P * (W - 1), x0 + 0.51 + P * (W - 1) + 0.5);
+    }
+    if (y === rise) parts.push(rod([0, 2 * yb, 0], [2 * (open + 1), 0.5, 0.5]));
+  }
+  return parts;
+}
+
 const probe = (from: string) => ({ from: `mode probe ${from} (packages/mode-probes)` });
 
 const PROBE_TRIALS: LevelDef[] = [
   // Dominoes are 0.15 m thick: a felled one lies with its centre 0.15 h up, a standing one at 1 h, so the crown line is 0.6 h.
   trial(outcomeLevel('T-X1', 'Domino Run', dominoRun(30), [0.5, 18], 2, [...TRIAL_RACK_LIGHT], { world: 5, gap: 0, crownLine: 0.6, objective: { kind: 'crowns' } }), probe('X1 line')),
   trial(outcomeLevel('T-X2', 'Slab Block', slabBuilding(6, 6, 5), [3.6, 3.6], 15, [...Array<RackItem>(16).fill('pull'), 'cannonball', 'cannonball'], { world: 5, objective: { kind: 'collapse', min: 0.5 } }), { ...probe('X2 slabs'), issues: MASS_RATIO }),
-  trial(outcomeLevel('T-X3', 'Tower Chain', towerChain(12, 'cubes'), [1.5, 25], 8, ['cannonball', 'marble', 'marble'], { world: 5, objective: { kind: 'crowns' } }), probe('X3 cubes')),
   trial(outcomeLevel('T-X3B', 'Brick Pier Chain', towerChain(12, 'bricks'), [1.5, 25], 8, ['cannonball', 'marble', 'marble'], { world: 5, gap: 0, objective: { kind: 'crowns' } }), probe('X3 bricks')),
-  // Planks of 7.5 kg: the cannonball (510 kg) is 68 x one, so marbles (33 kg) and a grenade.
-  trial(outcomeLevel('T-X3K', 'Kapla Crib Chain', towerChain(12, 'kapla'), [1.5, 25], 8.4, [...TRIAL_RACK_LIGHT], { world: 5, gap: 0, objective: { kind: 'crowns' } }), probe('X3 kapla')),
-  trial(outcomeLevel('T-X4', 'Arch', archWall(20, 25, 5), [20.3, 0.5], 25, [...TRIAL_RACK_BIG], { world: 5, gap: 0, ...ARMS, objective: { kind: 'collapse', min: 0.3 } }), {
-    ...probe('X4 arch (bricks)'),
-    issues: { codes: ['unsupported'], why: 'the bricks at the arch\'s edge overhang the hole one by one; the bond holds the rest (X4 on SwiftShader: one brick over the hole drops, the rest creeps 0.2 mm)' },
+  // A doorway 6 m wide and 4 m high under a lintel (gateWall): the probe's half-disc arch broke in the pre-settle.
+  trial(outcomeLevel('T-X4', 'Gateway', gateWall(20, 25, 3, 8), [20.3, 0.5], 25, [...TRIAL_RACK_BIG], { world: 5, gap: 0, ...ARMS, objective: { kind: 'collapse', min: 0.3 } }), {
+    ...probe('X4 arch (bricks), rebuilt as a doorway'),
+    issues: { codes: ['mass-ratio'], why: 'the lintel (8 m) rests on bricks the doorway cuts short (15 x one); it stands at load on the reference, Rapier and the GPU solver (level-stability tests)' },
   }),
 ];
 
@@ -198,6 +234,31 @@ const ICE_TRIALS: LevelDef[] = [
   // A stone keep with an ice crown: four courses of stone under four of ice, the top one crowns.
   trial(outcomeLevel('T-I3', 'Frozen Keep', [{ kind: 'block', at: [-1.5, 0, -1.5], size: [3, 8, 3], material: 'stone', courses: [4, 5, 6, 7].map((k) => ({ k, material: 'ice' as const, ...(k === 7 ? { role: 'crown' as const } : {}) })) }], [1.5, 1.5], 8, [...TRIAL_RACK_SMALL], { world: 5, objective: { kind: 'crowns' } }), iceNote('a 3 x 3 stone keep, its top four courses ice')),
 ];
+
+/**
+ * The trials dropped on 2026-11-06 (agent playtest round 1, judge 3's promotion table, PT11), and why. Their
+ * structures stay where they were built (the scenarios, drafts.ts, the mode probes): the viewer opens them.
+ */
+export const TRIAL_DROPS: Readonly<Record<string, string>> = {
+  'T-S1': 'out of reach at shot 0, 1% after three shots, its top out of frame',
+  'T-S2': 'reads as a flat triangle; 0% after three shots',
+  'T-S3R': 'a running bond whose end cubes tip in the pre-settle; 0% after three shots (T-S3 stays)',
+  'T-S12': 'the marble sails through the hole: 0% and a total of 0 after three shots',
+  'T-X3': 'a plainer copy of the brick pier chain (T-X3B)',
+  'T-X3K': 'a third chain, with a 30 s settle',
+  'T-B1A': 'a draft of B1; the ram dents it',
+  'T-B2A': 'heritage invisible, total -15,361; B2D and B2E play identically',
+  'T-B2B': 'the same layout and failure as B2A, a wrecking ball apart',
+  'T-B2D': 'identical outcome to B2A',
+  'T-B2E': 'identical outcome to B2A',
+  'T-B3A': 'the same scene as T-S4',
+  'T-B3C': 'a near copy of T-B3B, with a 30 s settle',
+  'T-B3E': 'shot for shot the same numbers as T-B3B',
+};
+
+/** The trials judge 3 would promote to rated levels, once the objectives show (PT1) and the sparks follow the damage (PT2): each then needs a player-facing name, a cast and a recorded line. */
+export const TRIAL_PROMOTE: readonly string[] = ['T-S4', 'T-S14', 'T-S14T', 'T-X3B', 'T-I3'];
+
 
 /** The Domino Workshop's crowns: on a circle of WORKSHOP_RADIUS cells at 180, 90 and 0 degrees, each turned to face along it. */
 export const WORKSHOP_RADIUS = 6;

@@ -3,7 +3,7 @@ import { emptySnapshot, type Snapshot } from '@tb/engine-api';
 import { quatFromAxisAngle } from '@tb/geom';
 import {
   aabbTop, ammoInFlight, baselineOf, compileLevel, crownDown, DEFAULT_GOLD, FROZEN_D, FROZEN_SPEED, FROZEN_STEPS, GRAVITY, HEIGHT_BINS, heritageBroken, type LevelDef, levelScore, leverage, parStars, peOf_mJ,
-  potential_mJ, QUIET_SPEED, quietUnder, reduceCpu, type Reductions, SETTLE_CAP, SETTLE_CAP_V2, SETTLE_MIN, SETTLE_QUIET, SETTLE_RULES, settleAllowance, STEADY_D, STEADY_STEPS, settleCap, type SettleRule, type SettleState, settleUpdate, type ShotOutcome, skyline, stampOf, tier,
+  potential_mJ, QUIET_SPEED, quietUnder, reduceCpu, type Reductions, SETTLE_CAP, SETTLE_CAP_V2, SETTLE_MIN, SETTLE_QUIET, SETTLE_RULES, settleAllowance, STEADY_D, STEADY_STEPS, settleCap, settleHeld, type SettleRule, type SettleState, settleUpdate, type ShotOutcome, skyline, stampOf, tier,
 } from '@tb/keystone';
 
 const def: LevelDef = {
@@ -286,6 +286,14 @@ describe('ammo in flight holds the settle (agent playtest PT10)', () => {
     const u = settleUpdate(st, quiet(100), 0, 'v3', 1000, 0.07, false);
     expect(u.settled).toBe(false);
     expect(u.state.quietSince).toBe(100);
+  });
+  it('settleHeld: ammo in flight holds every rule; a pending weapon (the hold) holds v4 only, v1 to v3 as their casts were made', () => {
+    for (const rule of SETTLE_RULES) {
+      expect(settleHeld(rule, true, false)).toBe(true);
+      expect(settleHeld(rule, true, true)).toBe(true);
+      expect(settleHeld(rule, false, false)).toBe(false);
+      expect(settleHeld(rule, false, true)).toBe(rule === 'v4');
+    }
   });
   it('ammoInFlight: before its first contact, moving, and above where it could rest on the ground', () => {
     const r = 0.25 * h; // a cannonball's radius

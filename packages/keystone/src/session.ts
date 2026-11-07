@@ -8,7 +8,7 @@ import { itemYield, levelCharges, plungerYield } from './arsenal.ts';
 import { castStars, type CompiledLevel, type Scoring, scoringOf, settleOf } from './level.ts';
 import type { IceCrack } from './ice.ts';
 import { buildingOnly, collapseFraction, floorPotential_mJ, homePotential_mJ, homeSkyline, objectiveMet, type OutcomeFacts, outcomeScore } from './outcome.ts';
-import { ammoInFlight, bellRung, crownDown, energyFired, heritageBroken, heritageFallen, leverage, levelScore, type LevelScore, levelTier, refereedScore, roundLeverage, type Observation, type Reductions, runWindowSteps, type SettleRule, type SettleState, settleCap, settleUpdate, type ShotOutcome, skyline, spillOf } from './rules.ts';
+import { ammoInFlight, bellRung, crownDown, energyFired, heritageBroken, heritageFallen, leverage, levelScore, type LevelScore, levelTier, refereedScore, roundLeverage, type Observation, type Reductions, runWindowSteps, type SettleRule, type SettleState, settleCap, settleHeld, settleUpdate, type ShotOutcome, skyline, spillOf } from './rules.ts';
 import { PULL, type RackItem } from './rack.ts';
 import { placedCost } from './build.ts';
 import { ammoKE, type PlungerShot, pullEnergy, type QuakeShot, type Shot, shotEvent } from './shots.ts';
@@ -185,6 +185,15 @@ export class Session {
   private get liveOnly(): boolean { return this.level.def.cut === true && this.phase !== 'running'; }
 
   /**
+   * Nothing left in the rack can go in once the world is still: the rack is empty, or on a Cut level it holds
+   * only pulls (which wait for a running shot that no item left can start). A settle with the rack spent ends the
+   * round; without the Cut case a missed push on W5 left the round open with nothing to fire (agent playtest 2).
+   */
+  private get rackSpent(): boolean {
+    return this.rackLeft.length === 0 || (this.level.def.cut === true && this.rackLeft.every((a) => a === PULL));
+  }
+
+  /**
    * How many more shots may go in while another runs (LevelDef.freeze, Bullet Time): the level's
    * budget less the shots that have cut one; Infinity when the level sets none. A shot fired while
    * aiming spends nothing, and neither does freezing the world without firing (the game's pause).
@@ -196,7 +205,7 @@ export class Session {
 
   /**
    * Why structure body `body` cannot be pulled, or null if it can: only plain structure bodies
-   * still in the world (crowns and heritage are the objective's, never taken).
+   * still in the world (crowns and heritage are the objective's, never taken; fixed parts, BoxPart.fixed, stay).
    */
   pullRefusal(body: number): string | null {
     const m = this.level.meta;
@@ -204,6 +213,7 @@ export class Session {
     if (!Number.isInteger(body) || body < 0 || body >= m.n) return `body ${body} is not a structure body (0 to ${m.n - 1})`;
     if (m.crowns.includes(body)) return `body ${body} is a crown`;
     if (m.heritage.includes(body)) return `body ${body} is heritage`;
+    if (m.fixed.includes(body)) return `body ${body} is fixed`;
     if (this.pulled.includes(body)) return `body ${body} is already pulled`;
     if (this.cut.includes(body)) return `body ${body} was taken out by a charge`;
     return null;
@@ -378,7 +388,7 @@ export class Session {
     const total = o.red.impacts.reduce((a, x) => a + x, 0);
     if (total) out.push({ t: 'impacts', step, hist: o.red.impacts, total });
 
-    const s = settleUpdate(L.settle, o.red, L.spawnStep, this.settleRule, m.n, this.liveCollapse, L.inFlight, this.runWindow);
+    const s = settleUpdate(L.settle, o.red, L.spawnStep, this.settleRule, m.n, this.liveCollapse, settleHeld(this.settleRule, L.inFlight, hold), this.runWindow);
     L.settle = s.state;
     if (!s.settled || (hold && o.step - L.spawnStep < settleCap(this.settleRule, this.runWindow))) return out;
 
@@ -393,11 +403,11 @@ export class Session {
     if (this.scoring === 'outcome') {
       // Hollow: a crown down at a settle ends the level there.
       const toppled = c.def.objective.kind === 'hold' && crownsTotal > 0;
-      if (toppled || this.rackLeft.length === 0 || (c.def.autobank && cleared)) out.push(this.end(step));
+      if (toppled || this.rackSpent || (c.def.autobank && cleared)) out.push(this.end(step));
       else this.phase = 'aiming';
       return out;
     }
-    if (cleared || this.rackLeft.length === 0) {
+    if (cleared || this.rackSpent) {
       this.phase = cleared ? 'cleared' : 'failed';
       // Rube Lab: a binary clear, starred on the build's cost against the parts par (rules.ts partsStars).
       this.score = levelScore(c.def, this.outcomes, cleared, m.n, c.def.build?.par !== undefined ? placedCost(c.def) : 0);

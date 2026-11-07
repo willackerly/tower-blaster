@@ -33,8 +33,13 @@ export interface CourseOverride {
  * cube of it to the world (C8, engine-api pinned.ts): bedrock, a plinth or a curb that never moves.
  */
 export interface BlockPart { kind: 'block'; at: Vec3; size: Vec3; material: MaterialName; role?: Role; courses?: CourseOverride[]; pinned?: true }
-/** One box body; `at` is (centre x, bottom y, centre z) and `half` its half-extents, in h. `pinned` as BlockPart's. */
-export interface BoxPart { kind: 'slab' | 'rod'; at: Vec3; half: Vec3; material: MaterialName; role?: Role; pinned?: true }
+/**
+ * One box body; `at` is (centre x, bottom y, centre z) and `half` its half-extents, in h. `pinned` as BlockPart's.
+ * `fixed`: a pull cannot take it (Session.pullRefusal), as crowns and heritage; unlike a pinned part it moves and
+ * falls like any body. Undercut's table tops and beams are fixed, so a level of pulls is solved under them, not
+ * by pulling them out.
+ */
+export interface BoxPart { kind: 'slab' | 'rod'; at: Vec3; half: Vec3; material: MaterialName; role?: Role; pinned?: true; fixed?: true }
 /**
  * One box at a free pose (the build tool's piece, placement.ts): `at` is its centre in h (not cells: the
  * lattice pitch does not apply, so a piece goes exactly where it was placed), `half` its half-extents in h,
@@ -129,8 +134,13 @@ export const lowerIsBetter = (metric: StarMetric): boolean => metric === 'skylin
 /**
  * A level's star thresholds, as a cast set them. `waived` names cast gates that failed and were accepted as a
  * documented call (keystone-lab `--waive`; the level's notes say why), so the stars file says which stars rest on one.
+ * `agrees` names engines other than `engine` whose cloud of the cast's best line passed the cross-device gate
+ * (keystone-lab `--cloud-of`, cloudCheck): the stars hold there too, so the game records them there (game onEngine).
  */
-export interface StarsDef { metric: StarMetric; t2: number; t3: number; best?: number; castOn?: string; engine?: string; hash?: string; n?: number; seed?: number; waived?: string[] }
+export interface StarsDef { metric: StarMetric; t2: number; t3: number; best?: number; castOn?: string; engine?: string; agrees?: string[]; hash?: string; n?: number; seed?: number; waived?: string[] }
+
+/** Whether stars `s` hold on engine `kind`: cast there, or checked there by the cross-device gate (StarsDef.agrees). */
+export const starsHoldOn = (s: StarsDef, kind: string): boolean => s.engine === undefined || s.engine === kind || (s.agrees ?? []).includes(kind);
 
 /**
  * x as a StarsDef, or throws naming `where` and the field at fault: the check a stars file (big-levels.ts
@@ -145,7 +155,8 @@ export function checkStars(x: unknown, where = 'stars'): StarsDef {
   for (const k of ['best', 'n', 'seed']) if (o[k] !== undefined && (typeof o[k] !== 'number' || !Number.isFinite(o[k]))) throw new Error(`${where}.${k} must be a finite number when given: ${String(o[k])}`);
   for (const k of ['castOn', 'engine', 'hash']) if (o[k] !== undefined && typeof o[k] !== 'string') throw new Error(`${where}.${k} must be a string when given: ${String(o[k])}`);
   if (o.waived !== undefined && (!Array.isArray(o.waived) || !o.waived.length || !o.waived.every((g) => typeof g === 'string' && g.length > 0))) throw new Error(`${where}.waived must be a non-empty list of gate names when given: ${JSON.stringify(o.waived)}`);
-  const known = new Set(['metric', 't2', 't3', 'best', 'castOn', 'engine', 'hash', 'n', 'seed', 'waived']);
+  if (o.agrees !== undefined && (!Array.isArray(o.agrees) || !o.agrees.length || !o.agrees.every((g) => typeof g === 'string' && g.length > 0 && g !== o.engine))) throw new Error(`${where}.agrees must be a non-empty list of engines other than its own when given: ${JSON.stringify(o.agrees)}`);
+  const known = new Set(['metric', 't2', 't3', 'best', 'castOn', 'engine', 'agrees', 'hash', 'n', 'seed', 'waived']);
   for (const k of Object.keys(o)) if (!known.has(k)) throw new Error(`${where}: unknown field ${k}`);
   const lower = lowerIsBetter(o.metric as StarMetric), t2 = o.t2 as number, t3 = o.t3 as number;
   if (lower ? t3 > t2 : t3 < t2) throw new Error(`${where}: t3 (${t3}) is easier than t2 (${t2}) for ${String(o.metric)}`);
@@ -190,8 +201,13 @@ export interface LevelDef {
   launcher: LauncherDef;
   /** Leverage for the gold badge (LevelScore.gold; it gates no star since 2026-11-06, docs/game/stars.md), set from bot runs; DEFAULT_GOLD when absent. */
   lGold?: number;
-  /** Recorded solutions, replayed by tests. */
-  solutions?: { par?: Shot[]; ace?: Shot[] };
+  /**
+   * Recorded solutions, replayed by tests. `opener` is the pre-aimed first shot a first visit is offered
+   * (the door's Fire button), chosen to win the level alone (PT13: keystone-lab opener.ts); absent, the
+   * opener is the ace's or the par line's first shot. `teach`: the opener shows the level's mechanic without winning it
+   * (Wavefront's starter push, PT39), so a first visit is offered it on any level of its series, not only the first.
+   */
+  solutions?: { par?: Shot[]; ace?: Shot[]; opener?: Shot; teach?: true };
   /** Default 'par': every level before the spectacle mode, scored as before. */
   scoring?: Scoring;
   /** Outcome levels: the cast star thresholds; absent, stars are uncast (only the objective's star). */
@@ -226,6 +242,11 @@ export interface LevelDef {
    * never before it starts (with rapid fire, or in Bullet Time when the player has rapid fire off). Part of the hash.
    */
   cut?: true;
+  /**
+   * Parts the player is meant to push first (Wavefront's starter slabs, PT39): the game marks their bodies with the
+   * crosshair and the HUD names them until the first shot. Presentation only, so not part of the hash.
+   */
+  push?: number[];
   /** The physics the level plays at (default Keystone's: PHYSICS_DEFAULTS). Part of the level hash, so stars cast at one setting never show at another. */
   physics?: PhysicsBlock;
   /** Aftershock (quake.ts): what the quake dial allows, for a level whose rack holds a quake. Part of the hash. */
@@ -421,6 +442,8 @@ export interface BodyMeta {
   part: Uint16Array;
   crowns: Int32Array;
   heritage: Int32Array;
+  /** Bodies of fixed parts (BoxPart.fixed): no pull takes them. */
+  fixed: Int32Array;
 }
 
 export interface CompiledLevel {
@@ -468,7 +491,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   const h = unitOf(def), p = pitchOf(def) * h;
   const bounce = physicsOf(def).bounce;
   const bodies: BodyDesc[] = [];
-  const roles: number[] = [], mats: number[] = [], parts: number[] = [];
+  const roles: number[] = [], mats: number[] = [], parts: number[] = [], fixed: number[] = [];
   const add = (b: BodyDesc, role: Role, material: MaterialName, part: number) => { bodies.push(b); roles.push(ROLE_ID[role]); mats.push(materialId(material)); parts.push(part); };
 
   def.parts.forEach((part, pi) => {
@@ -504,6 +527,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
       const half = part.half.map((x) => x * h) as Vec3;
       const pos: Vec3 = [part.at[0] * p, part.at[1] * h + half[1], part.at[2] * p];
       const role = part.role ?? 'plain';
+      if (part.fixed) fixed.push(bodies.length);
       add(body(pos, half, part.material, role, pi, undefined, part.pinned === true), role, part.material, pi);
     }
   });
@@ -514,6 +538,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
     half: new Float64Array(3 * n), home: new Float64Array(3 * n), band: new Uint8Array(n), part: Uint16Array.from(parts),
     crowns: Int32Array.from(roles.flatMap((r, i) => (r === ROLE_ID.crown ? [i] : []))),
     heritage: Int32Array.from(roles.flatMap((r, i) => (r === ROLE_ID.heritage ? [i] : []))),
+    fixed: Int32Array.from(fixed),
   };
   let height = 0;
   bodies.forEach((b, i) => {
@@ -542,7 +567,7 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   // Solutions don't change the scene, and the stars are cast against the hash (StarsDef.hash).
   // scoring 'par', autobank false, the scoring's settle rule and physics at its defaults are the defaults, so writing them out names the same level;
   // custom marks overrides the hash already holds.
-  const { solutions: _omit, stars: _stars, custom: _custom, ...geometry } = def;
+  const { solutions: _omit, stars: _stars, custom: _custom, push: _push, ...geometry } = def;
   if (geometry.scoring === 'par') delete geometry.scoring;
   if (geometry.autobank === false) delete geometry.autobank;
   // The settle rule a level plays by hashes as absent when it is the one its scoring used before v3 (par v1, outcome v2), so those

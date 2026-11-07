@@ -87,8 +87,9 @@ fn boxWeight(c: vec3f) -> f32 {
 
 export const COMPOSITE_WGSL = /* wgsl */ `
 ${FULLSCREEN}
-// tone: TONE_MAPS index (0: agx), its mid-grey gain; grain: amount (0: none), size (px), frame seed; grade: the frozen grade (Bullet Time), 0 to 1.
-struct Post { bloomMix: f32, exposure: f32, vignette: f32, levels: f32, tone: u32, toneGain: f32, grain: f32, grainSize: f32, seed: u32, grade: f32, pad1: u32, pad2: u32 }
+// tone: TONE_MAPS index (0: agx), its mid-grey gain; grain: amount (0: none), size (px), frame seed; grade: the frozen grade (Bullet Time), 0 to 1;
+// keep: 1 leaves what the scene marked (alpha over 1, fx.ts KEEP_ALPHA) out of the grade's drain and tint, 0 grades it too.
+struct Post { bloomMix: f32, exposure: f32, vignette: f32, levels: f32, tone: u32, toneGain: f32, grain: f32, grainSize: f32, seed: u32, grade: f32, keep: f32, pad2: u32 }
 @group(0) @binding(0) var hdr: texture_2d<f32>;
 @group(0) @binding(1) var bloom: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
@@ -98,11 +99,13 @@ ${TONE_WGSL}
 ${PCG_WGSL}
 ${GRAIN_WGSL}
 
-// The frozen grade (FROZEN_* above): drained, cooled, an ice-blue rim. d: uv from the centre.
-fn frozenGrade(c: vec3f, d: vec2f, g: f32, size: vec2f) -> vec3f {
+// The frozen grade (FROZEN_* above): drained, cooled, an ice-blue rim. d: uv from the centre. keep: 0 to 1, how much
+// of this pixel stays out of the drain and the tint (PT33: what the player aims at keeps its colour); the rim is the frame's.
+fn frozenGrade(c: vec3f, d: vec2f, g: f32, size: vec2f, keep: f32) -> vec3f {
   let l = dot(c, vec3f(0.2126, 0.7152, 0.0722));
-  var x = mix(c, vec3f(l), ${FROZEN_DESAT} * g);
-  x *= mix(vec3f(1.0), vec3f(${FROZEN_TINT.join(', ')}), g);
+  let gk = g * (1.0 - keep);
+  var x = mix(c, vec3f(l), ${FROZEN_DESAT} * gk);
+  x *= mix(vec3f(1.0), vec3f(${FROZEN_TINT.join(', ')}), gk);
   // A rounded rectangle inset from the frame's edge, in units of the short side so the frost is
   // as wide on every side and its corners round (an uv-space shape looks lopsided off-square),
   // faded in quadratically over FROZEN_RIM_WIDTH so it frosts in rather than drawing a hard border.
@@ -121,7 +124,8 @@ fn ign(p: vec2f) -> f32 {
 
 @fragment fn fsComposite(i: FsOut) -> @location(0) vec4f {
   let px = vec2i(i.clip.xy);
-  let h = textureLoad(hdr, px, 0).rgb;
+  let h4 = textureLoad(hdr, px, 0);
+  let h = h4.rgb;
   let b = textureSampleLevel(bloom, samp, i.uv, 0.0).rgb / max(post.levels, 1.0);
   var x = mix(h, b, post.bloomMix) * post.exposure;
   // Grain (realism step 7): in linear light, before the tone map compresses it.
@@ -130,15 +134,15 @@ fn ign(p: vec2f) -> f32 {
   var c: vec3f;
   if (post.tone == 0u) { c = agx(x); } else { c = toneMapAlt(post.tone, x * post.toneGain); }
   let d = i.uv - 0.5;
-  if (post.grade > 0.0) { c = frozenGrade(c, d, post.grade, vec2f(textureDimensions(hdr))); }
+  if (post.grade > 0.0) { c = frozenGrade(c, d, post.grade, vec2f(textureDimensions(hdr)), post.keep * clamp(h4.a - 1.0, 0.0, 1.0)); }
   c *= 1.0 - post.vignette * dot(d, d) * 2.0;
   c += (ign(i.clip.xy) - 0.5) / 255.0;
   return vec4f(c, 1.0);
 }
 `;
 
-/** toneMap: default agx; grain: film grain amount (0 or left out: none) and size in pixels (tonemap.ts); grade: the frozen grade's amount, 0 (none, the default) to 1. */
-export interface PostParams { bloomMix: number; exposure: number; vignette: number; toneMap?: ToneMap; grain?: { amount: number; size: number }; grade?: number }
+/** toneMap: default agx; grain: film grain amount (0 or left out: none) and size in pixels (tonemap.ts); grade: the frozen grade's amount, 0 (none, the default) to 1; keep: whether what the scene marked stays in colour under it (true by default). */
+export interface PostParams { bloomMix: number; exposure: number; vignette: number; toneMap?: ToneMap; grain?: { amount: number; size: number }; grade?: number; keep?: boolean }
 
 /** The composite's uniform block (Post in COMPOSITE_WGSL): 48 bytes. seed: the grain's frame seed; height: the frame's, which scales the grain (grainPixels). */
 export function postUniforms(p: PostParams, levels: number, seed: number, height = 1080): ArrayBuffer {
@@ -151,6 +155,7 @@ export function postUniforms(p: PostParams, levels: number, seed: number, height
   f[7] = grainPixels(p.grain?.size ?? 1, height);
   u[8] = seed >>> 0;
   f[9] = Math.min(1, Math.max(0, p.grade ?? 0));
+  f[10] = p.keep === false ? 0 : 1;
   return b;
 }
 

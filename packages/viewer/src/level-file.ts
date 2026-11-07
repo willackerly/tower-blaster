@@ -21,7 +21,7 @@ const MATERIAL_NAMES = MATERIALS.map((m) => m.name) as readonly string[];
 /** The LevelDef a JSON value describes, or an error saying where it is wrong. */
 export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   const o = object(v, where);
-  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars', 'autobank', 'settle', 'runWindow', 'freeze', 'physics', 'custom', 'build', 'charges', 'rube', 'cut'], where);
+  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars', 'autobank', 'settle', 'runWindow', 'freeze', 'physics', 'custom', 'build', 'charges', 'rube', 'cut', 'push'], where);
   if (o.format !== undefined && o.format !== LEVEL_FILE_FORMAT) throw new Error(`${where}.format should be "${LEVEL_FILE_FORMAT}"`);
   const id = str(o.id, `${where}.id`);
   if (!/^[\w-]{1,32}$/.test(id)) throw new Error(`${where}.id must be 1 to 32 letters, digits, - or _`);
@@ -40,9 +40,11 @@ export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   if (o.lGold !== undefined) def.lGold = num(o.lGold, `${where}.lGold`);
   if (o.solutions !== undefined) {
     const s = object(o.solutions, `${where}.solutions`);
-    only(s, ['par', 'ace'], `${where}.solutions`);
+    only(s, ['par', 'ace', 'opener', 'teach'], `${where}.solutions`);
     def.solutions = {};
     for (const k of ['par', 'ace'] as const) if (s[k] !== undefined) def.solutions[k] = arr(s[k], `${where}.solutions.${k}`).map((x, i) => shot(x, `${where}.solutions.${k}[${i}]`));
+    if (s.opener !== undefined) def.solutions.opener = shot(s.opener, `${where}.solutions.opener`);
+    if (s.teach !== undefined) { if (s.teach !== true) throw new Error(`${where}.solutions.teach must be true`); def.solutions.teach = true; }
   }
   if (o.scoring !== undefined) def.scoring = oneOf(o.scoring, SCORINGS, `${where}.scoring`) as Scoring;
   if (o.stars !== undefined) def.stars = stars(o.stars, `${where}.stars`);
@@ -65,6 +67,10 @@ export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   if (o.cut !== undefined) {
     if (o.cut !== true) throw new Error(`${where}.cut must be true`);
     def.cut = true;
+  }
+  if (o.push !== undefined) {
+    def.push = arr(o.push, `${where}.push`).map((x, i) => int(x, `${where}.push[${i}]`));
+    for (const k of def.push) if (k < 0 || k >= def.parts.length) throw new Error(`${where}.push: part ${k} is not one of the level's ${def.parts.length}`);
   }
   return def;
 }
@@ -168,10 +174,11 @@ function part(v: unknown, where: string): Part {
     if (o.courses !== undefined) p.courses = arr(o.courses, `${where}.courses`).map((c, i) => course(c, `${where}.courses[${i}]`));
     return p;
   }
-  only(o, ['kind', 'at', 'half', 'material', 'role'], where);
+  only(o, ['kind', 'at', 'half', 'material', 'role', 'fixed'], where);
   const half = vec3(o.half, `${where}.half`);
   if (half.some((x) => !(x > 0))) throw new Error(`${where}.half must be three numbers above 0`);
-  return { kind, at: vec3(o.at, `${where}.at`), half, material, ...(role ? { role } : {}) };
+  if (o.fixed !== undefined && o.fixed !== true) throw new Error(`${where}.fixed must be true or left out`);
+  return { kind, at: vec3(o.at, `${where}.at`), half, material, ...(role ? { role } : {}), ...(o.fixed ? { fixed: true as const } : {}) };
 }
 
 /** A scenario as a part (@tb/keystone ScenarioPart); its params are checked by building it, at compile. */
@@ -280,7 +287,7 @@ function launcher(v: unknown, where: string): LevelDef['launcher'] {
 function shot(v: unknown, where: string): Shot {
   const o = object(v, where);
   const ammo = rackItem(o.ammo, `${where}.ammo`);
-  const keys = ammo === 'drop' ? ['x', 'z'] : ammo === 'cue' ? ['x', 'y', 'z', 'dir', 'power'] : ['az', 'y', 'yaw', 'pitch', 'power'];
+  const keys = ammo === 'drop' ? ['x', 'z'] : ammo === 'cue' ? ['x', 'y', 'z', 'dir', 'power'] : ammo === 'pull' ? ['body'] : ['az', 'y', 'yaw', 'pitch', 'power'];
   only(o, ['ammo', ...keys], where);
   const s = { ammo, ...Object.fromEntries(keys.map((k) => [k, int(o[k], `${where}.${k}`)])) } as Shot;
   try {
