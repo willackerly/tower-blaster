@@ -10,7 +10,7 @@
 // 16 islands against the same 16 worlds alone. SwiftShader in CI; Metal with TB_CHANNEL=chrome.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type LevelDef, MASON_CLEAR, MASON_WORLDS } from '@tb/keystone';
-import { requireWebGPU } from '@tb/testkit';
+import { channelOf, requireWebGPU } from '@tb/testkit';
 import { type BrowserCastPlayer, openBrowserCastPlayer } from '../src/cast-browser.ts';
 import { MASON_KNIFE, MASON_SOLUTIONS, MASON_STAR_SHARE, masonBuild } from '../src/mason-solutions.ts';
 import { fisherExact } from '../src/mason-stats.ts';
@@ -27,7 +27,8 @@ export function masonGpuSuite(def: LevelDef): void {
   let player: BrowserCastPlayer | null = null;
   beforeAll(async () => {
     try {
-      player = await openBrowserCastPlayer({ ...(process.env.TB_CHANNEL ? { channel: process.env.TB_CHANNEL } : {}) });
+      const channel = channelOf();
+      player = await openBrowserCastPlayer(channel ? { channel } : {});
     } catch (e) {
       if (requireWebGPU()) throw e;
     }
@@ -38,6 +39,8 @@ export function masonGpuSuite(def: LevelDef): void {
     it(`${def.id} ${def.name}: the authors pass in ${SLOW ? 64 : 16} islands, the bare level fails`, async (ctx) => {
       if (!player) return ctx.skip();
       expect(player.engine).toBe('gpu');
+      // A channel asks for the real GPU (TB_CHANNEL=chrome on the Mac): a software adapter under it is not that run (#234, S5).
+      if (channelOf()) expect(player.software, `channel ${channelOf()} gave a software adapter (${player.adapter})`).toBe(false);
       const K = SLOW ? MASON_WORLDS : 16, worlds = range(K);
       const bare = await player.mason(def, worlds);
       console.log(`${def.id} bare on ${player.adapter}: ${bare.passes}/${K}, ${(bare.ms / 1000).toFixed(1)} s`);
