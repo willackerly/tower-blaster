@@ -1,6 +1,6 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { checkShards, drifted, durationsFromLog, durationsFromReport, mergeDurations, planShards, shardLoad, shardWall, SHARD_WORKERS } from '../src/index.ts';
+import { checkShards, drifted, durationsFromLog, durationsFromReport, mergeDurations, planShards, shardLoad, shardWall, SHARD_WORKERS, slowCaseFiles } from '../src/index.ts';
 
 describe('planShards', () => {
   it('puts every file in exactly one shard, for any files, durations and count', () => {
@@ -123,5 +123,22 @@ describe('durations files', () => {
   it('flags a file over half again its record and a minute more, nothing smaller', () => {
     const recorded = { 'a.test.ts': 100, 'b.test.ts': 100, 'c.test.ts': 10, 'd.test.ts': 200 };
     expect(drifted({ 'a.test.ts': 161, 'b.test.ts': 149, 'c.test.ts': 69, 'd.test.ts': 100, 'new.test.ts': 500 }, recorded)).toEqual([{ file: 'a.test.ts', took: 161, recorded: 100 }]);
+  });
+});
+
+describe('slowCaseFiles', () => {
+  it('finds files that name PHYSICS_GPU_SLOW themselves or in a file they import by a relative path', () => {
+    const src: Record<string, string> = {
+      'p/test/own.test.ts': "const slow = process.env.PHYSICS_GPU_SLOW === '1';",
+      'p/test/via.test.ts': "import { suite } from './suite.ts';\nsuite();",
+      'p/test/suite.ts': '// PHYSICS_GPU_SLOW=1 runs every level',
+      'p/test/up.test.ts': "import { x } from '../src/levels.ts';",
+      'p/src/levels.ts': 'export const ALL = process.env.PHYSICS_GPU_SLOW;',
+      'p/test/plain.test.ts': "import { y } from '@tb/keystone';\nimport { z } from './plain-helper.ts';",
+      'p/test/plain-helper.ts': 'export const z = 1;',
+      'p/test/missing.test.ts': "import { w } from './gone.ts';",
+    };
+    const files = Object.keys(src).filter((f) => f.endsWith('.test.ts'));
+    expect(slowCaseFiles(files, (f) => src[f])).toEqual(['p/test/own.test.ts', 'p/test/via.test.ts', 'p/test/up.test.ts']);
   });
 });

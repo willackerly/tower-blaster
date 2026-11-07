@@ -1,0 +1,4 @@
+{
+  "about": "Test files only the nightly runs (.github/workflows/nightly.yml, PHYSICS_GPU_SLOW=1), not PR or main CI: each with why it can wait a night. Files with PHYSICS_GPU_SLOW cases of their own run in both, their slow cases at night. `PHYSICS_GPU_SLOW=1 pnpm test` runs everything.",
+  "only": {}
+}

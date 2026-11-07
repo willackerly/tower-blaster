@@ -124,3 +124,31 @@ export function drifted(measured: Durations, recorded: Durations): Array<{ file:
     return r !== undefined && took > 1.5 * r && took - r > 60 ? [{ file, took, recorded: r }] : [];
   }).sort((a, b) => (a.file < b.file ? -1 : 1));
 }
+
+/** The environment flag that turns on the slow cases (and the nightly-only files): the nightly run sets it. */
+export const SLOW_FLAG = 'PHYSICS_GPU_SLOW';
+
+/**
+ * The test files with slow cases of their own: those whose source, or a file
+ * it imports by a relative path, names PHYSICS_GPU_SLOW. The nightly runs
+ * them with the flag set, beside the nightly-only files. `read` gives a
+ * file's text (repo-relative path), or undefined when there is none.
+ */
+export function slowCaseFiles(files: readonly string[], read: (file: string) => string | undefined): string[] {
+  const named = (text: string | undefined) => text?.includes(SLOW_FLAG) ?? false;
+  return files.filter((f) => {
+    const text = read(f);
+    if (named(text)) return true;
+    const dir = f.slice(0, f.lastIndexOf('/') + 1);
+    return [...(text ?? '').matchAll(/from '(\.\.?\/[^']+)'/g)].some((m) => named(read(normalize(dir + m[1]!))));
+  });
+}
+
+function normalize(path: string): string {
+  const out: string[] = [];
+  for (const part of path.split('/')) {
+    if (part === '..') out.pop();
+    else if (part !== '.') out.push(part);
+  }
+  return out.join('/');
+}

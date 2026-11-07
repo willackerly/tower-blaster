@@ -6,6 +6,7 @@
 //                                             step prints a `vitest-durations {...}` line
 //   --scale 1.4                              multiply the new times (a run on a cloud
 //                                             VM takes ~1/1.4 of a runner's time)
+//   --file vitest.durations.nightly.json     another durations file (the nightly's)
 //
 // Files the input does not mention keep their times; times for files that no
 // longer exist are dropped. `pnpm test:durations` runs the suite and merges its
@@ -23,7 +24,7 @@ const scale = Number(value('--scale') ?? 1);
 if (!(scale > 0)) throw new Error('--scale must be a positive number');
 
 const root = new URL('../../../', import.meta.url).pathname.replace(/\/$/, '');
-const file = `${root}/vitest.durations.json`;
+const file = `${root}/${value('--file') ?? 'vitest.durations.json'}`;
 const measured: Durations = {};
 for (const input of args.length ? args : ['.vitest-report.json']) {
   const text = readFileSync(input, 'utf8');
@@ -45,5 +46,5 @@ if (print) {
   const merged = mergeDurations(old, measured, (f) => existsSync(`${root}/${f}`));
   writeFileSync(file, `${JSON.stringify(merged, null, 2)}\n`);
   const total = Object.values(merged).reduce((a, b) => a + b, 0);
-  console.log(`vitest.durations.json: ${Object.keys(measured).length} files measured, ${Object.keys(merged).length} in all, ${Math.round(total)} s`);
+  console.log(`${file.slice(root.length + 1)}: ${Object.keys(measured).length} files measured, ${Object.keys(merged).length} in all, ${Math.round(total)} s`);
 }
