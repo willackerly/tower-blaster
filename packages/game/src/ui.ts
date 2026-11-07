@@ -25,6 +25,15 @@ export const GAME_CSS = `
   .kg-hud .chip.spent { opacity: 0.4; }
   .kg-hud .bar { width: 110px; height: 8px; border-radius: 4px; background: #2b3242; overflow: hidden; }
   .kg-hud .bar i { display: block; height: 100%; background: linear-gradient(90deg, #8fd3b6, #f7b955, #f0806a); }
+  .kg-hud .bar.over i { background: #f0806a; }
+  .kg-hud .quake-panel { display: grid; gap: 3px; margin-top: 4px; }
+  .kg-hud button.qd { font: 700 16px/1 system-ui, sans-serif; width: 28px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: #2b3242; color: #e8ebf2; cursor: pointer; }
+  .kg-hud .qv { min-width: 58px; text-align: center; }
+  .kg-hud .seismo polyline { fill: none; stroke: #f7b955; stroke-width: 1.4; } .kg-hud .seismo .axis { stroke: #3a4459; stroke-width: 1; }
+  .kg-hud .compass circle { fill: none; stroke: #3a4459; } .kg-hud .compass line { stroke: #f7b955; stroke-width: 2.2; } .kg-hud .compass .tip { fill: #f7b955; stroke: none; }
+  .kg-hud button.quake-go { font: 650 14px/1 system-ui, sans-serif; padding: 8px 12px; border: 0; border-radius: 6px; background: #d8693f; color: #fff; cursor: pointer; }
+  .kg-hud button.quake-go:disabled { background: #3a4459; color: #8a93a6; cursor: default; }
+  body.kg-touch .kg-hud button.qd { width: 40px; height: 40px; }
   .kg-banner { position: fixed; top: 22%; left: 0; right: 0; text-align: center; pointer-events: none; font: 800 44px/1.45 system-ui, sans-serif; letter-spacing: 0.04em; color: #fff; text-shadow: 0 3px 18px rgba(0, 0, 0, 0.45); opacity: 0; }
   .kg-banner.show { animation: kg-banner 1.4s ease-out; }
   .kg-frozen { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); padding: 6px 18px; border-radius: 10px; background: rgba(14, 34, 64, 0.55); border: 1px solid rgba(140, 200, 255, 0.6); color: #e4f2ff; font: 600 20px/1.3 system-ui, sans-serif; letter-spacing: 0.03em; white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 0.15s; z-index: 3; }

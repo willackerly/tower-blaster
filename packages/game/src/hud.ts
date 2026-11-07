@@ -12,7 +12,7 @@ export const AMMO_LABEL: Record<'marble' | 'cannonball' | 'cue' | 'drop', string
 export function itemLabel(item: RackItem): string {
   const r = itemRef(item);
   if (!r) return item;
-  const label = r.kind === 'ammo' ? AMMO_LABEL[r.ammo] : r.kind === 'pull' ? 'Pull' : r.kind === 'plunger' ? 'Plunger' : r.kind === 'preset' ? PROJECTILE_PRESETS[r.preset].label : r.key;
+  const label = r.kind === 'ammo' ? AMMO_LABEL[r.ammo] : r.kind === 'pull' ? 'Pull' : r.kind === 'plunger' ? 'Plunger' : r.kind === 'quake' ? 'Quake' : r.kind === 'preset' ? PROJECTILE_PRESETS[r.preset].label : r.key;
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
@@ -73,6 +73,8 @@ export interface HudState {
   duel?: string;
   /** Outcome levels: the star thresholds on the Down (or Pulled) bar (meterTicks); no bar without any. */
   ticks?: readonly MeterTick[];
+  /** Aftershock: the quake designer's block (quake-panel.ts quakePanelHtml) while the Quake chip is selected, in place of power and height. */
+  quake?: string;
   /** Bullet Time levels (LevelDef.freeze): freezes left of the level's, whether the shot is frozen now, and whether it can be. */
   freezes?: { left: number; total: number; frozen: boolean; can: boolean };
 }
@@ -133,6 +135,7 @@ export function objectiveText(o: Objective): string {
     case 'skyline': return `skyline under ${o.maxH} h`;
     case 'collapse': return `bring ${pct(o.min)} down`;
     case 'hold': return 'keep the crown up';
+    case 'quake': return 'fell the condemned, spare the heritage';
   }
 }
 
@@ -164,8 +167,8 @@ export function hudHtml(s: HudState): string {
   const heritage = s.heritageTotal ? `<div class="row"><span>Heritage</span><span class="${s.heritageBroken ? 'bad' : 'ok'}">${s.heritageBroken ? `${s.heritageBroken} cracked` : 'intact'}</span></div>` : '';
   const sel = s.chips.find((c) => c.selected)?.ammo;
   // The power bar, with minus and plus buttons on a touch screen (keys Q and E).
-  const power = sel === 'drop' || sel === 'pull' ? '' : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
-  const height = sel === 'drop' || sel === 'pull' || s.launch === undefined ? '' : launchRow(s.launch);
+  const power = sel === 'drop' || sel === 'pull' || sel === 'quake' ? (sel === 'quake' ? s.quake ?? '' : '') : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
+  const height = sel === 'drop' || sel === 'pull' || sel === 'quake' || s.launch === undefined ? '' : launchRow(s.launch);
   const reach = s.pullRefused ? `<div class="${s.pullRefused === 'tapped' ? 'bad' : 'hint'} small pull-hint">${PULL_HINT}</div>` : s.reachable === false ? '<div class="bad small">Out of reach at this power</div>' : '';
   const outcome = scoringOf(d) === 'outcome';
   const head = outcome
@@ -178,7 +181,7 @@ export function hudHtml(s: HudState): string {
     ? `<div class="row"><span>Freezes</span><span class="${fz.left ? '' : 'spent'}">${fz.left} / ${fz.total}</span></div>${fz.frozen || fz.can ? `<div class="row">${freezeButton(fz.frozen)}<span class="small">${fz.frozen ? 'aim and fire, or Resume: the freeze is kept' : 'stop the world to aim'}</span></div>` : ''}`
     : '';
   const crowns = d.objective.kind === 'hold' ? keepRow(s.crownsDown, s.crownsTotal)
-    : !outcome || s.crownsTotal ? `<div class="row"><span>Crowns</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
+    : !outcome || s.crownsTotal ? `<div class="row"><span>${d.objective.kind === 'quake' ? 'Condemned down' : 'Crowns'}</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
   if (s.duel !== undefined) {
     return `
     <div class="title">${esc(d.name)}${s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : ''}</div>
