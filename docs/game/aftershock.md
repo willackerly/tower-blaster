@@ -142,10 +142,78 @@ selected:
 - The energy meter against the level's budget (red and Start disabled over it), or without a budget against the
   dial's brute end.
 - Start (Enter): the quake fires through the same `fire()` as every shot, refused by `quakeRefusal`.
-- The dial starts at 0.3 g, 1 Hz, 3 s along x and is kept over Retry and Undo, so the player iterates.
+- The dial starts at the level's seed (below; else 0.3 g, 1 Hz, 3 s along x) and is kept over Retry and Undo, so
+  the player iterates.
 
-**Camera.** The camera moves only on player input (Will, 2026-11-02). A quake moves no camera: the shaking is the
-ground's, seen from the ground, so the view stays put and the towers rock in it. Screen shake stays opt-in.
+**Camera.** The camera moves only on player input (Will, 2026-11-02). A quake moves no camera: the ground moves
+under the towers (below), and the view stays where the player put it. Screen shake stays opt-in.
+
+## Seeing the quake (PT25)
+
+Agent playtest round 2 (docs/game/agent-playtest-2.md, PT25) found the quake invisible: ground, grid and camera
+stood still, the dial gave way to Power and Height while it ran, every level opened on the same dial, which on Big
+Brother (A2) does nothing for 7 s and scores 0, and the phone dial lost its labels and took 35.1% of the screen.
+
+**The ground moves** (`game/src/quake-ground.ts`, option `keystone.quakeground`, on by default). The engine shakes
+nothing: a quake is a side gravity on a still ground, the ground's own frame. A watcher off the site sees the ground
+move instead, by the side load integrated twice and turned around (a ground accelerating at +a pushes what stands on
+it toward -a). The double integral ends with some velocity left, which would carry the ground away, so the straight
+line from its first point to its last is taken off: it starts and ends at rest at home. The game draws the site (the
+ground, its grid and every body) displaced by that motion: the frame's view-projection times a translation, between
+snapshots by the same alpha as the bodies. The camera's own state never changes, so the camera rule holds and the eye
+reads the shaking against the frame of the screen. True scale: 0.3 g at 1 Hz moves the ground about 7 cm (a seventh
+of a cube), A1's ace 5.4 cm, A4's 21.7 cm, the retrofits' 6.5 cm.
+
+**Dust at the towers' feet** (`dustBeats`, `Renderer.dust`): each swing's strongest push (the side load's peaks,
+twice a cycle, above 0.05 g) puffs dust in a ring round the foot of every condemned and protected tower, harder for a
+stronger swing, capped at the chips' threshold so a swing throws no stone. It is the real look's dust (its debris
+mode); the stylised looks draw impacts as sparks, and sparks at a tower's foot would read as a hit, so they have none.
+
+**The panel stays up** while the quake runs (`quakeRunHtml`): the four values without buttons, the compass, the
+seismograph with a playhead at the drawn step, and "N s left" then "settling".
+
+**Each tower's marks on the dial** (`game/src/quake-ticks.ts`). The row asked for each structure's natural frequency
+on Frequency, but X6 found that friction stacks do not resonate (they rock as Housner blocks), so a resonance tick
+would teach the wrong thing. Two numbers from the same model do tell towers apart, from the geometry alone:
+- **Strength: where it starts to rock.** A joint lifts only when the side load passes g times its contact half-width
+  over the height of the centre of mass above it (statics; a column of n cubes at g/n, corner-on at sqrt 2 / n).
+  Below a tower's mark the quake cannot rock it at all; near it, at low frequency, it falls (the search's finding).
+- **Frequency: its rocking frequency** p = sqrt(3 g / 4 R), R the half-diagonal of the tower as one block (0.30 Hz
+  for a col8 or a slab8x2, 0.43 for a col4). Near or below p a quake tips the tower like a slow tilt; above it the
+  load to fell it climbs about as sqrt(1 + (omega / p)^2), sooner for a big tower: the size lever.
+Condemned towers' marks are gold, protected ones' blue, the dial's value a caret. The marks follow the axis.
+
+**The dial's starting quake** (`QuakeRules.start`, keystone-lab `quake-seed.ts`, `pnpm keystone:quake-seed`). A
+level's seed is the quake its dial opens on: one that does part of the job (a condemned tower down, fewer protected
+ones broken, so the round scores above 0) and does not clear the level, so Start teaches something and the levers
+are still the player's. The search runs on the reference engine: candidates on the dial's own stops (0.15 to 0.6 g,
+0.3 to 2 Hz, 1 to 4 s, axes 0, 45, 90, 135) inside the level's budget, nearest the old start first in dial steps
+(5% g, a stop, 15 degrees); the nearest 400 screened on one nudged build, those that pass confirmed in batches on 8,
+where a seed must do part of the job on at least 7 and clear the level on at most 1. The seed is the nearest such:
+the dial opens as near as it can to where it always did. `start` is not part of the level's hash (it changes no
+outcome), so the levels keep their stars.
+
+| level | seed | dial steps from the old start | reference: part of the job / cleared (8 builds) | GPU solver (SwiftShader) |
+|---|---|---|---|---|
+| A1 Slow Sway | 0.30 g, 0.6 Hz, 3 s along x | 2 | 8 / 0 | 2 condemned down, 1 protected broken: 500 |
+| A2 Big Brother | 0.35 g, 0.8 Hz, 2 s along x | 3 | 7 / 1 | 2 down, 1 broken: 500 |
+| A3 Cross Grain | none: the old start (0.3 g, 1 Hz, 3 s along x) | 0 | 0 / 0 (nothing moves) | |
+| A4 Short Sharp Shock | 0.40 g, 1.2 Hz, 1.5 s along x | 5 | 8 / 0 | 1 down: 500 |
+| A5 Fault Line | 0.25 g, 0.8 Hz, 3 s along x | 2 | 8 / 0 | 1 down: 500 |
+
+Big Brother's novice run (the agent playtest's, which scored 0) now opens on a quake that fells both columns and
+breaks the slab tower on the GPU: 500 points, and the slab tower's blue mark sits at the same Strength as the
+columns' but far left on Frequency, so the player can see what to try (faster, shorter). Cross Grain has no seed:
+every quake that does part of its job was turned off the starting axis (the search's nearest, at 45 and 135 degrees,
+did part of it on 1 of 8 builds), and its lesson is the axis. On the old start nothing there moves, and the marks
+say why: along x the condemned walls' gold marks sit at 0.5 g, the protected walls' blue ones at 0.17; turned to 90
+degrees they swap. The search's numbers and wall times (60 to 370 s a level on 4 cores) are in
+results/quake-seed/ (not committed).
+
+**The phone dial** keeps its four labels, each over its value inside its 44 px row (`.qv::before`, the label in
+`data-label`, so the value's text stays the value), and upright the panel's foot (seismograph, energy, Start) shares
+its line with Undo and Restart while the action slot is idle (one flex wrap through `display: contents`). The
+docked HUD covers 29.4% of a 390x844 screen on A2 (from 35.1%), as a launcher's does. Sideways keeps its rail.
 
 ## Retrofit (M7b)
 
@@ -285,6 +353,16 @@ The search's wall times on 4 cores: 330 s, 1,296 s and 1,131 s (results/retrofit
   as a quake, which is what a preset name would have bought.
 - **Transient (pose) heritage rule**: breaks towers that rock and stand. Replaced by judging standing at the settle.
 - **Cube walls for the axis lever**: not direction-sensitive. Bonded rod walls are.
+- **Shaking the camera instead of the ground** (PT25): the simplest picture of a quake, and against the camera rule
+  (the camera moves only on player input); it also shakes the HUD's frame of reference with it. Drawing the site
+  displaced keeps the eye still, so the motion reads against the screen. Kept: shake stays an opt-in.
+- **An exaggerated ground motion** (2 to 5 times true scale, to read at a distance): considered, not taken. True
+  scale reads on every level at the default view (5 to 22 cm; the test sees the open ground change), and an
+  exaggerated ground would slide under towers that do not slide with it.
+- **Natural-frequency ticks** (the row as written): no such frequency (X6). The uplift and rocking-frequency marks
+  are the Housner model's own numbers.
+- **A seed at the level's ace, or the ace's axis on Cross Grain**: a seed is a start, not the answer; and Cross
+  Grain's lesson is the axis (its row was turned so the dial's starting axis is wrong).
 - **`Math.sin` for the keys**: not correctly rounded, so not one input on every machine. Exact trig instead.
 - **A score-metric cast on the GPU** (as B1 to B3): the engine-independent energy metric makes the cast cheap and
   portable; Metal runs confirm the "met" side.
@@ -303,9 +381,18 @@ The search's wall times on 4 cores: 330 s, 1,296 s and 1,131 s (results/retrofit
   whole, inside the third star.
 - `game/test/quake-e2e.test.ts` (game page, Rapier): keys and buttons set the dial, a click aims nothing, Enter
   starts the quake, the camera does not move, the page ends where `runSession` does and replays bit for bit; on
-  phones every dial button and Start is on screen (upright, the designer tray covers at most 36% while the quake is
-  set, against 30% for a launcher's tray, and goes once the quake is fired).
+  phones every dial button and Start is on screen.
 - `game/test/quake-panel.test.ts`: the dial, the seismogram, the compass, the energy meter and budget, the HUD slot.
+- PT25: `game/test/quake-ground.test.ts` (the ground's motion: home at both ends, along the axis only, against the
+  load, about A g / (2 pi f)^2; the dust beats), `game/test/quake-ticks.test.ts` (uplift 1/n and sqrt 2 / n,
+  Housner's p, the size and axis levers on A2 and A3, the strips), `game/test/quake-e2e.test.ts` (two mid-quake
+  frames 12 steps apart draw the ground apart and the open ground's pixels differ, none with the option off, the
+  view unmoved; the running panel with its playhead; dust at every foot in the real look; on an upright phone the
+  four labels and at most 30%), `keystone/test/quake.test.ts` (`start` checked against the dial, out of the hash),
+  `keystone-lab/test/quake-seed.test.ts` (each seed on 8 nudged reference builds) and
+  `keystone-lab/test/quake-seed-gpu.test.ts` (each seed on the GPU solver scores above 0 and does not clear). On a
+  PR both seed tests run A2 only, the family's representative; every seeded level runs with PHYSICS_GPU_SLOW=1
+  (nightly) or, on the GPU, with TB_CHANNEL set.
 
 ## Follow-ups
 
@@ -314,3 +401,6 @@ The search's wall times on 4 cores: 330 s, 1,296 s and 1,131 s (results/retrofit
   drop the settle v3 pin (low priority); a retrofit with a dialled quake as well as a build (the grammar allows it);
   and build moves for the agent playtest.
 - The agent playtest (G9b) cannot yet dial a quake.
+- PT25: dust in the stylised looks (hazy, candy), which draw impacts as sparks: a dust style of their own is the
+  effects thread's call. A seed for Cross Grain if a later layout gives one that keeps the axis lesson. Metal runs of
+  `quake-seed-gpu.test.ts` (TB_CHANNEL=chrome) through the coordinator.

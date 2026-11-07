@@ -1184,6 +1184,24 @@ export class Renderer {
     this.sparks.inject(pos, dir, strength);
   }
 
+  /** Whether the look throws dust (the real look's debris: sparks.ts debris mode), so `dust` puffs anything. */
+  get throwsDust(): boolean {
+    return this.look.atmosphere !== undefined && this.look.effects === false && this.toggles.sparks && (this.look.debris?.dust ?? 1) > 0;
+  }
+
+  /**
+   * Dust kicked up around a foot at pos (PT25: a tower's base on a quake's swing), eight events in a ring of `radius` metres:
+   * debris events no stronger than the chips' threshold, so they puff and throw no chips. Only in a look that throws
+   * dust (throwsDust: elsewhere they would be sparks); returns whether it did.
+   */
+  dust(pos: V3, radius: number, strength: number): boolean {
+    if (!this.throwsDust) return false;
+    const s = Math.min(strength, this.sparks.debris.chipDv);
+    // Eight events round the foot (about a dozen puffs at a swing's full strength; MAX_INJECT bounds a frame's).
+    for (let k = 0; k < 8; k++) { const a = (k * Math.PI) / 4, dx = Math.cos(a), dz = Math.sin(a); this.sparks.inject([pos[0] + dx * radius, pos[1], pos[2] + dz * radius], [dx, 0.6, dz], s); }
+    return true;
+  }
+
   private viewport(): [number, number] {
     const t = this.offscreen ?? this.context?.canvas;
     return t ? [t.width, t.height] : [1, 1];

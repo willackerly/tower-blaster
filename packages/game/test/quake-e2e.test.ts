@@ -20,22 +20,23 @@ describe('the quake designer on the game page', () => {
     if (!o) return ctx.skip();
     const { page, errors } = o;
     await ready(page);
-    expect(await page.evaluate(() => window.__game.dial())).toEqual({ peak: 30, hz: 10, sec: 30, axis: 0 });
+    // The dial opens on A1's seed (PT25: QuakeRules.start), 0.30 g at 0.6 Hz for 3 s along x.
+    expect(await page.evaluate(() => window.__game.dial())).toEqual({ peak: 30, hz: 6, sec: 30, axis: 0 });
     await page.waitForSelector('.kg-hud .quake-panel', { timeout: 30_000 });
     expect(await page.evaluate(() => /Power|Height/.test(document.querySelector('.kg-hud')!.textContent ?? ''))).toBe(false);
     // Keys: E twice (strength up), D (frequency up a stop), X (longer), V (the axis on a step).
     for (const k of ['e', 'e', 'd', 'x', 'v']) await page.keyboard.press(k);
-    expect(await page.evaluate(() => window.__game.dial())).toEqual({ peak: 40, hz: 12, sec: 40, axis: 15 });
+    expect(await page.evaluate(() => window.__game.dial())).toEqual({ peak: 40, hz: 8, sec: 40, axis: 15 });
     // The panel's minus button for frequency, as a tap would press it, and the value the panel shows.
     await page.click('.kg-hud button.qd[data-arg="hz:-1"]');
-    expect(await page.evaluate(() => window.__game.dial())).toEqual({ peak: 40, hz: 10, sec: 40, axis: 15 });
-    await page.waitForFunction(() => document.querySelector('.kg-hud .qv[data-q="hz"]')?.textContent === '1.0 Hz', undefined, { timeout: 10_000, polling: 50 });
+    expect(await page.evaluate(() => window.__game.dial())).toEqual({ peak: 40, hz: 6, sec: 40, axis: 15 });
+    await page.waitForFunction(() => document.querySelector('.kg-hud .qv[data-q="hz"]')?.textContent === '0.6 Hz', undefined, { timeout: 10_000, polling: 50 });
     // A click on the towers aims nothing with the Quake chip selected.
     expect(await page.evaluate(() => window.__game.aim(0, 0))).toBeNull();
     const view = await page.evaluate(() => ({ ...window.__game.view }));
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => window.__game.strokes === 1, undefined, { timeout: 30_000, polling: 50 });
-    const line: Shot[] = [{ ammo: 'quake', peak: 40, hz: 10, sec: 40, axis: 15 }];
+    const line: Shot[] = [{ ammo: 'quake', peak: 40, hz: 6, sec: 40, axis: 15 }];
     expect(await page.evaluate(() => window.__game.line())).toEqual(line);
     await page.evaluate(() => { window.__game.fast = true; });
     await page.waitForFunction(() => window.__game.result !== null, undefined, { timeout: 4 * MINUTES, polling: 250 });
@@ -47,6 +48,76 @@ describe('the quake designer on the game page', () => {
     expect(await page.evaluate((s) => window.__game.replay(s), line)).toEqual(live);
     expect(errors).toEqual([]);
     await page.close();
+  }, 10 * MINUTES);
+
+  it('the ground moves with the quake (PT25): two mid-quake frames draw it apart, the view still, dust at the towers\' feet; the running panel keeps the waveform with a playhead', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    /** Two frames 12 steps apart mid-quake (the step held for each capture): the ground's drawn offset and the open ground's pixels. */
+    const frames = async (url: string) => {
+      const o = await game.open(url);
+      if (!o) return null;
+      const { page, errors } = o;
+      await ready(page);
+      const view = await page.evaluate(() => ({ ...window.__game.view }));
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => window.__game.strokes === 1, undefined, { timeout: 30_000, polling: 20 });
+      const start = await page.evaluate(() => window.__game.stepIndex);
+      const shots: { ground: [number, number]; floor: number[]; panel: { running: boolean; head: boolean; power: boolean } }[] = [];
+      for (const k of [20, 32]) {
+        await page.waitForFunction((n) => window.__game.stepIndex >= n, start + k, { timeout: 60_000, polling: 10 });
+        await page.evaluate(() => { window.__game.hold = true; });
+        const s = await page.evaluate(() => window.__game.capture(true));
+        if (!s?.pixels || !s.ids) throw new Error('no capture');
+        // The open ground: pixels in the lower third that show no body.
+        const floor: number[] = [];
+        for (let y = Math.floor((2 * s.height) / 3); y < s.height; y += 2) for (let x = 0; x < s.width; x += 2) {
+          if (s.ids[y * s.width + x] !== 0) { floor.push(-1); continue; }
+          const at = y * s.pixels.bytesPerRow + 4 * x;
+          floor.push(s.pixels.data[at]! + s.pixels.data[at + 1]! + s.pixels.data[at + 2]!);
+        }
+        const panel = await page.evaluate(() => ({ running: !!document.querySelector('.kg-hud .quake-panel.running'), head: !!document.querySelector('.kg-hud .quake-panel .seismo .head'), power: /Power|Height/.test(document.querySelector('.kg-hud')!.textContent ?? '') }));
+        shots.push({ ground: await page.evaluate(() => window.__game.ground), floor, panel });
+        await page.evaluate(() => { window.__game.hold = false; });
+      }
+      // Dust at the towers' feet: each swing's push, by 2.5 s into the quake (a seed's swings are at most 1 Hz).
+      await page.waitForFunction((n) => window.__game.stepIndex >= n, start + 150, { timeout: 120_000, polling: 50 });
+      const dust = await page.evaluate(() => window.__game.counts.quakeDust ?? 0);
+      const after = await page.evaluate(() => ({ ...window.__game.view }));
+      expect({ target: after.target, distance: after.distance, yaw: after.yaw, pitch: after.pitch }).toEqual({ target: view.target, distance: view.distance, yaw: view.yaw, pitch: view.pitch });
+      expect(errors).toEqual([]);
+      await page.close();
+      const [a, b] = shots as [typeof shots[0], typeof shots[0]];
+      let diff = 0, n = 0;
+      for (let i = 0; i < a.floor.length; i++) if (a.floor[i]! >= 0 && b.floor[i]! >= 0) { diff += Math.abs(a.floor[i]! - b.floor[i]!); n++; }
+      return { a, b, floorDiff: diff / Math.max(1, n), n, dust };
+    };
+    const on = await frames('/?level=A4&engine=rapier&offscreen=1&door=0');
+    if (!on) return ctx.skip();
+    const off = (await frames('/?level=A4&engine=rapier&offscreen=1&door=0&keystone.quakeground=0'))!;
+    console.log(`A4 mid-quake: ground ${on.a.ground.map((v) => (100 * v).toFixed(1)).join(', ')} cm then ${on.b.ground.map((v) => (100 * v).toFixed(1)).join(', ')} cm; open-ground change ${on.floorDiff.toFixed(2)} (still ground ${off.floorDiff.toFixed(2)}) over ${on.n} pixels`);
+    expect(Math.abs(on.a.ground[0] - on.b.ground[0])).toBeGreaterThan(0.005);
+    expect(on.a.ground[1]).toBe(0); // A4's quake runs along x
+    expect(off.a.ground).toEqual([0, 0]);
+    expect(off.b.ground).toEqual([0, 0]);
+    expect(on.floorDiff).toBeGreaterThan(Math.max(0.5, 3 * off.floorDiff));
+    for (const s of [on.a, on.b]) expect(s.panel).toEqual({ running: true, head: true, power: false });
+    // Dust is the real look's (its debris; the hazy look's would be sparks): none here, on or off.
+    expect([on.dust, off.dust]).toEqual([0, 0]);
+    // In the real look, dust at the feet of A4's four towers on each strong swing: puffs, no chips.
+    const o = (await game.open('/?level=A4&engine=rapier&offscreen=1&door=0&look=real'))!;
+    await ready(o.page);
+    await o.page.keyboard.press('Enter');
+    await o.page.waitForFunction(() => window.__game.strokes === 1, undefined, { timeout: 30_000, polling: 20 });
+    const start = await o.page.evaluate(() => window.__game.stepIndex);
+    await o.page.waitForFunction((n) => window.__game.stepIndex >= n, start + 150, { timeout: 120_000, polling: 50 });
+    await o.page.evaluate(() => window.__game.capture(false));
+    const real = await o.page.evaluate(async () => ({ dust: window.__game.counts.quakeDust ?? 0, fx: await window.__game.effects() }));
+    console.log(`A4 real look: dust at ${real.dust} feet, ${real.fx.spawned} particles`);
+    expect(real.dust).toBeGreaterThanOrEqual(8);
+    expect(real.dust % 4).toBe(0);
+    expect(real.fx.spawned).toBeGreaterThan(0);
+    expect(o.errors).toEqual([]);
+    await o.page.close();
   }, 10 * MINUTES);
 
   it('on a phone, upright and sideways: every dial button and Start on screen, the tray not wider than the screen or its rail', async (ctx) => {
@@ -61,15 +132,17 @@ describe('the quake designer on the game page', () => {
       const m = await page.evaluate(() => {
         const r = (e: Element) => e.getBoundingClientRect(), tray = r(document.querySelector('.kg-hud .tray')!), st = r(document.querySelector('.kg-hud .st')!);
         const buttons = [...document.querySelectorAll('.kg-hud .quake-panel button')].map((b) => { const x = r(b); return { arg: (b as HTMLElement).dataset.arg ?? 'start', inTray: x.left >= tray.left - 0.5 && x.right <= tray.right + 0.5 && x.top >= 0 && x.bottom <= innerHeight + 0.5, h: x.height }; });
-        return { buttons, share: (st.height + tray.height) / innerHeight, trayRight: tray.right, vw: innerWidth };
+        const labels = [...document.querySelectorAll('.kg-hud .quake-panel .qv')].map((e) => { const b = getComputedStyle(e, '::before'); return b.display === 'none' ? '' : b.content.replace(/"/g, ''); });
+        return { buttons, labels, share: (st.height + tray.height) / innerHeight, trayRight: tray.right, vw: innerWidth };
       });
       console.log(`A3 ${name}: the docked HUD covers ${(100 * m.share).toFixed(1)}%`);
       expect(m.buttons).toHaveLength(9);
       for (const b of m.buttons) expect(b.inTray, `${name}: ${b.arg}`).toBe(true);
       expect(m.trayRight).toBeLessThanOrEqual(m.vw);
-      // Upright, the designer is the tray while the quake is set (the brief's dial and meter): about a third of the
-      // screen, against 30% for a launcher's tray (phone-hud-e2e); it goes once the quake has been fired.
-      if (name === 'upright') expect(m.share).toBeLessThanOrEqual(0.36);
+      // PT25: the four dials keep their labels docked, and upright the docked HUD covers at most 30% of the screen, as
+      // a launcher's does (phone-hud-e2e): the panel's foot shares its line with Undo and Restart.
+      expect(m.labels).toEqual(['Strength', 'Frequency', 'Duration', 'Axis']);
+      if (name === 'upright') expect(m.share).toBeLessThanOrEqual(0.3);
       expect(errors).toEqual([]);
       await page.close();
     }
