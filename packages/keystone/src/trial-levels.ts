@@ -10,7 +10,9 @@
 //   T-X<n>   the mode probes' structures (@tb/mode-probes X1 to X4), rebuilt
 //            from level parts in cells (h = 0.5 m, the probes' cell);
 //   T-I<n>   ice (ice.ts): blocks that crack and shatter, alone and mixed
-//            with stone, to see and tune before any rated level uses ice.
+//            with stone, to see and tune before any rated level uses ice;
+//   T-W<n>   workshops (build.ts, docs/game/placement.md): levels with a
+//            build phase, where the player lays pieces before the first shot.
 // Every trial is an outcome level with no cast stars: it plays for its
 // objective's star and the tally, and the door lists it under Trials, unrated.
 // Pruned 2026-11-06 by the agent playtest (PT11, docs/game/agent-playtest-1.md and
@@ -256,8 +258,29 @@ export const TRIAL_DROPS: Readonly<Record<string, string>> = {
 /** The trials judge 3 would promote to rated levels, once the objectives show (PT1) and the sparks follow the damage (PT2): each then needs a player-facing name, a cast and a recorded line. */
 export const TRIAL_PROMOTE: readonly string[] = ['T-S4', 'T-S14', 'T-S14T', 'T-X3B', 'T-I3'];
 
-/** The trials in door order: scenarios, the mode probes' structures, the drafts, then ice. */
-export const TRIAL_LEVELS: readonly LevelDef[] = [...SCENARIO_TRIALS, ...PROBE_TRIALS, ...DRAFT_TRIALS, ...ICE_TRIALS];
+
+/** The Domino Workshop's crowns: on a circle of WORKSHOP_RADIUS cells at 180, 90 and 0 degrees, each turned to face along it. */
+export const WORKSHOP_RADIUS = 6;
+export const WORKSHOP_ANGLES = [180, 90, 0] as const;
+
+/**
+ * Workshops: a build phase before the first shot (C9, docs/game/placement.md). T-W1: three crown dominoes stand a
+ * quarter circle apart and the rack is one marble, so no shot fells more than one; the player lays the domino runs
+ * that join them (the brush, along the circle or any other way) and fires once. 30 dominoes of budget; a quarter
+ * circle of 6 cells takes 7.
+ */
+const WORKSHOP_TRIALS: LevelDef[] = [
+  trial(outcomeLevel('T-W1', 'Domino Workshop', WORKSHOP_ANGLES.map((deg): Part => {
+    const a = (deg * Math.PI) / 180;
+    // A domino's thin axis (z) along the circle's tangent (-sin a, cos a): yawed -a about +y.
+    return { kind: 'piece', at: [+(WORKSHOP_RADIUS * Math.cos(a)).toFixed(6), 1, +(WORKSHOP_RADIUS * Math.sin(a)).toFixed(6)], half: [0.5, 1, 0.15], yaw: deg % 180 === 0 ? 0 : -deg, material: 'plaster', role: 'crown' };
+  }), [WORKSHOP_RADIUS + 1, WORKSHOP_RADIUS + 1], 2, ['marble'], {
+    world: 5, gap: 0, crownLine: 0.6, objective: { kind: 'crowns' }, build: { budget: 30, pieces: ['domino'], brush: true },
+  }), { from: 'workshop: three crown dominoes a quarter circle apart, a 30-domino brush, one marble' }),
+];
+
+/** The trials in door order: scenarios, the mode probes' structures, the drafts, ice, then the workshops. */
+export const TRIAL_LEVELS: readonly LevelDef[] = [...SCENARIO_TRIALS, ...PROBE_TRIALS, ...DRAFT_TRIALS, ...ICE_TRIALS, ...WORKSHOP_TRIALS];
 
 /** Whether level `id` is a trial (unrated). */
 export const isTrial = (id: string): boolean => id.toUpperCase().startsWith('T-');

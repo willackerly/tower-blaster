@@ -4,19 +4,20 @@
 // only proposes configs; main.ts decides how to apply them (live, or by reset).
 import { checkSound, SOUND_KNOBS, SOUND_MATERIAL_NAMES, SOUND_SETS, type SoundKnob, type SoundOptions } from '@tb/audio';
 import { parseSpec } from '@tb/bench';
-import { type Env, ENVS, type Ground, GROUNDS, TONE_MAPS, type ToneMap, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
+import { type EffectStyle, type Env, ENVS, type Ground, GROUNDS, TONE_MAPS, type ToneMap, linearToSrgb, LOOKS, REAL_DEFAULTS, REAL_KNOBS, type RealKnob, type RealOptions, srgbToLinear, type Stone, STONES, type V3 } from '@tb/render';
 import { type BallStyle, checkPaceFeel, DEFAULT_BUDGET_MS, DEFAULT_FEEL, DEFAULT_UNDO_MB, MAX_UNDO_MB, type FrameMode, type LaunchMode, objectiveText, type PaceFeel } from '@tb/game';
 import { AUTO_LEVEL, AVBD_ITERATIONS, BIG_LEVELS, compileLevel, freezeProblem, LEVELS, MAX_FREEZE, PRESETTLE_STEPS, scenarioLevel, TRIAL_LEVELS, UNDERCUT_LEVELS } from '@tb/keystone';
 import { buildScenario, SCENARIOS } from '@tb/scenarios';
 import { type CameraPose, type Framing, FRAMING_LIMITS } from './camera.ts';
 import { escapeHtml } from './html.ts';
 import { levelIssues, levelJson, parseLevelDef } from './level-file.ts';
-import { autoSubsteps, AVBD_ENGINES, blockDensityOf, bounceOn, carriedFraming, checkKeystone, DEFAULT_BOUNCE, DEFAULT_CONFIG, defaultLook, defaultPresettle, firedSpeed, keystoneEngine, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, type Rules, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
+import { autoSubsteps, AVBD_ENGINES, weaponTierOf, blockDensityOf, bounceOn, carriedFraming, checkKeystone, DEFAULT_BOUNCE, DEFAULT_CONFIG, defaultLook, defaultPresettle, firedSpeed, keystoneEngine, levelDef, MAX_PRESETTLE, MAX_SUBSTEPS, type Rules, SCALE_LIMITS, type ViewerConfig, withOption } from './params.ts';
 import { blastWeight, checkBlast } from '@tb/engine-api';
-import { BUILTIN_WEAPONS, checkWeapon, DEFAULT_GRENADE, FUSES, GRENADE_LIMITS, type GrenadeSpec, isPreset, PRESET_NAMES, PROJECTILE_PRESETS, validateWeapon, weaponBudget, type WeaponSpec, writeWeapon } from '@tb/weapons';
+import { BUILTIN_WEAPONS, checkWeapon, DEFAULT_GRENADE, grenadeAsSpec, newWeapon, FUSES, GRENADE_LIMITS, type GrenadeSpec, isPreset, PRESET_NAMES, PROJECTILE_PRESETS, validateWeapon, weaponBudget, type WeaponSpec, writeWeapon } from '@tb/weapons';
 import { DEFAULT_PROJECTILE, encodeWeaponParam, GRENADE_BLAST_KEYS, GRENADE_NUMBERS, parseProjectile, presetProjectile, type Projectile, projectileMass, WEAPONS, weaponName, worldProjectile } from './projectile.ts';
 import { parseSceneFile, sceneFile, sceneFileName } from './scene-file.ts';
 import { autoSoundMaterial } from './sound-config.ts';
+import { mountWeaponEditor, WEAPON_EDITOR_CSS } from './weapon-editor.ts';
 
 /** Readable names for scenario params; the rest show their key. */
 export const PARAM_LABELS: Record<string, string> = {
@@ -45,6 +46,10 @@ export interface ControlsHooks {
   camera(): CameraPose | null;
   /** Switch to this config, loaded from a file named name. */
   load(next: ViewerConfig, name: string): void;
+  /** The weapon editor's options changed (opened or closed: ViewerConfig.weapons.edit). */
+  setWeapons?(w: ViewerConfig['weapons']): void;
+  /** The weapon in the editor changed (its spec while valid; null: none, or the editor closed): the scene's arc preview. */
+  editing?(spec: WeaponSpec | null): void;
 }
 
 /** The grenade's fields in the panel: label and step, by URL key (grenade.<key>). */
@@ -288,7 +293,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       <div class="params"></div>
       <div class="rules">
         <label class="f"><span>rules</span><select name="rules"><option value="sandbox">sandbox</option><option value="keystone">Keystone (the game)</option></select></label>
-        <div class="feel">${field('hitstop', 'hit-stop on contact', false)}${field('slowmo', 'slow motion as crowns fall', false)}${field('budget', 'physics budget, ms per 1/60 s (0: no valve)', DEFAULT_BUDGET_MS, 'step="any" min="0" max="1000"')}${field('tailskip', 'fast-forward the tail of a shot', true)}${field('follow', 'camera follows the collapse', false)}${field('shake', 'camera shakes on hits', false)}${field('rapid', 'rapid fire: shoot before the last shot settles', true)}${field('undo', 'undo memory, MB (0: undo replays the shots)', DEFAULT_UNDO_MB, `step="1" min="0" max="${MAX_UNDO_MB}"`)}${field('freeze', 'freezes, Bullet Time (empty: the level\'s own)', '', `step="1" min="0" max="${MAX_FREEZE}" placeholder="level's"`)}<label class="f"><span>frames drawn</span><select name="frames"><option value="all">every frame</option><option value="half">half on a fast display</option><option value="auto">half while physics is behind</option></select></label><label class="f"><span>launch height (keys W, S move it)</span><select name="launch"><option value="high">high: over the structure's top</option><option value="level">the level's own launcher</option></select></label><label class="f"><span>fired balls</span><select name="balls"><option value="painted">painted, banded</option><option value="plain">plain: the look's</option></select></label>${field('marks', 'stone marks: crosshair on crowns, shield on what to keep', true)}</div>
+        <div class="feel">${field('hitstop', 'hit-stop on contact', false)}${field('slowmo', 'slow motion as crowns fall', false)}${field('budget', 'physics budget, ms per 1/60 s (0: no valve)', DEFAULT_BUDGET_MS, 'step="any" min="0" max="1000"')}${field('tailskip', 'fast-forward the tail of a shot', true)}${field('follow', 'camera follows the collapse', false)}${field('shake', 'camera shakes on hits', false)}${field('rapid', 'rapid fire: shoot before the last shot settles', true)}${field('undo', 'undo memory, MB (0: undo replays the shots)', DEFAULT_UNDO_MB, `step="1" min="0" max="${MAX_UNDO_MB}"`)}${field('freeze', 'freezes, Bullet Time (empty: the level\'s own)', '', `step="1" min="0" max="${MAX_FREEZE}" placeholder="level's"`)}<label class="f"><span>frames drawn</span><select name="frames"><option value="all">every frame</option><option value="half">half on a fast display</option><option value="auto">half while physics is behind</option></select></label><label class="f"><span>launch height (keys W, S move it)</span><select name="launch"><option value="high">high: over the structure's top</option><option value="level">the level's own launcher</option></select></label><label class="f"><span>fired balls</span><select name="balls"><option value="painted">painted, banded</option><option value="plain">plain: the look's</option></select></label>${field('marks', 'stone marks: crosshair on crowns, shield on what to keep, crown on a crown to hold', true)}<label class="f"><span>impact effects</span><select name="fx"><option value="damage">follow the damage: a miss gets a puff</option><option value="classic">classic: every hit sparks in full</option></select></label>${field('spent', 'spent ammo fades once its shot settles', true)}${field('pullanim', 'pulls slide out, a ghost where they stood', true)}${field('frozenlook', 'Bullet Time: frozen look (cold grade and rim, label, sparks held and thinned)', true)}</div>
       </div>
       <div class="seed">${field('seed', 'seed', 1, 'step="1"')}</div>
       <div class="world">
@@ -314,6 +319,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       ${field('blockDensity', 'blocks are (kg/m³)', '', 'step="any" min="1" max="30000" list="block-densities"')}
       <datalist id="block-densities">${BLOCK_MATERIALS.map(([name, d]) => `<option value="${d}" label="${name}"></option>`).join('')}</datalist>
       <label class="f"><span>weapon</span><select name="weapon"><option value="">none</option>${WEAPONS.map((w) => `<option value="${w}">${w}</option>`).join('')}<option value="" data-custom hidden></option></select></label>
+      <div class="buttons"><button type="button" name="weaponEdit">Edit weapon…</button></div>
       <div class="spec buttons"><button type="button" name="weaponDownload">Download weapon</button><button type="button" name="weaponLoad">Load weapon…</button><input type="file" name="weaponFile" accept=".json,application/json" hidden></div>
       <div class="grenade">
         <label class="f"><span>fuse</span><select name="grenade.fuse">${FUSES.map((f) => `<option value="${f}"${f === DEFAULT_GRENADE.fuse ? ' selected' : ''}>${f === 'proxTimer' ? 'proximity, then delay' : f === 'prox' ? 'proximity' : 'timer'}</option>`).join('')}</select></label>
@@ -428,6 +434,8 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       undoMB: input(sceneForm, 'undo').value === '' ? NaN : Number(input(sceneForm, 'undo').value),
       launch: input(sceneForm, 'launch').value as LaunchMode, balls: input(sceneForm, 'balls').value as BallStyle,
       marks: (input(sceneForm, 'marks') as HTMLInputElement).checked,
+      fx: input(sceneForm, 'fx').value as EffectStyle, spent: (input(sceneForm, 'spent') as HTMLInputElement).checked,
+      pullAnim: (input(sceneForm, 'pullanim') as HTMLInputElement).checked, frozenLook: (input(sceneForm, 'frozenlook') as HTMLInputElement).checked,
     }, freeze: input(sceneForm, 'freeze').value === '' ? NaN : Number(input(sceneForm, 'freeze').value) };
     return proposeScene(hooks.config(), scenario, params, Number(input(sceneForm, 'seed').value), Number(input(sceneForm, 'scale').value), Number(input(sceneForm, 'substeps').value), bounce, presettle, rules);
   }
@@ -556,6 +564,51 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       projOut.classList.add('warn');
     }
   });
+  // The weapon editor (weapon-editor.ts): opens on the picked weapon (a copy of the grenade's knobs as a
+  // spec, or a new weapon when none is picked); its Apply offers the result as your own, as Load does.
+  if (!document.getElementById('weapon-editor-css')) {
+    const st = document.createElement('style');
+    st.id = 'weapon-editor-css';
+    st.textContent = WEAPON_EDITOR_CSS;
+    document.head.append(st);
+  }
+  const editorEl = document.getElementById('weapon-editor') ?? Object.assign(document.createElement('div'), { id: 'weapon-editor', className: 'panel' });
+  if (!editorEl.isConnected) document.body.append(editorEl);
+  const editor = mountWeaponEditor(editorEl, {
+    tier: () => weaponTierOf(hooks.config()),
+    apply(spec) {
+      if (weaponName(spec) === 'grenade') return 'name it something other than grenade (the grenade keeps its own knobs)';
+      offerCustom(spec);
+      input(projForm, 'weapon').value = weaponName(spec);
+      try {
+        const p = projectile();
+        showMass(p);
+        hooks.setProjectile(p);
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e);
+      }
+    },
+    download: (spec) => download(`${writeWeapon(spec)}\n`, `${weaponName(spec)}.weapon.json`),
+    toggled(open) {
+      const c = hooks.config();
+      if (c.weapons.edit !== open) hooks.setWeapons?.({ ...c.weapons, edit: open });
+      if (!open) hooks.editing?.(null);
+    },
+    changed: (spec) => hooks.editing?.(spec),
+  });
+  /** The spec the editor opens on: the picked weapon's, the grenade's knobs as a spec, or a new one. */
+  function editTarget(): WeaponSpec {
+    const w = input(projForm, 'weapon').value, spec = specOf(w);
+    if (spec) return spec;
+    if (w === 'grenade') {
+      try {
+        const g = projectile().grenade;
+        if (g) return grenadeAsSpec(g, { shape: { kind: 'sphere', radius: 0.2 }, density: 8, speed: [5, 40] }, 'mygrenade');
+      } catch { /* a bad knob: start fresh */ }
+    }
+    return newWeapon('custom');
+  }
+  projForm.querySelector<HTMLButtonElement>('button[name=weaponEdit]')!.addEventListener('click', () => editor.open(editTarget()));
   projForm.addEventListener('submit', (e) => e.preventDefault());
   projForm.addEventListener('change', () => {
     try {
@@ -671,6 +724,10 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
     input(sceneForm, 'launch').value = c.feel.launch;
     input(sceneForm, 'balls').value = c.feel.balls;
     (input(sceneForm, 'marks') as HTMLInputElement).checked = c.feel.marks;
+    input(sceneForm, 'fx').value = c.feel.fx;
+    (input(sceneForm, 'spent') as HTMLInputElement).checked = c.feel.spent;
+    (input(sceneForm, 'pullanim') as HTMLInputElement).checked = c.feel.pullAnim;
+    (input(sceneForm, 'frozenlook') as HTMLInputElement).checked = c.feel.frozenLook;
     input(sceneForm, 'seed').value = String(c.seed);
     input(sceneForm, 'presettle').value = String(c.presettle);
     input(sceneForm, 'scale').value = String(c.scale);
@@ -702,6 +759,7 @@ export function mountControls(root: HTMLElement, hooks: ControlsHooks): { refres
       for (const k of GRENADE_BLAST_KEYS) input(projForm, `grenade.${k}`).value = String(g.blast[k]);
     }
     showMass(p);
+    if (c.weapons.edit && !editor.isOpen && c.rules !== 'keystone') editor.open(editTarget());
     input(lookForm, 'look').value = c.look;
     (input(lookForm, 'blast') as HTMLInputElement).checked = c.blast.on;
     realBox.hidden = c.look !== 'real';

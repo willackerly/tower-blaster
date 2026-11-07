@@ -4,7 +4,7 @@
 // code it names does turn up, so a note never outlives its issue). That its
 // rack reaches across its launcher ring is keystone-lab's trial-reach.test.ts.
 import { describe, expect, it } from 'vitest';
-import { archWall, compileLevel, DRAFTS, dominoRun, findLevel, gateWall, IceBreaker, isTrial, LEVELS, BIG_LEVELS, materialId, scoringOf, slabBuilding, towerChain, TRIAL_DRAFTS, TRIAL_DROPS, TRIAL_LEVELS, TRIAL_NOTES, TRIAL_PROMOTE, UNDERCUT_LEVELS, validateLevel } from '@tb/keystone';
+import { archWall, BuildSession, compileLevel, DRAFTS, dominoRun, findLevel, gateWall, IceBreaker, isTrial, LEVELS, BIG_LEVELS, materialId, scoringOf, slabBuilding, towerChain, TRIAL_DRAFTS, TRIAL_DROPS, TRIAL_LEVELS, TRIAL_NOTES, TRIAL_PROMOTE, UNDERCUT_LEVELS, validateLevel, WORKSHOP_RADIUS } from '@tb/keystone';
 
 const sizes = new Map(TRIAL_LEVELS.map((d) => [d.id, compileLevel(d)]));
 
@@ -13,7 +13,7 @@ describe('trial levels', () => {
     const ids = TRIAL_LEVELS.map((d) => d.id);
     expect(new Set(ids).size).toBe(ids.length);
     for (const id of ids) {
-      expect(id).toMatch(/^T-[SXBI]\d+[A-Z]?$/);
+      expect(id).toMatch(/^T-[SXBIW]\d+[A-Z]?$/);
       expect(isTrial(id) && isTrial(id.toLowerCase())).toBe(true);
       expect(TRIAL_NOTES[id]?.from, id).toBeTruthy();
       expect(findLevel(id)).toBe(TRIAL_LEVELS.find((d) => d.id === id));
@@ -22,9 +22,9 @@ describe('trial levels', () => {
     expect(Object.keys(TRIAL_NOTES).sort()).toEqual([...ids].sort());
   });
 
-  it('the list is the agent playtest\'s (PT11): judge 3\'s keeps, reworks and promotions, its drops gone with a reason each', () => {
+  it('the list is the agent playtest\'s (PT11): judge 3\'s keeps, reworks and promotions, its drops gone with a reason each; the workshop (C9) after it', () => {
     const ids = TRIAL_LEVELS.map((d) => d.id);
-    expect(ids).toEqual(['T-S3', 'T-S4', 'T-S8', 'T-S14', 'T-S14T', 'T-X1', 'T-X2', 'T-X3B', 'T-X4', 'T-B1B', 'T-B2C', 'T-B3B', 'T-B4A', 'T-I1', 'T-I2', 'T-I3']);
+    expect(ids).toEqual(['T-S3', 'T-S4', 'T-S8', 'T-S14', 'T-S14T', 'T-X1', 'T-X2', 'T-X3B', 'T-X4', 'T-B1B', 'T-B2C', 'T-B3B', 'T-B4A', 'T-I1', 'T-I2', 'T-I3', 'T-W1']);
     expect(Object.keys(TRIAL_DROPS).sort()).toEqual(['T-B1A', 'T-B2A', 'T-B2B', 'T-B2D', 'T-B2E', 'T-B3A', 'T-B3C', 'T-B3E', 'T-S1', 'T-S12', 'T-S2', 'T-S3R', 'T-X3', 'T-X3K']);
     for (const id of Object.keys(TRIAL_DROPS)) { expect(ids, id).not.toContain(id); expect(TRIAL_DROPS[id]!.length, id).toBeGreaterThan(10); }
     for (const id of TRIAL_PROMOTE) expect(ids, id).toContain(id);
@@ -43,6 +43,26 @@ describe('trial levels', () => {
     expect([...k.material].filter((m) => m === stone)).toHaveLength(36);
     expect(k.crowns.every((b) => k.material[b] === ice)).toBe(true);
     for (const id of ids) expect(IceBreaker.budget(sizes.get(id)!), id).toBeGreaterThan(0);
+  });
+
+  it('T-W1, the Domino Workshop: three crown dominoes on a circle facing along it, one marble, a domino-only brush budget', () => {
+    const def = findLevel('T-W1')!, c = sizes.get('T-W1')!;
+    expect(def.rack).toEqual(['marble']);
+    expect(def.build).toEqual({ budget: 30, pieces: ['domino'], brush: true });
+    expect(c.meta.n).toBe(3);
+    expect(Array.from(c.meta.crowns)).toEqual([0, 1, 2]);
+    const h = c.frame.unit;
+    for (const b of c.scene.bodies) {
+      const [x, y, z] = b.pos, q = b.rot;
+      expect(Math.hypot(x, z) / h).toBeCloseTo(WORKSHOP_RADIUS, 6);
+      expect(y / h).toBeCloseTo(1, 6); // standing on the ground
+      // The thin axis (z rotated by q) is the circle's tangent: perpendicular to the radius.
+      const zx = 2 * (q[0] * q[2] + q[3] * q[1]), zz = 1 - 2 * (q[0] ** 2 + q[1] ** 2);
+      expect(Math.abs(zx * x + zz * z) / h).toBeLessThan(1e-9);
+    }
+    // Every other trial has no build phase.
+    expect(TRIAL_LEVELS.filter((d) => d.build).map((d) => d.id)).toEqual(['T-W1']);
+    expect(new BuildSession(def).items.map((i) => i.name)).toEqual(['domino']);
   });
 
   it.each(TRIAL_LEVELS.map((d) => d.id))('%s: an uncast outcome level inside the GPU budget, with exactly the issues its note names', (id) => {

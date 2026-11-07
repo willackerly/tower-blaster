@@ -7,10 +7,11 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
-import { type RackItem, type CompiledLevel, compileLevel, crackSeed, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectFootprints, selectGroups, type Shot, isIcePiece, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { armRefusal, type RackItem, type CompiledLevel, compileLevel, crackSeed, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, runSession, selectFootprints, selectGroups, type Shot, isIcePiece, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { clampPitch, eyeOf, type Orbit, rayThrough, viewProj } from '@tb/render/camera';
-import type { FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
+import type { EffectStats, FxOptions, PixelStats, Renderer, SnapshotSource } from '@tb/render';
 import type { HostStats } from '@tb/audio';
+import type { WeaponTier } from '@tb/weapons';
 import { type Aimed, azFromYaw, launchHeight, launchStep, pick, previewBeads, pullFor, shotFor, SUBSTEPS } from './aim.ts';
 import { Synth, type Voice, voicesFor } from './audio.ts';
 import { CollapseSound, type CollapseStatus } from './collapse-sound.ts';
@@ -18,7 +19,8 @@ import { type GameSoundMode, soundSetOf } from './sound-map.ts';
 import { viewOf } from './view.ts';
 export { viewOf } from './view.ts';
 import { driverOptions, type EngineKind, gpuEngineOptions, makeEngine, roomAfter } from './engines.ts';
-import { hudHtml, meterTicks, type MeterTick, nextSelection, POWER_STEP, rackChips, resultHtml, starsText } from './hud.ts';
+import { type CardForward, hudHtml, meterTicks, type MeterTick, nextSelection, POWER_STEP, rackChips, resultHtml, starsText, tallyHtml } from './hud.ts';
+import type { Layout } from './layout.ts';
 import { type GoalLine, goalsHudHtml, goalsResultHtml } from './lot-hud.ts';
 import { duelHudHtml, duelResultHtml } from './duel-hud.ts';
 import { arcBeads, duelView, joinOverlays, type Overlay, turnCue, turnCueText, TurnSwing } from './duel-view.ts';
@@ -29,10 +31,39 @@ import { COST_WINDOW, runPhysics, wakeable } from './physics-loop.ts';
 import { CLEAR_SHARE, FrameGovernor } from './frame-rate.ts';
 import { canvasSize, type QualityState } from './quality.ts';
 import { UndoMarks } from './undo-marks.ts';
-import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, PULL_HOVER, regrowDuration, regrowScales, structureMarks, structureTints, TINT, tintOf, tintWordOf } from './scene.ts';
+import { ballFx, beadOverlay, BOMB_FX, CROWN_GLOW, firedKind, PULL_HOVER, ramFx, regrowDuration, regrowScales, rolePaint, SPENT_FADE, spentFx, structureMarks, structureTints, tintOf, tintWordOf } from './scene.ts';
+import { easeGrade, FROZEN_LABEL, freezeFxOf } from './frozen-look.ts';
+import { ghostOutline, PULL_SLIDE_STEPS, type PullAnim, pullAnimFor, withPulled } from './pull-anim.ts';
 import { type GestureState, type TouchAction, TouchGestures, touchFace, type TouchMode } from './touch.ts';
+import { EditController } from './edit.ts';
+import { applyEditAction, type EditAction, mountEditPanel } from './edit-panel.ts';
+import { EditView } from './edit-view.ts';
 
 /** What a page (and its tests) can see and do while Keystone plays: window.__game on the game page. */
+/**
+ * The build phase (C9, docs/game/placement.md) as a test or the console drives it: what the Build panel and the
+ * pointer do, by world rays. Only on a level with a build block, before its first shot.
+ */
+export interface GameEditHandle {
+  /** Building now: time stopped, the level as built drawn at its authored poses. */
+  readonly on: boolean;
+  /** Enter the build phase (false when the level offers none, or a shot has gone in); Play; leave without the edits. */
+  enter(): boolean;
+  play(): void;
+  cancel(): void;
+  /** A key as the build phase takes it (Q / E turn, T tip, 1 to 9 items, B brush, X erase, Z undo); whether it was one. */
+  key(k: string, shift?: boolean): boolean;
+  /** The pointer as a world ray: hover (or a stroke's drag), press, release. */
+  ray(kind: 'move' | 'down' | 'up', origin: [number, number, number], dir: [number, number, number], alt?: boolean): void;
+  status(): string;
+  /** The level as built (null when not building). */
+  def(): LevelDef | null;
+  /** The ghost's bodies drawn now. */
+  ghosts(): number;
+  /** The hash of the level the last Play started (compileLevel of the built definition); null before. */
+  played: string | null;
+}
+
 export interface GameHandle {
   status: 'loading' | 'running' | 'error';
   error?: string;
@@ -51,6 +82,13 @@ export interface GameHandle {
   collapse: number;
   /** Run the sim at fast-forward speed (as if Space were held). */
   fast: boolean;
+  /**
+   * Test hook (the agent playtest's captures, agent playtest PT12): while true no physics step runs, and
+   * frames still draw, so a capture's picture and its HUD show the same step. Rapier steps on the CPU
+   * while SwiftShader takes many frames to render, so round 1's "+25 steps" frames showed the scene at
+   * step 25 under a HUD read 150 steps later (B1 Down 16% over a standing wall). Pacing only.
+   */
+  hold: boolean;
   /**
    * Pacing now: the valve's time scale (budget / step cost, in [0.25, 1]; up to 4 at fast-forward),
    * the sim speed reached (sim time per real time, measured), the HUD's slow-motion tag ('' at real
@@ -78,8 +116,13 @@ export interface GameHandle {
   counts: Record<string, number>;
   /** Pace juice in effect (`?keystone.hitstop=1`, `?keystone.slowmo=1`; both off by default). */
   feel: PaceFeel;
-  /** Engine step at which this attempt's round-over card first showed, or null. */
+  /** Engine step at which this attempt's round-over notice first showed (the card, or the tallying banner that comes first when docked), or null. */
   resultShownAt: number | null;
+  /**
+   * The result card's placement (layout.ts: docked aside or centred) and wall times (performance.now, ms): when the round's
+   * end settled (levelEnd) and when the card itself showed; null until then. Docked, the card waits Layout.cardDelay after the end.
+   */
+  card: { place: 'dock' | 'center'; endedMs: number | null; shownMs: number | null };
   /**
    * Wall time of this level's load (engine build and pre-settle), and of each live step since, in ms;
    * moving: each live step's structure bodies in motion (Reductions.nMoving, what settle v2 counts);
@@ -106,6 +149,12 @@ export interface GameHandle {
    * False when nothing changed.
    */
   freeze(on?: boolean): boolean;
+  /**
+   * Skip the rest of the running shot's settle (key K, the HUD's Skip button; agent playtest PT6): its
+   * steps run up to SKIP_SCALE times real time until it settles. Pacing only: the same steps run, so the
+   * outcome and a replay are as if it had been watched. False when no shot is running (or it is frozen).
+   */
+  skip(): boolean;
   /** Fire the level's pre-aimed opening shot (KeystoneEnv.opener; key F, the HUD's Fire button): false when there is none now. */
   fireOpener(): boolean;
   /** Mute or unmute every sound (as key M toggles). */
@@ -140,12 +189,23 @@ export interface GameHandle {
   /** The undo checkpoints held now: one per shot still kept (null where none was), and their bytes (PaceFeel.undoMB caps them). */
   undoMemory(): { marks: number; bytes: number };
   capture(keepPixels?: boolean): Promise<PixelStats | null>;
+  /** Tests: pixels of the current view (the ID pass, Renderer.renderIds) that show body `body`. */
+  coverage(body: number): Promise<number>;
+  /** Tests: the last pull's slide as last drawn (pull-anim.ts): steps since the pull, the drawn centre and scale; null when none is drawn. */
+  pullDrawn: { body: number; k: number; pos: [number, number, number]; scale: number } | null;
+  /** Bullet Time's frozen look as last drawn (frozen-look.ts): the grade's amount, 0 none to 1 full, eased per frame. */
+  frozenGrade: number;
   /**
-   * How each fired body (the slots past the structure's, in spawn order) is drawn now, read back from the
-   * renderer: a bomb (a lit fuse, or BOMB_FX's matte iron once its fuse has given way to newer ones), a painted
-   * ball (paint and band, scene.ts ballFx), or plain (the look's).
+   * How each fired body (the slots past the structure's, in spawn order) is drawn now: a bomb (a lit fuse and
+   * BOMB_FX's matte iron), a ram (scene.ts ramFx: bronze, banded, no fuse), a painted ball (paint and band,
+   * scene.ts ballFx), or plain (the look's). Checked against the renderer: a bomb's slot must hold BOMB_FX or a
+   * fuse, a ram's or painted ball's its paint and band.
    */
-  firedLooks(): ('bomb' | 'painted' | 'plain')[];
+  firedLooks(): ('bomb' | 'ram' | 'painted' | 'plain')[];
+  /** Per fired body (as firedLooks), whether it is drawn spent (PaceFeel.spent: faded once its shot settled). */
+  spentLooks(): boolean[];
+  /** The renderer's transient effects now (@tb/render Renderer.effectStats: live particles, hot bodies, lit flashes, blasts, fuses). */
+  effects(): Promise<EffectStats>;
   /** The mark carved on each structure body now, read back from the renderer (@tb/render MARK_NONE, MARK_HIT, MARK_SAVE). */
   marks(): number[];
   /** Carve or clear the stones again as feel.marks now says (the front door's Stone marks setting changed). */
@@ -179,6 +239,8 @@ export interface GameHandle {
   grade: Grade | null;
   /** A duel's state (KeystoneEnv.duel) as of the last settle, or null outside one. */
   duel: DuelState | null;
+  /** The build phase (levels with a build block): see GameEditHandle. */
+  edit: GameEditHandle;
 }
 /**
  * Where a level load's wall time went, ms (GameHandle.timing.load): checking the round being left
@@ -229,11 +291,12 @@ function safetyLimiter(ctx: AudioContext): AudioNode {
 export function newGameHandle(): GameHandle {
   const none = (): SessionState => ({ step: 0, phase: 'loading', strokes: 0, heritageBroken: 0, hash: '' });
   return {
-    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
-    fire: () => false, bank: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, firedLooks: () => [], marks: () => [], refreshMarks: () => {},
+    status: 'loading', engine: '', level: '', phase: 'loading', ready: false, frozen: false, frames: 0, stepIndex: 0, strokes: 0, bodies: 0, collapse: 0, fast: false, hold: false, pace: { timeScale: 1, speed: 1, tag: '', tailSkip: false, costMs: NaN }, view: { target: [0, 0, 0], distance: 0, yaw: 0, pitch: 0, following: false, jolt: 0, turning: false, cue: null, arcBeads: 0 }, input: { touch: false, gesture: 'idle', fingers: 0, aimed: null, power: 100, launch: 0 }, result: null, counts: {}, feel: { ...DEFAULT_FEEL }, resultShownAt: null, card: { place: 'center', endedMs: null, shownMs: null }, timing: { loadMs: 0, load: noPhases(), stepMs: [], moving: [], frameMs: [], costMs: [] }, draws: { drawn: 0, skipped: 0, decimating: false },
+    fire: () => false, bank: () => false, skip: () => false, freeze: () => false, fireOpener: () => false, setMuted: () => {}, maxDpr: 2, quality: null, aim: () => null, reach: null, select: () => false, load: async () => {}, retry: async () => {}, undo: async () => false, undone: null, spare: null, undoMemory: () => ({ marks: 0, bytes: 0 }), capture: async () => null, coverage: async () => 0, pullDrawn: null, frozenGrade: 0, firedLooks: () => [], spentLooks: () => [], effects: async () => ({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 }), marks: () => [], refreshMarks: () => {},
     state: none, line: () => [], replay: async () => none(), health: async () => null, pairsPerBody: 0, limitsHit: [], goals: [], grade: null, duel: null,
     sound: () => ({ mode: 'collapse', status: 'off', error: '', posted: 0, stats: null }),
     ice: () => ({ count: 0, cracks: [] }),
+    edit: { on: false, enter: () => false, play: () => {}, cancel: () => {}, key: () => false, ray: () => {}, status: () => '', def: () => null, ghosts: () => 0, played: null },
   };
 }
 
@@ -323,6 +386,11 @@ export interface KeystoneEnv {
   series?: readonly number[];
   engine: EngineKind;
   feel: PaceFeel;
+  /**
+   * The device tier the rack's weapons must fit (keystone armRefusal: one over it is refused on fire,
+   * with a banner saying which number and which tier fires it); absent: high. Asked at each fire.
+   */
+  weaponTier?(): WeaponTier;
   /** Shows an error; play stops (handle.status is 'error'). */
   fail(e: unknown): void;
   hooks?: KeystoneHooks;
@@ -347,6 +415,18 @@ export interface KeystoneEnv {
   /** The result card's Save session button (shown when given): the page saves the round just ended. */
   onSave?(): void;
   /**
+   * Where the HUD and the result card sit (layout.ts; read live, so the Layout setting applies from the next card).
+   * Absent: classic, the card centred at once (the viewer).
+   */
+  layout?: Layout;
+  /**
+   * The result card's forward button at the end of a series (hud.ts CardForward): the next series' first level
+   * (its index in `levels`) with a label, or null; absent or null, Levels (onLevels) when given.
+   */
+  seriesForward?(i: number): { index: number; label: string } | null;
+  /** The result card's Levels button at the last level of a series with nothing after it: the page opens its level list (the front door). */
+  onLevels?(): void;
+  /**
    * The level's lot sheet (docs/game/lot-sheets.md), asked at each load and retry: the sheet, the goals to
    * show (proven ones unless ?keystone.goals=all) and the ids the player met on earlier plays; null for none.
    */
@@ -359,6 +439,11 @@ export interface KeystoneEnv {
   duel?: DuelDef;
   /** Touch controls' face (?touch=auto|1|0, touch.ts): auto by default. The gestures work whatever it says. */
   touch?: TouchMode;
+  /**
+   * The build phase on levels with a build block (C9, docs/game/placement.md): on by default; false
+   * (?keystone.build=0) plays them as authored, with no Build panel.
+   */
+  build?: boolean;
 }
 
 /** An orbiting drag of (dx, dy) pixels: turns, and tilts from looking down to looking up (past level the floor brings the eye in). */
@@ -383,7 +468,10 @@ const typing = (e: KeyboardEvent) => e.target instanceof HTMLElement && (e.targe
  * `handle`. Resolves once the first level is running; errors go to env.fail.
  */
 export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGameHandle()): Promise<GameHandle> {
-  const { canvas, offscreen, device, renderer, source, levels, engine: kind, feel, fail } = env;
+  const { canvas, offscreen, device, renderer, source, engine: kind, feel, fail } = env;
+  // The levels as the player has them: a build-phase level is replaced by the level as built when it is played
+  // (Play), so Retry, Undo and coming back to it later start from what was built.
+  const levels: LevelDef[] = [...env.levels];
   /** Whether level i + d exists and is in level i's series (N, P and Next walk only inside it). */
   const step = (i: number, d: 1 | -1) => i + d >= 0 && i + d < levels.length && (env.series?.[i + d] ?? 0) === (env.series?.[i] ?? 0);
   const hooks = env.hooks ?? {};
@@ -433,16 +521,44 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   // a weapon's children, the input hook's, in the order the engine applies them).
   let descs: readonly BodyDesc[] = [];
   /**
-   * Fired bodies' looks by slot (the slots past the structure's): a bomb's (BOMB_FX and a fuse) or a painted
-   * ball's (scene.ts ballFx), null for one drawn as the look draws it. Kept so an undo can draw the kept shots'
-   * bodies as they were: a checkpoint's (UndoMark.looks) or, when the undo replays, the slots the replay refills
-   * (the same shots in the same order spawn into the same slots); a fresh attempt clears it.
+   * Fired bodies' looks by slot (the slots past the structure's): a bomb's (BOMB_FX and a fuse), a ram's
+   * (scene.ts ramFx), a painted ball's (ballFx) or a plain one's (fx null: as the look draws it), and whether it
+   * is spent (faded once its shot settled, PaceFeel.spent); null for an ice piece (the ice pass draws it). Kept
+   * so an undo can draw the kept shots' bodies as they were: a checkpoint's (UndoMark.looks) or, when the undo
+   * replays, the slots the replay refills (the same shots in the same order spawn into the same slots); a fresh
+   * attempt clears it. Entries are replaced, never changed in place (a checkpoint holds the array's old entries).
    */
-  let firedLooks: ({ fx: FxOptions; fuse: boolean } | null)[] = [];
-  const paintFired = (i: number, look: { fx: FxOptions; fuse: boolean } | null) => {
+  interface FiredLook { fx: FxOptions | null; fuse: boolean; kind: 'bomb' | 'ram' | 'painted' | 'plain'; spent: boolean }
+  let firedLooks: (FiredLook | null)[] = [];
+  /** Spent ammo fading now: slot, its live look, and when the fade began (ms). */
+  let fading: { slot: number; look: FiredLook; t0: number }[] = [];
+  const paintFired = (i: number, look: FiredLook | null) => {
     if (!look) return;
-    renderer.setFx(i, look.fx);
-    if (look.fuse) renderer.fuse(i);
+    if (look.spent) renderer.setFx(i, spentFx(look.fx, 1));
+    else if (look.fx) renderer.setFx(i, look.fx);
+    if (look.fuse && !look.spent) renderer.fuse(i);
+  };
+  /**
+   * Fade every painted ball and ram not yet spent (a shot settled; PaceFeel.spent). Bombs are left as they are
+   * (a live one still goes off), and so are plain balls (the plain style draws the look's own ball, whose colour
+   * the game does not hold, so it has nothing to fade from).
+   */
+  const spendFired = () => {
+    if (!feel.spent) return;
+    const t0 = performance.now();
+    for (let i = c.meta.n; i < descs.length; i++) {
+      const L = firedLooks[i - c.meta.n];
+      if (!L || L.spent || !L.fx || L.kind === 'bomb') continue;
+      firedLooks[i - c.meta.n] = { ...L, spent: true };
+      renderer.setFx(i, spentFx(L.fx, 0));
+      fading.push({ slot: i, look: L, t0 });
+    }
+  };
+  /** One frame of the spent fades (frame time now, ms). */
+  const fadeSpent = (now: number) => {
+    if (!fading.length) return;
+    for (const f of fading) renderer.setFx(f.slot, spentFx(f.look.fx, (now - f.t0) / 1000 / SPENT_FADE));
+    fading = fading.filter((f) => now - f.t0 < 1000 * SPENT_FADE);
   };
   /**
    * Take up new bodies; item: the rack item fired ('bomb' for bodies the step loop adds). A weapon's
@@ -457,12 +573,15 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const from = descs.length;
     descs = driver.bodies;
     fxSlots = descs.length;
-    const bomb = item === 'bomb' || item.startsWith('w-');
-    const fx = bomb ? BOMB_FX : ballFx(item as RackItem, feel.balls);
+    // A weapon that goes off is a bomb; one that never does is a ram (scene.ts firedKind; drawn as a bomb in the plain style, as before PT19).
+    let kind = item === 'bomb' ? 'bomb' : firedKind(c.def, item);
+    if (kind === 'ram' && feel.balls === 'plain') kind = 'bomb';
+    const bomb = kind === 'bomb';
+    const fx = bomb ? BOMB_FX : kind === 'ram' ? ramFx(feel.balls) : ballFx(item as RackItem, feel.balls);
     for (let i = from; i < descs.length; i++) {
       // A shattered ice block's pieces are drawn as ice (the 'shatter' feedback paints them), never as bombs.
       if (isIcePiece(descs[i]!)) { firedLooks[i - c.meta.n] = null; continue; }
-      const look = fx ? { fx, fuse: bomb } : null;
+      const look: FiredLook = { fx, fuse: bomb, kind: bomb ? 'bomb' : kind === 'ram' ? 'ram' : fx ? 'painted' : 'plain', spent: false };
       firedLooks[i - c.meta.n] = look;
       paintFired(i, look);
       if (bomb) handle.counts.bomb = (handle.counts.bomb ?? 0) + 1;
@@ -482,6 +601,16 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let waiting: Shot[] = [];
   /** Bullet Time: the running shot's physics is frozen (freeze, key T); the physics loop holds until a shot or T resumes it. */
   let frozen = false;
+  /** Bullet Time's frozen look (frozen-look.ts; PaceFeel.frozenLook): the grade's amount now, eased, and the label. */
+  let frozenGrade = 0;
+  const frozenLabel = document.createElement('div');
+  frozenLabel.className = 'kg-frozen';
+  frozenLabel.innerHTML = FROZEN_LABEL;
+  (env.banner.parentElement ?? document.body).appendChild(frozenLabel);
+  /** The last pull, drawn (pull-anim.ts; PaceFeel.pullAnim): its slide-out and ghost outline. Null on a load or undo. */
+  let pullAnim: PullAnim | null = null;
+  /** The engine step its pull went in at: the slide is drawn by steps since (pullPose). */
+  let pullStep = 0;
   let regrowBuf = new Float32Array(0);
   let selected: RackItem | null = null;
   let opener: Shot | null = null;
@@ -492,6 +621,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
    */
   let launchAt = 0, launchFor = '';
   let aimed: Aimed | null = null, beads: Float64Array | null = null, aimDirty = false;
+  /** The block a click or tap tried to pull and was refused (a crown, heritage): its hint shows red until the aim leaves it. */
+  let refusedPull: number | null = null;
   /** The block a selected pull would take, lit (PULL_HOVER) until the cursor leaves it or it is pulled. */
   let hover: number | null = null;
   /** A one-blast weapon's blast radius around the aim point, for the aim preview's danger zone (Renderer.reach); null otherwise. */
@@ -499,6 +630,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let pointer: [number, number] | null = null;
   let regrowT: number | null = null;
   let fastHeld = false;
+  /** Skip (key K, the HUD's Skip button; agent playtest PT6): the running shot's settle runs at SKIP_SCALE until it ends. */
+  let skipping = false;
   let lastHud = '', crownsShown = 0;
   /** The level's lot sheet and its groups (selected once per load), or null. */
   let lot: { sheet: LotSheet; goals: readonly Goal[]; groups: Record<string, Int32Array>; footprints: Record<string, Footprint> } | null = null;
@@ -508,6 +641,108 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let arcs: Overlay[] = [], arcBeadsDrawn = 0;
   /** Every crown is down: the round is known to be over, the card shows, and the rest of the settle runs at fast-forward. */
   let ending = false;
+  // The docked layout's tallying banner (layout.ts, PT4): a small panel at the top, shown from the round's end
+  // until the card, which waits for it (cardTimer). Beside the result card, in the same parent.
+  const tally = document.createElement('div');
+  tally.className = 'kg-panel kg-tally';
+  tally.setAttribute('role', 'status');
+  (env.result.parentElement ?? document.body).append(tally);
+  let cardTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // The build phase (C9, docs/game/placement.md): on a level with a build block, before its first shot, time stops and
+  // the player places pieces and lays domino runs on the level as authored (EditController), drawn in place of the
+  // engine's state (EditView). Play compiles the level as built and loads it in this level's place (levels[levelIdx]),
+  // keeping the camera; Cancel restores the level as it loaded. A fresh load of such a level opens in it.
+  let editing: EditController | null = null, buildAfterLoad = false, touchStroke = false;
+  const editView = new EditView(renderer, source);
+  const buildEl = document.createElement('details');
+  buildEl.className = 'kg-panel kg-build';
+  buildEl.hidden = true;
+  (env.hud.parentElement ?? document.body).append(buildEl);
+  const buildPanel = mountEditPanel(buildEl, (x) => editAct(x));
+  /** The level loaded offers a build phase (and the page allows one). */
+  const buildOffered = () => env.build !== false && !!c?.def.build && !env.duel;
+  /** The build phase can start now: offered, and aiming before the attempt's first shot. */
+  const canEdit = () => buildOffered() && !loading && !stepping && !ending && handle.result === null && driver.session.phase === 'aiming' && driver.session.inputs.length === 0;
+  /** The Build panel: shown while building, or while the build phase can start; redrawn only when its HTML changes. */
+  function showPanel() {
+    buildEl.hidden = !(editing || canEdit());
+    buildPanel.show(editing);
+  }
+  function showEdit() {
+    if (editing) editView.show(editing, feel.marks);
+    showPanel();
+    syncState();
+  }
+  function enterEdit(): boolean {
+    if (editing || !canEdit()) return false;
+    editing = new EditController(levels[levelIdx]!, {});
+    // No aim, arc, reach or hover while building; the grow-in stops (the world is drawn at its authored poses).
+    pointer = null;
+    aimed = beads = null;
+    ring = handle.reach = null;
+    setHover(null);
+    regrowT = null;
+    touchStroke = false;
+    buildEl.open = true;
+    document.body.classList.add('kg-building');
+    showEdit();
+    return true;
+  }
+  /** Ends the build phase without loading anything (a load follows, or is under way). */
+  function leaveEdit() {
+    editing = null;
+    touchStroke = false;
+    editView.forget();
+    document.body.classList.remove('kg-building');
+    showPanel();
+  }
+  function playEdit() {
+    if (!editing) return;
+    const def = editing.play();
+    handle.edit.played = compileLevel(def).hash;
+    if (JSON.stringify(def) !== JSON.stringify(levels[levelIdx])) levels[levelIdx] = def;
+    leaveEdit();
+    void load(levelIdx, true).catch(fail);
+  }
+  function cancelEdit() {
+    if (!editing) return;
+    leaveEdit();
+    // The level as it loaded: its start checkpoint, restored in place.
+    void load(levelIdx, true).catch(fail);
+  }
+  function editAct(x: EditAction) {
+    if (x.a === 'enter') { if (!enterEdit()) banner('Build before the first shot: Retry to build again', 'crack'); }
+    else if (x.a === 'play') playEdit();
+    else if (x.a === 'cancel') cancelEdit();
+    else if (editing && applyEditAction(editing, x)) showEdit();
+    else if (editing) showEdit(); // a refusal's reason, on the status line
+  }
+  const editRay = (kind: 'move' | 'down' | 'up', origin: Vec3, dir: Vec3, alt = false) => {
+    if (!editing) return;
+    const r = { origin, dir };
+    if (kind === 'move') editing.move(r, { alt });
+    else if (kind === 'down') editing.down(r);
+    else editing.up(r, { alt });
+    showEdit();
+  };
+  handle.edit = {
+    get on() { return editing !== null; },
+    enter: enterEdit,
+    play: playEdit,
+    cancel: cancelEdit,
+    key(k, shift = false) {
+      if (!editing) return false;
+      const did = editing.key(k, { shift });
+      if (did) showEdit();
+      return did;
+    },
+    ray: editRay,
+    status: () => editing?.status() ?? '',
+    def: () => editing?.play() ?? null,
+    ghosts: () => (editing ? editing.bodies().ghost.length : 0),
+    played: null,
+  };
 
   const [offW, offH] = env.offscreenSize ?? [640, 400];
   const aspect = () => (offscreen ? offW / offH : canvas.width / Math.max(1, canvas.height));
@@ -523,9 +758,15 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   let loading = 0;
   function load(i: number, retry = false): Promise<void> {
     loading++;
+    // A load ends the build phase (Play, Cancel, a level picked at the door).
+    if (editing) leaveEdit();
+    buildAfterLoad = false;
     // Not ready from now on (a load can take many frames), so nothing fires into the level being left.
     if (driver) syncState();
-    return exclusive(() => { dropMarks(0); return loadNow(i, retry); }).finally(() => { loading--; });
+    return exclusive(() => { dropMarks(0); return loadNow(i, retry); }).finally(() => {
+      loading--;
+      if (buildAfterLoad && !loading) { buildAfterLoad = false; enterEdit(); }
+    });
   }
 
   /**
@@ -612,29 +853,31 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     renderer.setFx(0, structureTints(c), regrowBuf, false);
     applyMarks();
     paintIce();
-    const s = driver.session;
-    s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { tint: TINT.crown, emissive: 0.9 }); });
-    s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { tint: TINT.heritage, emissive: 1 }); });
-    renderer.blasts.clear();
-    renderer.fuses.clear();
+    const s = driver.session, roles = rolePaint(feel.fx);
+    s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, roles.crownKept); });
+    s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, roles.heritageKept); });
+    // No spark, heat, flash, blast or lit fuse of the undone shot carries over (PT2); the kept shots' fuses are lit again below.
+    renderer.resetEffects();
+    fading = [];
     firedLooks = [...mark.looks];
     for (let i = c.meta.n; i < descs.length; i++) paintFired(i, firedLooks[i - c.meta.n] ?? null);
     fxSlots = descs.length;
     pacer.reset();
     speed.reset();
     tail.reset();
+    skipping = false;
     arrivals = newArrivals();
     juice.reset();
     follow.reset();
     handle.result = null;
     ending = false;
-    handle.resultShownAt = null;
-    env.result.classList.remove('show');
-    document.body.classList.remove('ended');
+    hideResult();
     selected = nextSelection(c.def.rack, s.rackLeft, selected);
     regrowT = null;
     waiting = [];
     frozen = mark.frozen;
+    pullAnim = null;
+    handle.pullDrawn = null;
     aimed = null;
     beads = null;
     hover = null;
@@ -832,20 +1075,24 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     applyMarks();
     paintIce();
     if (line) {
-      const s = driver.session;
-      s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, { tint: TINT.crown, emissive: 0.9 }); });
-      s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, { tint: TINT.heritage, emissive: 1 }); });
+      const s = driver.session, roles = rolePaint(feel.fx);
+      s.crownLive.forEach((down, k) => { if (down) renderer.setFx(c.meta.crowns[k]!, roles.crownKept); });
+      s.heritageBroken.forEach((cracked, k) => { if (cracked) renderer.setFx(c.meta.heritage[k]!, roles.heritageKept); });
     }
     fxSlots = descs.length;
     pacer.reset();
     speed.reset();
     tail.reset();
+    skipping = false;
     arrivals = newArrivals();
     juice.reset();
     follow.reset();
     swing.grab();
-    renderer.blasts.clear();
-    renderer.fuses.clear();
+    // A load, retry or replayed undo starts with no spark, heat, flash, blast or lit fuse of the last attempt (PT2),
+    // drawn in the effect style the feel asks for; the kept shots' fuses are lit again below.
+    renderer.setEffectStyle(feel.fx);
+    renderer.resetEffects();
+    fading = [];
     // After an undo the kept shots' bodies are back in their slots: drawn as they were (bombs, painted balls). A fresh attempt starts with none.
     if (line) {
       firedLooks.length = Math.min(firedLooks.length, descs.length - c.meta.n);
@@ -857,9 +1104,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     handle.counts = counts;
     handle.level = c.def.id;
     ending = false;
-    handle.resultShownAt = null;
-    env.result.classList.remove('show');
-    document.body.classList.remove('ended');
+    hideResult();
     selected = nextSelection(c.def.rack, driver.session.rackLeft, retry ? selected : null);
     opener = env.opener?.(c) ?? null;
     if (!retry) {
@@ -875,6 +1120,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     regrowT = line ? null : 0;
     waiting = [];
     frozen = false;
+    pullAnim = null;
+    handle.pullDrawn = null;
     aimed = null;
     beads = null;
     hover = null; // the new level's tints are fresh
@@ -892,6 +1139,9 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     handle.timing.loadMs = performance.now() - t0;
     // Build what Next opens while the player aims at this one (it waits while a shot runs).
     if (prefetchMode === 'aim') prefetchNext();
+    // A level with a build block opens in its build phase on a fresh load (not a retry, Play or Cancel, nor an undo).
+    buildAfterLoad = !retry && !line && buildOffered();
+    showPanel();
     hooks.loaded?.(c, driver);
   }
 
@@ -901,6 +1151,20 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (cls) env.banner.classList.add(cls);
     void env.banner.offsetWidth; // restart the animation
     env.banner.classList.add('show');
+  }
+
+  /**
+   * The step's snapshot to the renderer: as it is, or with the last pull's block drawn where its slide-out has it
+   * (pull-anim.ts withPulled: the snapshot is patched for the upload only), lit and shrinking; once the slide is
+   * over, the slot's own tint and full scale back (it is a tombstone, drawn by no pass, until an undo restores it).
+   */
+  function uploadSnapshot(d: Driver) {
+    const a = pullAnim, k = a ? d.engine.stepIndex - pullStep : 0;
+    if (!a || k > PULL_SLIDE_STEPS + 1) { source.update(d.snapshot, descs); handle.pullDrawn = null; return; }
+    const p = withPulled(d.snapshot, a, k, () => source.update(d.snapshot, descs));
+    handle.pullDrawn = p ? { body: a.body, k, pos: p.pos, scale: p.scale } : null;
+    if (p) renderer.setFx(a.body, Uint32Array.of(PULL_HOVER), Float32Array.of(p.scale));
+    else if (k === PULL_SLIDE_STEPS + 1) renderer.setFx(a.body, Uint32Array.of(tintOf(c, a.body)), Float32Array.of(1));
   }
 
   /** Light the block a pull would take (null: none), putting the last one back to its own tint. */
@@ -933,6 +1197,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       }
     }
     setHover(lit);
+    // A refused pull's hint stays red only while the cursor stays on the block that was refused.
+    if (aimed?.shot.ammo !== 'pull' || aimed.shot.body !== refusedPull) refusedPull = null;
     handle.input.aimed = aimed ? { ...aimed.shot } : null;
   }
 
@@ -968,14 +1234,21 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         case 'fired':
           juice.kick(f.ammo === 'cannonball' ? 0.05 : 0.03);
           if (f.ammo === 'pull') {
-            // The block is gone (the renderer skips the tombstone): a puff of dust where it was.
-            const s = driver.snapshot, b = f.body;
+            // The block is gone (the renderer skips the tombstone): a puff of dust where it was, and
+            // (PaceFeel.pullAnim) the block drawn sliding out toward the camera, with a ghost where it stood.
+            const s = driver.snapshot, b = f.body, shape = descs[b]?.shape;
             if (b < s.count) renderer.burst([s.pos[3 * b]!, s.pos[3 * b + 1]!, s.pos[3 * b + 2]!], [0, 1, 0], PULL_PUFF);
+            if (feel.pullAnim && b < s.count && shape?.kind === 'box') {
+              pullAnim = pullAnimFor(b, [s.pos[3 * b]!, s.pos[3 * b + 1]!, s.pos[3 * b + 2]!], [s.rot[4 * b]!, s.rot[4 * b + 1]!, s.rot[4 * b + 2]!, s.rot[4 * b + 3]!], [...shape.half] as [number, number, number], eyeOf(orbit), performance.now());
+              pullStep = driver.engine.stepIndex;
+            }
           }
           break;
         case 'contact': {
+          // Classic: a burst at the ball as hard as its own speed change. With effects that follow the damage (PT2) the
+          // renderer's detector sparks the blocks the ball moves, and the ball's own hit only as a puff (SparkParams.ballSparks).
           const j = contactJuice(f.impulse), s = driver.snapshot, b = f.body;
-          if (b < s.count) {
+          if (feel.fx === 'classic' && b < s.count) {
             const v: Vec3 = [s.linVel[3 * b]!, s.linVel[3 * b + 1]!, s.linVel[3 * b + 2]!], l = Math.hypot(...v) || 1;
             renderer.burst([s.pos[3 * b]!, s.pos[3 * b + 1]!, s.pos[3 * b + 2]!], [v[0] / l, v[1] / l, v[2] / l], f.dv);
           }
@@ -987,7 +1260,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         case 'crownDown':
           juice.shake(0.08);
           // A felled crown flashes once and stops glowing.
-          renderer.setFx(f.body, { tint: TINT.crown, emissive: 0.9, flash: 0.5 });
+          renderer.setFx(f.body, rolePaint(feel.fx).crownFlash);
           // Only where the clear ends the level: par levels, and outcome levels with autobank.
           if (c.def.objective.kind === 'crowns' && f.ordinal + 1 === c.meta.crowns.length && driver.session.phase === 'running' && (driver.session.scoring === 'par' || c.def.autobank)) {
             ending = true;
@@ -1023,12 +1296,14 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
         case 'heritageCrack':
           juice.shake(0.3);
           banner('Heritage cracked', 'crack');
-          renderer.setFx(f.body, { tint: TINT.heritage, emissive: 1, flash: 0.8 });
+          // Damage style: a teal flash that stays teal (classic: to white).
+          renderer.setFx(f.body, rolePaint(feel.fx).heritageFlash);
           break;
         case 'tier': banner(`${TIER_NAMES[f.tier]}!`); break;
         case 'settled':
           judgeGoals();
           pacer.release();
+          spendFired();
           // A crown back above the line (rare: a catapult) means the round goes on after all.
           if (ending && driver.session.phase === 'aiming') { ending = false; hideResult(); }
           selected = nextSelection(c.def.rack, driver.session.rackLeft, selected);
@@ -1061,32 +1336,61 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     }
   }
 
+  /**
+   * The round is over (score null: every crown is down and the settle still runs at fast-forward; a score: it
+   * settled and is scored). Classic (no delay), the card shows at once, tallying until the score. Docked
+   * (layout.ts, PT4), a small tallying banner shows instead and the card waits Layout.cardDelay of wall time
+   * after the settle, so the player sees the collapse land; then it docks aside, not over the middle.
+   */
   function showResult(score: LevelScore | null) {
-    if (duel) {
-      if (!score) return;
-      env.result.innerHTML = duelResultHtml(duel);
-      env.result.classList.add('show');
-      document.body.classList.add('ended');
-      handle.resultShownAt ??= driver.engine.stepIndex;
-      return;
+    if (duel && !score) return;
+    const lay = env.layout, delay = lay ? lay.cardDelay : 0;
+    handle.resultShownAt ??= driver.engine.stepIndex;
+    handle.card.place = lay?.card ?? 'center';
+    env.result.classList.toggle('dock', handle.card.place === 'dock');
+    if (duel) env.result.innerHTML = duelResultHtml(duel);
+    else {
+      const sheet = score && lot ? goalsResultHtml(handle.goals, handle.grade, lot.sheet.grades !== undefined) : '';
+      env.result.innerHTML = resultHtml(c.def, score, driver.session.strokes, cardForward(), Boolean(env.onSave), sheet, true);
     }
-    const sheet = score && lot ? goalsResultHtml(handle.goals, handle.grade, lot.sheet.grades !== undefined) : '';
-    env.result.innerHTML = resultHtml(c.def, score, driver.session.strokes, step(levelIdx, 1), Boolean(env.onSave), sheet, true);
+    if (score) handle.card.endedMs = performance.now();
+    if (delay <= 0) { revealCard(); return; }
+    tally.innerHTML = tallyHtml(c.def, score, duel ? 'Round over' : null);
+    tally.classList.add('show');
+    document.body.classList.add('kg-tallying');
+    if (!score) return;
+    if (cardTimer !== null) clearTimeout(cardTimer);
+    cardTimer = setTimeout(() => { cardTimer = null; tally.classList.remove('show'); document.body.classList.remove('kg-tallying'); revealCard(); }, 1000 * delay);
+  }
+
+  function revealCard() {
     env.result.classList.add('show');
     document.body.classList.add('ended');
-    handle.resultShownAt ??= driver.engine.stepIndex;
+    handle.card.shownMs = performance.now();
+  }
+
+  /** The card's forward button: Next inside the series, else the next series, else Levels (the page's level list). */
+  function cardForward(): CardForward {
+    if (step(levelIdx, 1)) return { act: 'next' };
+    const f = env.seriesForward?.(levelIdx);
+    if (f) return { act: 'series', label: f.label };
+    return env.onLevels ? { act: 'levels' } : null;
   }
 
   function hideResult() {
+    if (cardTimer !== null) { clearTimeout(cardTimer); cardTimer = null; }
+    tally.classList.remove('show');
+    document.body.classList.remove('kg-tallying');
     env.result.classList.remove('show');
     document.body.classList.remove('ended');
     handle.resultShownAt = null;
+    handle.card = { place: handle.card.place, endedMs: null, shownMs: null };
   }
 
   /** Mirror the round's state onto the handle: each frame, and after each physics step (which runs between frames). */
   function syncState() {
     const s = driver.session;
-    Object.assign(handle, { phase: stepping ? 'running' : s.phase, frozen, ready: !loading && !stepping && s.phase === 'aiming' && regrowT === null, stepIndex: driver.engine.stepIndex, strokes: s.strokes, bodies: driver.snapshot.count, collapse: s.liveCollapse });
+    Object.assign(handle, { phase: stepping ? 'running' : s.phase, frozen, ready: !loading && !stepping && !editing && s.phase === 'aiming' && regrowT === null, stepIndex: driver.engine.stepIndex, strokes: s.strokes, bodies: driver.snapshot.count, collapse: s.liveCollapse });
   }
 
   /** Mirror state, pace and view onto the handle; called each frame and right after anything that changes it.
@@ -1095,7 +1399,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     syncState();
     const s = driver.session;
     const running = s.phase === 'running', v = running ? speed.speed(performance.now()) : 1, costs = handle.timing.costMs;
-    handle.pace = { timeScale: running ? pacer.timeScale : 1, speed: v, tag: running && !fastHeld && !handle.fast && !ending && !tail.on ? slowTag(v) : '', tailSkip: tail.on, costMs: running && !Number.isNaN(pacer.costMs) ? pacer.costMs : median(costs.slice(-60)) };
+    handle.pace = { timeScale: running ? pacer.timeScale : 1, speed: v, tag: running && !fastHeld && !handle.fast && !ending && !tail.on && !skipping ? slowTag(v) : '', tailSkip: tail.on, costMs: running && !Number.isNaN(pacer.costMs) ? pacer.costMs : median(costs.slice(-60)) };
     handle.view = { target: [...orbit.target], distance: orbit.distance, yaw: orbit.yaw, pitch: orbit.pitch, following: follow.active, jolt, turning: swing.active, cue: cueNow(), arcBeads: arcBeadsDrawn };
   }
 
@@ -1104,6 +1408,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
 
   /** Whether the player can aim (and fire) now: while aiming, or with rapid fire or frozen while a shot runs, until the round is known to be over. */
   function aimable(): boolean {
+    if (editing) return false;
     const p = driver.session.phase;
     return p === 'aiming' || (p === 'running' && (feel.rapid || frozen) && !ending);
   }
@@ -1132,7 +1437,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     driver.session.rackLeft.filter((a) => a === shot.ammo).length > queued.filter((q) => q.ammo === shot.ammo).length;
 
   function fire(shot: Shot): boolean {
-    if (loading || regrowT !== null || ending || handle.result !== null || !driver.session.canFire(shot.ammo) || !inRack(shot, waiting)) return false;
+    if (editing || loading || regrowT !== null || ending || handle.result !== null || !driver.session.canFire(shot.ammo) || !inRack(shot, waiting)) return false;
     // A duel takes one shot per turn from the current player's side and rack (the referee says why not).
     const refused = duel?.refuse(shot) ?? (duel && waiting.length ? { message: 'Wait for the last shot to settle' } : null);
     if (refused) {
@@ -1141,9 +1446,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       banner(cue ? turnCueText(duel!.def.sides[duel!.turn].name, cue, handle.input.touch) : refused.message, 'crack');
       return false;
     }
+    // A weapon over the device's tier (a link's or keystone.rack's): refused, saying what fires it.
+    const over = armRefusal(c, shot.ammo, env.weaponTier?.() ?? 'high');
+    if (over) { banner(over, 'crack'); return false; }
     const timed = shot.after !== undefined && driver.session.strokes > 0;
     if (!timed && !aimable()) return false;
-    if (shot.ammo === 'pull' && driver.session.pullRefusal(shot.body) !== null) return false;
+    if (shot.ammo === 'pull' && driver.session.pullRefusal(shot.body) !== null) { refusedPull = shot.body; return false; }
     if (shot.ammo === 'plunger' && driver.session.plungerRefusal(shot) !== null) return false;
     // Without rapid fire a click mid-step is refused, as before; with it, or for a line's timed shot, it waits for the step.
     if (stepping || timed || waiting.length) {
@@ -1180,6 +1488,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     physicsIdle.kick();
     // A shot's pace starts fresh: no tail yet, and at real time until its steps say otherwise.
     tail.reset();
+    skipping = false;
     speed.reset();
     // A rapid shot keeps the follow camera's way home: where the player had it when the first went in.
     if (feel.follow && !follow.active) follow.start(orbit);
@@ -1207,8 +1516,18 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     collapse?.setMuted(muted);
   }
 
+  /** Whether Skip can go in now: a shot is running, not frozen, and not already skipping. */
+  const canSkip = () => !loading && regrowT === null && driver.session.phase === 'running' && !frozen && !skipping;
+  function skip(): boolean {
+    if (!canSkip()) return false;
+    skipping = true;
+    pacer.release();
+    physicsIdle.kick();
+    return true;
+  }
+
   function bank(): boolean {
-    if (stepping || regrowT !== null || !driver.session.canBank()) return false;
+    if (editing || stepping || regrowT !== null || !driver.session.canBank()) return false;
     hooks.banked?.(c, driver);
     onFeedback(driver.bank());
     aimed = null;
@@ -1250,14 +1569,22 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   handle.marks = () => Array.from({ length: c.meta.n }, (_, i) => renderer.fxOf(i).mark);
   handle.refreshMarks = () => applyMarks();
   handle.firedLooks = () => {
-    const fused = new Set(renderer.fuses.slots), out: ('bomb' | 'painted' | 'plain')[] = [];
+    const fused = new Set(renderer.fuses.slots), out: ('bomb' | 'ram' | 'painted' | 'plain')[] = [];
     for (let i = c.meta.n; i < descs.length; i++) {
-      const fx = renderer.fxOf(i);
-      out.push(fused.has(i) || fx.matte ? 'bomb' : fx.paint && fx.band ? 'painted' : 'plain');
+      const L = firedLooks[i - c.meta.n] ?? null, fx = renderer.fxOf(i);
+      // What the renderer holds must be what the record says: a bomb is lit or matte iron, a ram or a painted ball
+      // painted and banded, a spent body matte; a plain live one carries no paint.
+      const drawn = !L ? !fx.paint : L.kind === 'bomb' ? fused.has(i) || fx.matte : L.kind === 'plain' ? !fx.paint : fx.paint && fx.band;
+      if (!drawn) throw new Error(`fired body ${i}: recorded ${L?.kind ?? 'ice'}${L?.spent ? ' (spent)' : ''}, drawn ${JSON.stringify(fx)}`);
+      out.push(L?.kind ?? 'plain');
     }
     return out;
   };
+  // Spent and drawn so: matte once the fade has begun (its first frame), all the way grey once it is over.
+  handle.spentLooks = () => Array.from({ length: descs.length - c.meta.n }, (_, k) => firedLooks[k]?.spent ?? false);
+  handle.effects = () => renderer.effectStats();
   handle.bank = bank;
+  handle.skip = skip;
   handle.freeze = freeze;
   handle.fireOpener = fireOpener;
   handle.setMuted = setMuted;
@@ -1296,7 +1623,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
 
   // Mouse and pen: hover aims, a click without drag fires, drag orbits (right or shift: pan), the wheel zooms.
   // Touch (touch.ts): a finger aims and fires where it lifts, two fingers orbit and pinch to zoom.
-  let drag: { x: number; y: number; moved: number; pan: boolean } | null = null;
+  let drag: { x: number; y: number; moved: number; pan: boolean; brush: boolean } | null = null;
   const ndcAt = (x: number, y: number): [number, number] => {
     const r = canvas.getBoundingClientRect();
     return [((x - r.left) / r.width) * 2 - 1, 1 - ((y - r.top) / r.height) * 2];
@@ -1315,8 +1642,27 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   };
   face();
   const pointerSeen = (e: PointerEvent) => { if (e.pointerType !== lastPointer) { lastPointer = e.pointerType; face(); } };
+  /** The world ray through a point on the page (client px). */
+  const rayAtPx = (x: number, y: number) => { const [nx, ny] = ndcAt(x, y), r = rayThrough(orbit, aspect(), nx, ny); return { origin: r.origin as Vec3, dir: r.dir as Vec3 }; };
+  /** A finger in the build phase: where it rests shows the ghost (or draws a brush stroke), where it lifts places or lays. */
+  const touchedEdit = (e: EditController, a: TouchAction) => {
+    if (a.t === 'aim') {
+      const r = rayAtPx(a.x, a.y);
+      if (e.tool === 'brush' && !touchStroke) touchStroke = e.down(r);
+      else e.move(r);
+    } else if (a.t === 'fire') {
+      e.up(rayAtPx(a.x, a.y));
+      touchStroke = false;
+    } else if (a.t === 'cancel') {
+      e.cancelStroke();
+      touchStroke = false;
+    } else return false;
+    showEdit();
+    return true;
+  };
   const touched = (acts: TouchAction[]) => {
     for (const a of acts) {
+      if (editing && touchedEdit(editing, a)) continue;
       switch (a.t) {
         case 'aim': pointer = ndcAt(a.x, a.y); aimDirty = true; break;
         case 'fire': {
@@ -1343,11 +1689,22 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     wakeAudio();
     canvas.setPointerCapture(e.pointerId);
     if (e.pointerType === 'touch') { touched(gestures.start(e.pointerId, e.clientX, e.clientY)); return; }
-    drag = { x: e.clientX, y: e.clientY, moved: 0, pan: e.button === 2 || e.shiftKey };
+    const pan = e.button === 2 || e.shiftKey;
+    // Building: a left press with the domino brush starts a stroke, and its drag draws the run instead of orbiting.
+    const brush = !!editing && e.button === 0 && !pan && editing.down(rayAtPx(e.clientX, e.clientY));
+    if (brush) showEdit();
+    drag = { x: e.clientX, y: e.clientY, moved: 0, pan, brush };
   });
   canvas.addEventListener('pointermove', (e) => {
     if (e.pointerType === 'touch') { touched(gestures.move(e.pointerId, e.clientX, e.clientY)); return; }
     if (!drag) pointerSeen(e); // a mouse or pen hovering takes the face back from touch
+    if (editing && (!drag || drag.brush)) {
+      const r = rayAtPx(e.clientX, e.clientY);
+      editing.move(r, { alt: e.altKey });
+      showEdit();
+      if (drag) Object.assign(drag, { moved: drag.moved + Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y), x: e.clientX, y: e.clientY });
+      return;
+    }
     pointer = ndc(e);
     aimDirty = true;
     if (!drag) return;
@@ -1370,6 +1727,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       touched(gestures.end(e.pointerId, e.clientX, e.clientY));
       return;
     }
+    if (editing) {
+      // A brush stroke's release lays the run; a click without drag places (or erases).
+      if (drag?.brush || (drag && drag.moved < 5 && e.button === 0 && !e.shiftKey)) { editing.up(rayAtPx(e.clientX, e.clientY), { alt: e.altKey }); showEdit(); }
+      drag = null;
+      return;
+    }
     if (drag && drag.moved < 5 && e.button === 0 && !e.shiftKey) {
       pointer = ndc(e);
       updateAim();
@@ -1379,7 +1742,10 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   });
   canvas.addEventListener('pointercancel', (e) => {
     if (e.pointerType === 'touch') touched(gestures.cancel(e.pointerId));
-    else drag = null;
+    else {
+      if (drag?.brush && editing) { editing.cancelStroke(); showEdit(); }
+      drag = null;
+    }
   });
   canvas.addEventListener('pointerleave', (e) => { if (e.pointerType === 'touch') return; pointer = null; aimDirty = true; });
   canvas.addEventListener('wheel', (e) => {
@@ -1392,9 +1758,10 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     const act = (e.target as HTMLElement).closest('button')?.dataset.act;
     if (act) wakeAudio();
     if (act === 'bank') bank();
+    if (act === 'skip') skip();
     if (act === 'freeze') freeze();
     if (act === 'opener') fireOpener();
-    // Touch screens' Undo and Restart (hud.ts TOUCH_ACTS; keys U and R).
+    // Touch screens' Undo and Restart (hud.ts touchActs; keys U and R).
     if (act === 'undo') void handle.undo();
     if (act === 'restart' && !duel) void handle.retry();
     // The rack's chips and the power buttons: taps on a touch screen (keys 1-4, Q and E on a keyboard).
@@ -1409,6 +1776,8 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (act === 'undo') void handle.undo();
     if (act === 'save') env.onSave?.();
     if (act === 'next' && step(levelIdx, 1)) void load(levelIdx + 1).catch(fail);
+    if (act === 'series') { const f = env.seriesForward?.(levelIdx); if (f) void load(f.index).catch(fail); }
+    if (act === 'levels') env.onLevels?.();
     // A duel: Rematch starts the other side first (the other of its two levels); Same start replays this one.
     if (act === 'rematch' && duel) void load(1 - levelIdx).catch(fail);
     if (act === 'again' && duel) void handle.retry();
@@ -1417,12 +1786,26 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     if (typing(e)) return;
     wakeAudio();
     const k = e.key.toLowerCase();
+    if (editing) {
+      // Building: Enter plays, Esc leaves without the edits, Ctrl/Cmd+Z undoes, M mutes; the build keys go to the editor
+      // (Q / E turn, T tip, 1 to 9 items, B brush, X erase, Z undo); the game's own keys wait until Play.
+      if (e.key === 'Enter') playEdit();
+      else if (e.key === 'Escape') cancelEdit();
+      else if (k === 'z' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); editing.undo(); showEdit(); }
+      else if (k === 'm') setMuted(!muted);
+      else if (!e.ctrlKey && !e.metaKey && editing.key(e.key, { shift: e.shiftKey })) showEdit();
+      // N and P still walk the series (a load ends the build phase).
+      if (k !== 'n' && k !== 'p') return;
+    }
+    // B: on a level with a build phase, before the first shot, build (else bank, as everywhere).
+    if (k === 'b' && !e.ctrlKey && !e.metaKey && enterEdit()) return;
     if (k === ' ') { e.preventDefault(); fastHeld = true; pacer.release(); }
     const chip = chipsNow().find((x) => x.key === e.key);
     if (chip) select(chip.ammo);
     if (k === 'q' || k === 'e') setPower(power + (k === 'e' ? POWER_STEP : -POWER_STEP));
     if ((k === 'w' || k === 's') && !e.ctrlKey && !e.metaKey && !e.altKey) moveLauncher(k === 'w' ? 1 : -1);
     if (k === 'b') bank();
+    if (k === 'k') skip();
     if (k === 't') freeze();
     if (k === 'f') fireOpener();
     // In a duel, R after the result is a rematch (the other side starts), as the card's first button says.
@@ -1448,13 +1831,15 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       heritageBroken: s.heritageBroken.reduce((a, x) => a + x, 0), heritageTotal: c.meta.heritage.length,
       chips: chipsNow(), power, launch: (launchNow() / 4) * c.frame.unit, leverage: { round: s.roundLeverageNow(), shot: s.liveLeverage }, phase: s.phase,
       reachable: aimed ? aimed.reachable : null,
-      pullRefused: aimed?.shot.ammo === 'pull' && !aimed.reachable,
-      collapse: s.liveCollapse, pulled: s.pulledShare(), met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), pace: handle.pace.tag,
+      pullRefused: aimed?.shot.ammo === 'pull' && !aimed.reachable && (aimed.shot.body === refusedPull ? 'tapped' : true),
+      collapse: s.liveCollapse, pulled: s.pulledShare(), met: s.objectiveDone, canBank: !stepping && regrowT === null && s.canBank(), canSkip: canSkip(), skipping, pace: handle.pace.tag,
       opener: !stepping && regrowT === null && s.phase === 'aiming' && openerNow() !== null, ticks,
       ...(duel ? { duel: duelHudHtml(duel, s.phase === 'aiming' && aimed ? duel.refuse(aimed.shot) : null, swing.active ? null : azFromYaw(orbit.yaw)) } : {}),
       ...(c.def.freeze !== undefined ? { freezes: { left: s.freezesLeft, total: c.def.freeze, frozen, can: canFreeze() } } : {}),
-    });
-    html += goalsHudHtml(handle.goals);
+    }, goalsHudHtml(handle.goals));
+    showPanel();
+    // The touch hint line goes once the first shot is in (body.kg-shot; the game page's CSS hides #help on touch).
+    document.body.classList.toggle('kg-shot', s.strokes > 0);
     if (crownsDown > crownsShown) html = html.replace('class="crowns"', 'class="crowns pop"');
     crownsShown = crownsDown;
     if (html !== lastHud) { env.hud.innerHTML = html; lastHud = html; }
@@ -1466,6 +1851,12 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   const frames = new FrameGovernor(feel.frames);
   let pendingCapture: { resolve: (s: PixelStats | null) => void; keep: boolean } | null = null;
   handle.capture = (keep = false) => new Promise((resolve) => { pendingCapture = { resolve, keep }; });
+  handle.coverage = (body) => exclusive(async () => {
+    const r = await renderer.renderIds({ viewProj: viewProj(orbit, aspect()), eye: eyeOf(orbit), focus: orbit.target, groundY: 0, alpha: 1 });
+    let n = 0;
+    for (const id of r.ids) if (id === body + 1) n++;
+    return n;
+  });
 
   const tick = async () => {
     const now = performance.now(), frameMs = now - last;
@@ -1510,11 +1901,19 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // The player to fire's arc on the ground, between shots (and the aim's beads over it).
     const arc = duel && feel.arcs && !duel.result.over && duel.shooter === null ? arcs[duel.turn] ?? null : null;
     arcBeadsDrawn = arc?.colours.length ?? 0;
-    const o = joinOverlays(beads ? beadOverlay(beads, aimed?.reachable ?? true) : null, arc);
+    const ghost = pullAnim ? ghostOutline(pullAnim, now - pullAnim.at) : null;
+    const o = joinOverlays(beads ? beadOverlay(beads, aimed?.reachable ?? true) : null, arc, ghost);
     renderer.reach(ring?.centre ?? null, ring?.radius ?? 0);
+    fadeSpent(now);
     renderer.setOverlay(o?.xyzr ?? new Float32Array(0), o?.colours);
     pendingCapture = null;
-    const fp = { viewProj: viewProj(view, aspect()), eye: eyeOf(view), focus: orbit.target, time: now / 1000, groundY: 0, alpha: running ? alphaAt(arrivals, now, 1000 * c.scene.dt) : 1 };
+    // Bullet Time's frozen look: the grade eases in and out, the sparks dim and hang (dt 0) while frozen.
+    const frozenLook = frozen && feel.frozenLook;
+    frozenGrade = easeGrade(frozenGrade, frozenLook ? 1 : 0, dt);
+    renderer.freezeFx = freezeFxOf(frozenGrade);
+    handle.frozenGrade = frozenGrade;
+    frozenLabel.classList.toggle('on', frozenLook);
+    const fp = { viewProj: viewProj(view, aspect()), eye: eyeOf(view), focus: orbit.target, time: now / 1000, groundY: 0, alpha: running ? alphaAt(arrivals, now, 1000 * c.scene.dt) : 1, ...(frozenLook ? { dt: 0 } : {}) };
     // Offscreen (tests), nobody sees a frame and nothing throttles requestAnimationFrame
     // to the GPU: on SwiftShader a frame takes up to a second, so frames would queue
     // without bound and every readback (a step's, a replay's) wait behind them.
@@ -1536,13 +1935,13 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   const task = () => new Promise<void>((res) => { tasks.push(res); channel.port2.postMessage(null); });
   // A duel turn runs at its own pace for turnSeconds, then fast-forwards the rest of its settle.
   const turnUp = () => duel !== null && duel.shooter !== null && performance.now() - turnStart > 1000 * (duel.def.turnSeconds ?? DEFAULT_TURN_SECONDS);
-  const fastNow = () => fastHeld || handle.fast || ending || tail.on || turnUp();
+  const fastNow = () => fastHeld || handle.fast || ending || tail.on || skipping || turnUp();
   void runPhysics({
     now: () => performance.now(),
     alive: () => handle.status === 'running',
-    active: () => !loading && driver.session.phase === 'running' && !frozen,
+    active: () => !loading && driver.session.phase === 'running' && !frozen && !handle.hold,
     dtMs: () => 1000 * c.scene.dt,
-    options: () => ({ fastForward: fastNow(), budgetMs: feel.budgetMs }),
+    options: () => ({ fastForward: fastNow(), skip: skipping, budgetMs: feel.budgetMs }),
     idle: physicsIdle.wait,
     task,
     step: () => exclusive(async () => {
@@ -1566,7 +1965,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       fireDue();
       spawned('bomb');
       if (red && feel.tailSkip && d.session.phase === 'running') tail.update(red.nMoving, c.meta.n, d.session.liveCollapse);
-      source.update(d.snapshot, descs);
+      uploadSnapshot(d);
       collapse?.frame(d.snapshot, descs, eyeOf(orbit), orbit.target);
       arrived(arrivals, performance.now(), 1000 * c.scene.dt);
       // Steps run between frames: mirror what this one changed (phase, strokes) now, so the handle

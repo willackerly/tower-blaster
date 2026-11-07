@@ -53,14 +53,21 @@ export interface HudState {
   leverage: { round: number; shot: number };
   phase: string;
   reachable: boolean | null;
-  /** The pull under the cursor is refused (a crown or heritage block): said instead of out of reach. */
-  pullRefused?: boolean;
+  /**
+   * The pull under the cursor is refused (a crown or heritage block): said instead of out of reach, as a
+   * neutral hint while it is only hovered, and in red once a click or tap on it was refused ('tapped';
+   * playtest PT17: a red error before any input read as a mistake the player had not made).
+   */
+  pullRefused?: boolean | 'tapped';
   /** Outcome levels: collapse fraction D now, the objective met at the last settle, and whether a bank is possible. */
   collapse?: number;
   /** Hold levels (Undercut's Hollow): the share of the structure's mass pulled, shown in place of D. */
   pulled?: number;
   met?: boolean;
   canBank?: boolean;
+  /** A shot is running and can be skipped to its settle (the Skip button, key K; agent playtest PT6), and whether it is skipping now. */
+  canSkip?: boolean;
+  skipping?: boolean;
   /** The slow-motion tag while physics runs slower than real time ('80% speed'; pacing.ts slowTag), '' or absent at real time. */
   pace?: string;
   /** The level's pre-aimed opening shot can be fired now (the Fire button, key F). */
@@ -103,8 +110,17 @@ export function meterHtml(value: number, ticks: readonly MeterTick[], label: str
   return `<div class="meter" role="meter" aria-label="${label}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.floor(100 * v)}"><i style="width:${(100 * v).toFixed(1)}%"></i>${marks}</div>`;
 }
 
-/** Undo and Restart for a touch screen, which has no U or R key (kg-tch: shown only there), after the first shot. */
-export const TOUCH_ACTS = '<div class="row acts kg-tch"><button data-act="undo" class="kg-tch">Undo shot</button><button data-act="restart" class="kg-tch">Restart</button></div>';
+/** The help line on a touch screen (body.kg-touch): the gestures of touch.ts; the HUD's Undo and Restart buttons do what U and R do. */
+export const TOUCH_HELP = 'drag: aim · lift: fire · two fingers: turn · pinch: zoom · add a finger mid-aim: cancel';
+
+/**
+ * Undo and Restart as icons for a touch screen, which has no U or R key (kg-tch: shown only there). Always in
+ * the HUD so it never changes size (docs/game/phone-hud.md); disabled until the first shot is in.
+ */
+export const touchActs = (strokes: number) => {
+  const off = strokes > 0 ? '' : ' disabled';
+  return `<span class="acts kg-tch"><button data-act="undo" class="ico kg-tch" title="Undo shot" aria-label="Undo shot"${off}>↶</button><button data-act="restart" class="ico kg-tch" title="Restart" aria-label="Restart"${off}>↻</button></span>`;
+};
 
 /** The pre-aimed opener's button (key F), shown before the first shot of a level that has one. */
 export const OPENER_BUTTON = '<button data-act="opener" class="opener"><kbd>F</kbd> Fire the first shot</button>';
@@ -132,13 +148,85 @@ export function objectiveText(o: Objective): string {
   }
 }
 
+/** Why a pull is refused (Session.pullRefusal: crowns and heritage are the objective's). */
+export const PULL_HINT = 'Crowns, heritage and fixed beams stay: pull a plain block';
+
+/**
+ * A hold level's crown row (Undercut's Hollow): its crowns are to be kept up, so the row says whether they
+ * stand, in the objective's green, instead of a crown counter (0 / 1 in the crown colour read as a target to
+ * topple; playtest PT17). Nothing on a level without crowns.
+ */
+export function keepRow(down: number, total: number): string {
+  if (!total) return '';
+  const label = total === 1 ? 'Crown' : 'Crowns';
+  const state = down === 0 ? (total === 1 ? 'standing ✓' : 'all standing ✓') : total === 1 ? 'fallen' : `${down} of ${total} fallen`;
+  return `<div class="row"><span>${label}</span><span class="keep ${down ? 'bad' : 'ok'}">${state}</span></div>`;
+}
+
 /** Shown on a level made by overrides (LevelDef.custom). */
 export const CUSTOM_NOTE = 'custom: stars not recorded';
 
 /** Outcome levels: the Bank button (key B), shown while a bank is possible. */
 export const BANK_BUTTON = '<button data-act="bank" class="bank"><kbd>B</kbd> Bank</button>';
 
-export function hudHtml(s: HudState): string {
+/** What the HUD's action slot offers now: one button, always in the same place (docs/game/phone-hud.md). */
+export type SlotAction = 'freeze' | 'resume' | 'skip' | 'skipping' | 'opener' | 'bank' | null;
+
+/**
+ * The action slot's button, by priority: Resume while frozen, Freeze while a running shot can be, Skip
+ * while a running shot can be skipped to its settle (PT6; then a note while it skips), the pre-aimed opener
+ * before the first shot, Bank while an outcome round can bank. They are offered at different moments (a
+ * shot running, before the first, between shots), apart from Freeze and Skip, which a running shot on a
+ * Bullet Time level offers together: the slot then holds both (`slotHtml`), Freeze first.
+ */
+export function slotAction(s: Pick<HudState, 'level' | 'opener' | 'canBank' | 'freezes' | 'duel' | 'canSkip' | 'skipping'>): SlotAction {
+  if (s.duel !== undefined) return null;
+  if (s.freezes?.frozen) return 'resume';
+  if (s.freezes?.can) return 'freeze';
+  if (s.canSkip) return 'skip';
+  if (s.skipping) return 'skipping';
+  if (s.opener) return 'opener';
+  if (s.canBank && scoringOf(s.level) === 'outcome') return 'bank';
+  return null;
+}
+
+/** The slot's note beside its button (the panel HUD shows it; the docked phone HUD has no room and hides it). */
+const SLOT_NOTE: Record<Exclude<SlotAction, null>, string> = {
+  resume: 'aim and fire, or Resume: the freeze is kept',
+  freeze: 'stop the world to aim',
+  skip: 'to the settle',
+  skipping: '',
+  opener: '<span class="kg-desk">or aim and click</span><span class="kg-tch">or drag and lift</span>',
+  bank: 'end here, keep the rack',
+};
+
+/**
+ * The HUD in two groups (docs/game/phone-hud.md): `.st`, the status (title, how the round stands, leverage,
+ * the lot sheet), and `.tray`, the aim tray (rack, power, height, the action slot, Undo and Restart). The game
+ * page's panel stacks them as one; a phone docks the status as a strip at the top and the tray at the bottom
+ * (upright) or both down a side rail (sideways). Every row a round can show is in the markup from its first
+ * frame, hidden where it does not apply yet, so the docked HUD keeps one size through the round.
+ * `sheet` is the lot sheet's HUD block (lot-hud.ts goalsHudHtml), in the status group.
+ */
+/** The Skip button (key K), shown while a running shot can be skipped to its settle. */
+export const SKIP_BUTTON = '<button data-act="skip" class="skip" title="Run the rest of this shot fast, to where it settles: the outcome is the same"><kbd>K</kbd> Skip</button>';
+/** What the slot says while a shot skips (in the slot itself, so the docked HUD, which hides the notes, shows it). */
+const SKIPPING = '<span class="small skipping">skipping to the settle…</span>';
+
+/** The action slot's contents for `act`: its button, Freeze with Skip beside it when both apply, or the skipping note. */
+export function slotHtml(act: SlotAction, s: Pick<HudState, 'canSkip'>): string {
+  switch (act) {
+    case 'resume': return freezeButton(true);
+    case 'freeze': return freezeButton(false) + (s.canSkip ? SKIP_BUTTON : '');
+    case 'skip': return SKIP_BUTTON;
+    case 'skipping': return SKIPPING;
+    case 'opener': return OPENER_BUTTON;
+    case 'bank': return BANK_BUTTON;
+    default: return '';
+  }
+}
+
+export function hudHtml(s: HudState, sheet = ''): string {
   const d = s.level;
   // Chips are buttons (a tap selects, as the key does); kbd hints hide on a touch screen (GAME_CSS, body.kg-touch).
   const chips = s.chips.map((c) => `<button class="chip${c.selected ? ' on' : ''}${c.left ? '' : ' spent'}" data-act="ammo" data-arg="${c.key}"><kbd>${c.key}</kbd> ${esc(itemLabel(c.ammo))} <b>${c.left}</b>/${c.total}</button>`).join('');
@@ -147,37 +235,45 @@ export function hudHtml(s: HudState): string {
   // The power bar, with minus and plus buttons on a touch screen (keys Q and E).
   const power = sel === 'drop' || sel === 'pull' ? '' : `<div class="row"><span>Power <kbd>Q</kbd><kbd>E</kbd></span><span class="power">${POWER_STEP_BUTTON(-POWER_STEP)}<span class="bar"><i style="width:${s.power}%"></i></span>${POWER_STEP_BUTTON(POWER_STEP)}</span></div>`;
   const height = sel === 'drop' || sel === 'pull' || s.launch === undefined ? '' : launchRow(s.launch);
-  const reach = s.pullRefused ? '<div class="bad small">Crowns, heritage and fixed beams stay: pull a plain block</div>' : s.reachable === false ? '<div class="bad small">Out of reach at this power</div>' : '';
+  const reach = s.pullRefused ? `<div class="${s.pullRefused === 'tapped' ? 'bad' : 'hint'} small pull-hint">${PULL_HINT}</div>` : s.reachable === false ? '<div class="bad small reach">Out of reach at this power</div>' : '';
+  const ctl = `<div class="ctl">${power}${height}</div>`;
+  const pace = s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : '';
+  if (s.duel !== undefined) {
+    return `<div class="st">
+    <div class="title">${esc(d.name)}${pace}</div>
+    ${s.duel}
+    </div><div class="tray">
+    <div class="chips">${chips}</div>
+    ${ctl}<div class="above">${reach}</div>
+    </div>`;
+  }
   const outcome = scoringOf(d) === 'outcome';
   const head = outcome
     ? `<div class="row"><span>Shot ${s.strokes}</span>${d.objective.kind === 'hold' ? `<span>Pulled <b class="down${(s.pulled ?? 0) > 0 ? '' : ' none'}">${pct(s.pulled ?? 0)}</b></span>` : `<span>Down <b class="down${(s.collapse ?? 0) > 0 ? '' : ' none'}">${pct(s.collapse ?? 0)}</b></span>`}</div>
     ${s.ticks?.length ? meterHtml(d.objective.kind === 'hold' ? s.pulled ?? 0 : s.collapse ?? 0, s.ticks, d.objective.kind === 'hold' ? 'pulled' : 'down') : ''}
-    <div class="row"><span>Objective</span><span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span></div>`
+    <div class="row obj"><span>Objective</span><span class="${s.met ? 'ok' : ''}">${esc(objectiveText(d.objective))}${s.met ? ' ✓' : ''}</span></div>`
     : `<div class="row"><span>Par ${d.par}</span><span>Stroke ${s.strokes}</span></div>`;
   const fz = s.freezes;
-  const freezes = fz
-    ? `<div class="row"><span>Freezes</span><span class="${fz.left ? '' : 'spent'}">${fz.left} / ${fz.total}</span></div>${fz.frozen || fz.can ? `<div class="row">${freezeButton(fz.frozen)}<span class="small">${fz.frozen ? 'aim and fire, or resume free' : 'stop the world to aim'}</span></div>` : ''}`
-    : '';
-  const crowns = !outcome || s.crownsTotal ? `<div class="row"><span>Crowns</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
-  if (s.duel !== undefined) {
-    return `
-    <div class="title">${esc(d.name)}${s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : ''}</div>
-    ${s.duel}
-    <div class="chips">${chips}</div>
-    ${power}${height}${reach}`;
-  }
-  return `
-    <div class="title">W${d.world}-${esc(d.id.replace(/^L/, ''))} · ${esc(d.name)}${fz?.frozen ? ' <span class="pace frozen" title="physics is frozen: a shot fired now spends a freeze">FROZEN</span>' : s.pace ? ` <span class="pace" title="physics is running slower than real time">${esc(s.pace)}</span>` : ''}</div>
+  const freezes = fz ? `<div class="row"><span>Freezes</span><span class="${fz.left ? '' : 'spent'}">${fz.left} / ${fz.total}</span></div>` : '';
+  const crowns = d.objective.kind === 'hold' ? keepRow(s.crownsDown, s.crownsTotal)
+    : !outcome || s.crownsTotal ? `<div class="row"><span>Crowns</span><span class="crowns">${s.crownsDown} / ${s.crownsTotal}</span></div>` : '';
+  const act = slotAction(s);
+  const button = slotHtml(act, s);
+  const slot = `<div class="row slot-row${act ? '' : ' idle'}"><span class="slot${act ? '' : ' empty'}">${button}</span><span class="small note">${act ? SLOT_NOTE[act] : ''}</span>${touchActs(s.strokes)}</div>`;
+  return `<div class="st">
+    <div class="title">W${d.world}-${esc(d.id.replace(/^L/, ''))} · ${esc(d.name)}${fz?.frozen ? ' <span class="pace frozen" title="physics is frozen: a shot fired now spends a freeze">FROZEN</span>' : pace}</div>
     ${d.custom ? `<div class="small custom">${CUSTOM_NOTE}</div>` : ''}
     ${head}
     ${crowns}
     ${heritage}
-    <div class="chips">${chips}</div>
     ${freezes}
-    ${s.opener ? `<div class="row">${OPENER_BUTTON}<span class="small"><span class="kg-desk">or aim and click</span><span class="kg-tch">or drag and lift</span></span></div>` : ''}
-    ${power}${height}${reach}${outcome && s.canBank ? `<div class="row">${BANK_BUTTON}<span class="small">end here, keep the rack</span></div>` : ''}
-    ${s.strokes > 0 ? leverageRow(s.strokes, s.leverage) : ''}
-    ${s.strokes > 0 ? TOUCH_ACTS : ''}`;
+    ${leverageRow(s.strokes, s.leverage)}
+    ${sheet}
+    </div><div class="tray">
+    <div class="chips">${chips}</div>
+    ${ctl}<div class="above">${reach}${s.strokes > 0 ? '' : `<div class="tch-hint">${TOUCH_HELP}</div>`}</div>
+    ${slot}
+    </div>`;
 }
 
 /** What leverage means, in one line: the HUD row's tooltip and How to play's line. */
@@ -186,10 +282,12 @@ export const LEVERAGE_MEANS = 'Leverage is the energy of what you bring down for
 /**
  * The HUD's Leverage row: the round's, the figure the result card will show, and from the second shot
  * on this shot's beside it, so the two can never be read as one number that disagrees with itself.
+ * The row and the shot's figure are in the markup from the first frame, held (hidden, holding their place,
+ * drawn as ×0.00) until they apply, so the docked HUD keeps one size through the round (docs/game/phone-hud.md).
  */
 export function leverageRow(strokes: number, L: { round: number; shot: number }): string {
-  const shot = strokes > 1 ? ` <span class="small shot">this shot ${fmtLeverage(L.shot)}</span>` : '';
-  return `<div class="row lev" title="${esc(LEVERAGE_MEANS)} This round's so far${strokes > 1 ? ', then the last shot\'s' : ''}."><span>Leverage</span><span>${fmtLeverage(L.round)}${shot}</span></div>`;
+  const shot = ` <span class="small shot${strokes > 1 ? '' : ' held'}">this shot ${fmtLeverage(strokes > 1 ? L.shot : 0)}</span>`;
+  return `<div class="row lev${strokes > 0 ? '' : ' pre'}" title="${esc(LEVERAGE_MEANS)} This round's so far${strokes > 1 ? ', then the last shot\'s' : ''}."><span>Leverage</span><span>${fmtLeverage(strokes > 0 ? L.round : 0)}${shot}</span></div>`;
 }
 
 /** The leverage tier's name for a round on `level` (levelTier: against its gold line), or '' where it has none. */
@@ -210,24 +308,62 @@ export function goldHtml(level: LevelDef, score: LevelScore, delay = 0): string 
     : `<div class="gold" style="animation-delay:${delay}s">◇ Gold leverage at ${line}, in par, heritage intact</div>`;
 }
 
-/** Result card: score lines slam in one by one, then the stamp and stars. */
+/**
+ * The result card's forward button: Next (key N) inside a series; at a series' end the next series' first
+ * level, labelled (series), or the page's level list (levels); null for none.
+ */
+export type CardForward = { act: 'next' } | { act: 'series'; label: string } | { act: 'levels' } | null;
+
+/** A round that failed (no star: the objective unmet, or not cleared): its card puts Retry first, not the way forward. */
+export const failedRound = (score: LevelScore | null) => score !== null && score.stars === 0;
+
+/**
+ * The result card's buttons. The primary (orange) one is the way forward, except after a failed round, where
+ * it is Retry (PT4). `forward` true is Next (the viewer's and older callers' boolean), false none.
+ */
+export function cardActions(score: LevelScore | null, strokes: number, forward: boolean | CardForward, canSave: boolean, canUndo: boolean): string {
+  const fw: CardForward = forward === true ? { act: 'next' } : forward === false ? null : forward;
+  const failed = failedRound(score);
+  const save = canSave && score ? '<button data-act="save" title="Download this round as a file to send back">Save session</button>' : '';
+  const undo = canUndo && strokes > 0 ? '<button data-act="undo" title="Take the last shot back and play on from the shot before"><kbd>U</kbd> Undo shot</button>' : '';
+  const retry = `<button data-act="retry"${failed ? ' class="primary"' : ''}><kbd>R</kbd> Retry</button>`;
+  const cls = failed ? '' : ' class="primary"';
+  const go = !fw ? ''
+    : fw.act === 'next' ? `<button data-act="next"${cls}><kbd>N</kbd> Next</button>`
+      : fw.act === 'series' ? `<button data-act="series"${cls}>${esc(fw.label)} →</button>`
+        : `<button data-act="levels"${cls}>Levels</button>`;
+  return `<div class="actions">${undo}${retry}${save}${go}</div>`;
+}
+
+/**
+ * The docked layout's tallying banner (layout.ts, PT4), shown from the round's end until the card: the level
+ * and, once the settle has scored it, its stamp and stars, a preview of the card about to come. `over`
+ * replaces the text (a duel's round).
+ */
+export function tallyHtml(level: LevelDef, score: LevelScore | null, over: string | null = null): string {
+  if (over) return `<b>${esc(over)}</b> <span class="small">tallying…</span>`;
+  const what = score ? `<b>${esc(score.stamp)}</b> <span class="stars">${starsText(score.stars)}</span>` : `<b>${scoringOf(level) === 'outcome' ? 'Round over' : 'All crowns down'}</b>`;
+  return `<span class="name">${esc(level.name)}</span> ${what} <span class="small">tallying…</span>`;
+}
+
 /**
  * The round-over card. With no score yet the round is known to be over (every
  * crown is down) and the rest of the settle is still running: the card shows
  * at once and tallies, and is drawn again with the score when it settles.
+ * Two groups, `.c1` (name, the score lines and the total) and `.c2` (stamp, stars, badge, lot sheet and
+ * the buttons): one column as before, two side by side on a phone held sideways (GAME_CSS, docked).
+ * Score lines slam in one by one, then the stamp and stars.
  */
-export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: number, hasNext: boolean, canSave = false, extra = '', canUndo = false): string {
+export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: number, forward: boolean | CardForward, canSave = false, extra = '', canUndo = false): string {
   const outcome = scoringOf(level) === 'outcome';
   const shotsText = `${strokes} ${outcome ? 'shot' : 'stroke'}${strokes === 1 ? '' : 's'}${outcome ? '' : ` · par ${level.par}`}`;
-  const save = canSave && score ? '<button data-act="save" title="Download this round as a file to send back">Save session</button>' : '';
-  const undo = canUndo && strokes > 0 ? '<button data-act="undo" title="Take the last shot back and play on from the shot before"><kbd>U</kbd> Undo shot</button>' : '';
-  const actions = `<div class="actions">${undo}<button data-act="retry"><kbd>R</kbd> Retry</button>${save}${hasNext ? '<button data-act="next" class="primary"><kbd>N</kbd> Next</button>' : ''}</div>`;
+  const actions = cardActions(score, strokes, forward, canSave, canUndo);
   if (!score) {
-    return `
+    return `<div class="c1">
     <div class="name">${esc(level.name)}</div>
     <div class="sub">${shotsText}</div>
     <div class="line tally"><span>All crowns down</span><span>tallying…</span></div>
-    ${actions}`;
+    </div><div class="c2">${actions}</div>`;
   }
   // A line that costs points (heritage, footprint) is red end to end: its own red line, never netted into another.
   const lines = score.lines.map((l, i) => `<div class="line${l.value < 0 ? ' bad' : ''}" style="animation-delay:${0.15 + 0.22 * i}s"><span>${esc(l.label)}</span><span class="${l.value < 0 ? 'bad' : ''}">${fmtPoints(l.value)}</span></div>`).join('');
@@ -235,16 +371,18 @@ export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: n
   const tierText = tierLabel(score.leverage, level);
   const fz = score.freezes ? ` · freezes used ${score.freezes.used}/${score.freezes.total}` : '';
   const lost = score.heritageStarsLost ? `<div class="lost bad" style="animation-delay:${after + 0.7}s">Heritage cracked: ${score.heritageStarsLost} star${score.heritageStarsLost === 1 ? '' : 's'} lost</div>` : '';
-  return `
+  return `<div class="c1">
     <div class="name">${esc(level.name)}</div>
     ${level.custom ? `<div class="sub custom">${CUSTOM_NOTE}</div>` : ''}
     <div class="sub">${shotsText}${'outcome' in score ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''} · leverage ${fmtLeverage(score.leverage)}${tierText ? ` (${tierText})` : ''}${fz}</div>
     ${lines}
     <div class="line total" style="animation-delay:${after}s" title="The lines' sum, never below 0"><span>Total</span><span>${fmtPoints(score.total)}</span></div>
+    </div><div class="c2">
     <div class="stamp s-${score.stamp.replace(/[^A-Z]/g, '').toLowerCase()}" style="animation-delay:${after + 0.3}s">${esc(score.stamp)}</div>
     <div class="stars" style="animation-delay:${after + 0.55}s">${starsText(score.stars)}</div>
     ${lost}
     ${goldHtml(level, score, after + 0.8)}
     ${extra}
-    ${actions}`;
+    ${actions}
+    </div>`;
 }
