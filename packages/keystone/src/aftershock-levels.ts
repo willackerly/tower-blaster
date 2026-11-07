@@ -225,8 +225,9 @@ function retrofit(site: string, id: string, name: string, cast: { t2: number; t3
  */
 export const A6: LevelDef = retrofit('RC-1', 'A6', 'Lean on Me', { t2: 14, t3: 6, budget: 30, hash: '58d3978e48fec0e9' });
 export const A7: LevelDef = retrofit('RC-2', 'A7', 'Cross Ties', { t2: 16, t3: 12, budget: 40, hash: 'da9602ec76ecc205' });
+export const A8: LevelDef = retrofit('RC-3', 'A8', 'Old Town', { t2: 28, t3: 16, budget: 60, hash: '01f68faab877a96b' });
 
 /** The retrofit levels (M7b), the end of the Aftershock series. */
-export const RETROFIT_LEVELS: readonly LevelDef[] = [A6, A7];
+export const RETROFIT_LEVELS: readonly LevelDef[] = [A6, A7, A8];
 
 export const AFTERSHOCK_LEVELS: readonly LevelDef[] = [A1, A2, A3, A4, A5, ...RETROFIT_LEVELS];

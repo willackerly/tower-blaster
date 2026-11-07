@@ -359,5 +359,12 @@
   "packages/weapons/test/yield.test.ts": 0.1,
   "packages/game/test/coats-e2e.test.ts": 60.0,
   "packages/game/test/ice-pale-e2e.test.ts": 75.0,
-  "packages/game/test/duel-colours-e2e.test.ts": 35.0
+  "packages/game/test/duel-colours-e2e.test.ts": 35.0,
+  "packages/keystone-lab/test/retrofit-ref-A6.test.ts": 59,
+  "packages/keystone-lab/test/retrofit-ref-A7.test.ts": 86.9,
+  "packages/keystone-lab/test/retrofit-ref-A8.test.ts": 112.2,
+  "packages/keystone-lab/test/retrofit-gpu-A6.test.ts": 136.3,
+  "packages/keystone-lab/test/retrofit-gpu-A7.test.ts": 140,
+  "packages/keystone-lab/test/retrofit-gpu-A8.test.ts": 145.9,
+  "packages/game/test/retrofit-e2e.test.ts": 10
 }

@@ -130,7 +130,7 @@ describe('the retrofit candidate sites', () => {
 });
 
 describe('the shipped retrofit levels', () => {
-  const SITE: Record<string, string> = { A6: 'RC-1', A7: 'RC-2' };
+  const SITE: Record<string, string> = { A6: 'RC-1', A7: 'RC-2', A8: 'RC-3' };
 
   it('are the gated sites exactly, in the Aftershock series, with a budget of at most 200 and stars on what was built', () => {
     expect(RETROFIT_LEVELS.map((l) => l.id)).toEqual(Object.keys(SITE));

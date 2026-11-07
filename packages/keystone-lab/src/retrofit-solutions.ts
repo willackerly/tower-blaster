@@ -26,6 +26,10 @@ export const RETROFIT_SOLUTIONS: Record<string, RetrofitBuild[]> = {
     { label: 'a plank onto the hall along the quake from the two columns that have one, piers two high beside the two that do not', family: 'tie', braces: [tie(0), pier(3, 2), tie(5), pier(8, 2)] },
     { label: 'piers two high beside every column along the quake', family: 'buttress', braces: [pier(0, 2), pier(3, 2), pier(5, 2), pier(8, 2)] },
   ],
+  A8: [
+    { label: 'a plank onto its hall from each of the four columns that have one, piers two high beside the two that do not', family: 'tie', braces: [tie(0), pier(2, 2), tie(3), tie(5), tie(7), pier(10, 2)] },
+    { label: 'piers beside every column along the quake, three high beside the two tall columns of the front row, two elsewhere', family: 'buttress', braces: [pier(0, 3), pier(2, 2), pier(3, 3), pier(5, 2), pier(7, 2), pier(10, 2)] },
+  ],
 };
 
 /** The wrong builds, by level id: none may keep every protected tower standing. */
