@@ -289,6 +289,21 @@ export function crownDown(c: CompiledLevel, p: Vec3): boolean {
   return p[1] < c.def.crownLine * c.frame.unit || outsideLot(c, p[0], p[2]);
 }
 
+/** Rube Lab's default for a bell objective without a region: a bell has rung once it moved a quarter h from home. */
+export const BELL_MOVED = 0.25;
+
+/**
+ * Whether a bell (a crown of a bell level, docs/game/rube-lab.md) at `p` has rung: inside the objective's region,
+ * or with none, at least `moved` h (BELL_MOVED) from `home`. Squared distances, so it is the same on every machine.
+ */
+export function bellRung(c: CompiledLevel, p: Vec3, home: Vec3): boolean {
+  const o = c.def.objective, h = c.frame.unit;
+  if (o.kind !== 'bell') return false;
+  if (o.region) return [0, 1, 2].every((k) => p[k]! >= o.region!.min[k]! * h && p[k]! <= o.region!.max[k]! * h);
+  const d = (o.moved ?? BELL_MOVED) * h;
+  return (p[0] - home[0]) ** 2 + (p[1] - home[1]) ** 2 + (p[2] - home[2]) ** 2 >= d * d;
+}
+
 /** Heritage starts axis-aligned at `home`; it breaks if it moves or tilts past tolerance. */
 export function heritageBroken(c: CompiledLevel, p: Vec3, q: Quat, home: Vec3): boolean {
   const h = c.frame.unit;

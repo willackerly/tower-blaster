@@ -60,6 +60,7 @@ export function objectiveMet(c: CompiledLevel, f: ObjectiveFacts, scoring: Scori
       && (scoring === 'outcome' || obj.footprintMax === undefined || f.red.outOfLot <= obj.footprintMax * c.meta.n);
     case 'collapse': return f.collapse >= obj.min;
     case 'hold': return c.meta.crowns.length > 0 && f.crownsTotal === 0;
+    case 'bell': return c.meta.crowns.length > 0 && f.crownsTotal === c.meta.crowns.length;
   }
 }
 

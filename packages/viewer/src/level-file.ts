@@ -21,7 +21,7 @@ const MATERIAL_NAMES = MATERIALS.map((m) => m.name) as readonly string[];
 /** The LevelDef a JSON value describes, or an error saying where it is wrong. */
 export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   const o = object(v, where);
-  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars', 'autobank', 'settle', 'freeze', 'physics', 'custom', 'build'], where);
+  only(o, ['format', 'id', 'name', 'version', 'world', 'unit', 'gap', 'parts', 'lot', 'crownLine', 'objective', 'par', 'rack', 'launcher', 'lGold', 'solutions', 'scoring', 'stars', 'autobank', 'settle', 'freeze', 'physics', 'custom', 'build', 'charges', 'rube'], where);
   if (o.format !== undefined && o.format !== LEVEL_FILE_FORMAT) throw new Error(`${where}.format should be "${LEVEL_FILE_FORMAT}"`);
   const id = str(o.id, `${where}.id`);
   if (!/^[\w-]{1,32}$/.test(id)) throw new Error(`${where}.id must be 1 to 32 letters, digits, - or _`);
@@ -56,7 +56,23 @@ export function parseLevelDef(v: unknown, where = 'level'): LevelDef {
   if (o.custom !== undefined) def.custom = bool(o.custom, `${where}.custom`);
   if (o.physics !== undefined) def.physics = physics(o.physics, `${where}.physics`);
   if (o.build !== undefined) def.build = build(o.build, `${where}.build`);
+  if (o.charges !== undefined) def.charges = arr(o.charges, `${where}.charges`).map((c, i) => charge(c, `${where}.charges[${i}]`));
+  if (o.rube !== undefined) {
+    const r = object(o.rube, `${where}.rube`);
+    only(r, ['partsPar'], `${where}.rube`);
+    def.rube = { partsPar: int(r.partsPar, `${where}.rube.partsPar`) };
+  }
   return def;
+}
+
+/** A charge on the structure (@tb/keystone ChargeDef), naming a built-in charge or a key of the level's weapons. */
+function charge(v: unknown, where: string): NonNullable<LevelDef['charges']>[number] {
+  const o = object(v, where);
+  only(o, ['host', 'at', 'weapon', 'arm'], where);
+  const c: NonNullable<LevelDef['charges']>[number] = { host: int(o.host, `${where}.host`), weapon: str(o.weapon, `${where}.weapon`) };
+  if (o.at !== undefined) c.at = vec3(o.at, `${where}.at`);
+  if (o.arm !== undefined) c.arm = oneOf(o.arm, ['plunger', 'start'], `${where}.arm`) as 'plunger' | 'start';
+  return c;
 }
 
 /** An outcome level's cast thresholds (@tb/keystone StarsDef). */
@@ -106,14 +122,19 @@ function positiveHalf(v: unknown, where: string): V3 {
 
 function part(v: unknown, where: string): Part {
   const o = object(v, where);
-  const kind = oneOf(o.kind, ['block', 'slab', 'rod', 'scenario', 'piece', 'run'], `${where}.kind`);
+  const kind = oneOf(o.kind, ['block', 'slab', 'rod', 'scenario', 'piece', 'run', 'ball'], `${where}.kind`);
   if (kind === 'scenario') return scenarioPart(o, where);
   const material = oneOf(o.material, MATERIAL_NAMES, `${where}.material`) as MaterialName;
   const role = o.role === undefined ? undefined : (oneOf(o.role, ROLES, `${where}.role`) as Role);
   const placed = o.placed === undefined ? {} : o.placed === true ? { placed: true as const } : (() => { throw new Error(`${where}.placed must be true when given`); })();
+  const pinned = o.pinned === undefined ? {} : o.pinned === true ? { pinned: true as const } : (() => { throw new Error(`${where}.pinned must be true when given`); })();
   if (kind === 'piece') {
-    only(o, ['kind', 'at', 'half', 'yaw', 'material', 'role', 'placed'], where);
-    return { kind, at: vec3(o.at, `${where}.at`), half: positiveHalf(o.half, `${where}.half`), ...(o.yaw !== undefined ? { yaw: num(o.yaw, `${where}.yaw`) } : {}), material, ...(role ? { role } : {}), ...placed };
+    only(o, ['kind', 'at', 'half', 'yaw', 'tilt', 'pinned', 'material', 'role', 'placed'], where);
+    return { kind, at: vec3(o.at, `${where}.at`), half: positiveHalf(o.half, `${where}.half`), ...(o.yaw !== undefined ? { yaw: num(o.yaw, `${where}.yaw`) } : {}), ...(o.tilt !== undefined ? { tilt: num(o.tilt, `${where}.tilt`) } : {}), ...pinned, material, ...(role ? { role } : {}), ...placed };
+  }
+  if (kind === 'ball') {
+    only(o, ['kind', 'at', 'radius', 'pinned', 'material', 'role', 'placed'], where);
+    return { kind, at: vec3(o.at, `${where}.at`), radius: positive(o.radius, `${where}.radius`), ...pinned, material, ...(role ? { role } : {}), ...placed };
   }
   if (kind === 'run') {
     only(o, ['kind', 'path', 'pitch', 'half', 'y', 'material', 'role', 'omit', 'placed'], where);
@@ -207,11 +228,22 @@ function lot(v: unknown, where: string): LevelDef['lot'] {
 
 function objective(v: unknown, where: string): LevelDef['objective'] {
   const o = object(v, where);
-  const kind = oneOf(o.kind, ['crowns', 'skyline', 'collapse', 'hold'], `${where}.kind`);
+  const kind = oneOf(o.kind, ['crowns', 'skyline', 'collapse', 'hold', 'bell'], `${where}.kind`);
   const footprint = o.footprintMax !== undefined ? { footprintMax: num(o.footprintMax, `${where}.footprintMax`) } : {};
   if (kind === 'crowns' || kind === 'hold') {
     only(o, ['kind', 'footprintMax'], where);
     return { kind, ...footprint };
+  }
+  if (kind === 'bell') {
+    only(o, ['kind', 'region', 'moved', 'footprintMax'], where);
+    const b: Extract<LevelDef['objective'], { kind: 'bell' }> = { kind, ...footprint };
+    if (o.moved !== undefined) b.moved = positive(o.moved, `${where}.moved`);
+    if (o.region !== undefined) {
+      const r = object(o.region, `${where}.region`);
+      only(r, ['min', 'max'], `${where}.region`);
+      b.region = { min: vec3(r.min, `${where}.region.min`), max: vec3(r.max, `${where}.region.max`) };
+    }
+    return b;
   }
   if (kind === 'collapse') {
     only(o, ['kind', 'min', 'footprintMax'], where);
