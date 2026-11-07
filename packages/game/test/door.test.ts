@@ -141,9 +141,10 @@ describe('door levels', () => {
     expect(html).toContain(`<li>${BULLET_TIME_HOW}</li>`);
     expect(BULLET_TIME_HOW).toMatch(/Bullet Time.*<kbd>T<\/kbd>.*Freeze.*keeps the freeze/);
     expect(html).toContain('data-act="advanced" class="howlink advlink on" aria-expanded="true"');
-    // PT18: Sound is two segments, the selected one marked on (filled in the accent by DOOR_CSS); How to play has the Siege Table.
-    expect(html).toContain('<span class="seg"><button data-act="sound" data-arg="on" class="on">On</button><button data-act="sound" data-arg="off" class="">Off</button></span>');
-    expect(doorHtml({ levels, current: 0, settings: { ...DEFAULT_SETTINGS, sound: false }, howTo: false, advanced: true })).toContain('data-arg="on" class="">On</button><button data-act="sound" data-arg="off" class="on">Off');
+    // PT18: Sound reads its state, On (marked on, so filled in the accent by DOOR_CSS) or Off; How to play has the Siege Table.
+    // (Its markup is the option registry's, pinned by options-golden: one toggle button inside a segment.)
+    expect(html).toContain('<span class="seg"><button data-act="sound" class="on">On</button></span>');
+    expect(doorHtml({ levels, current: 0, settings: { ...DEFAULT_SETTINGS, sound: false }, howTo: false, advanced: true })).toContain('<button data-act="sound" class="">Off</button>');
     expect(DOOR_CSS).toMatch(/\.seg button\.on \{ background: #9fc3ff; color: #11141c/);
     expect(html).toContain(`<li>${SIEGE_TABLE_HOW}</li>`);
     expect(doorHtml({ levels, current: -1, settings: DEFAULT_SETTINGS, howTo: false, advanced: false })).not.toContain('data-act="close"');
@@ -175,7 +176,7 @@ describe('settings', () => {
     expect(parseSettings(null)).toEqual(DEFAULT_SETTINGS);
     expect(parseSettings('nope')).toEqual(DEFAULT_SETTINGS);
     expect(parseSettings('{"sound":false,"look":"nope","sharp":3}')).toEqual({ ...DEFAULT_SETTINGS, sound: false });
-    expect(parseSettings('{"look":"real","sharp":1}')).toEqual({ sound: true, look: 'real', sharp: 1, camera: 'still', rapid: true, duelView: true, handoff: true, launch: 'high', marks: true, layout: 'docked', quality: 'auto' });
+    expect(parseSettings('{"look":"real","sharp":1}')).toEqual({ ...DEFAULT_SETTINGS, look: 'real', sharp: 1 });
     // Settings stored before the Camera setting open still, as does anything but its two values.
     expect(DEFAULT_SETTINGS.camera).toBe('still');
     expect(parseSettings('{"camera":"dynamic"}')).toEqual({ ...DEFAULT_SETTINGS, camera: 'dynamic' });
@@ -268,10 +269,10 @@ describe('settings', () => {
   it('the URL wins for the visit; a change is stored and replaces the URL\'s say on that field', () => {
     const kv = memoryKeyValue({ [SETTINGS_KEY]: '{"look":"real"}' });
     const s = new SettingsStore(kv, q('look=candy&sound=off'));
-    expect(s.current).toEqual({ sound: false, look: 'candy', sharp: 2, camera: 'still', rapid: true, duelView: true, handoff: true, launch: 'high', marks: true, layout: 'docked', quality: 'auto' });
-    expect(s.set({ look: 'hazy' })).toEqual({ sound: false, look: 'hazy', sharp: 2, camera: 'still', rapid: true, duelView: true, handoff: true, launch: 'high', marks: true, layout: 'docked', quality: 'auto' });
-    expect(JSON.parse(kv.getItem(SETTINGS_KEY)!)).toEqual({ sound: true, look: 'hazy', sharp: 2, camera: 'still', rapid: true, duelView: true, handoff: true, launch: 'high', marks: true, layout: 'docked', quality: 'auto' });
-    expect(new SettingsStore(kv).current).toEqual({ sound: true, look: 'hazy', sharp: 2, camera: 'still', rapid: true, duelView: true, handoff: true, launch: 'high', marks: true, layout: 'docked', quality: 'auto' });
+    expect(s.current).toEqual({ ...DEFAULT_SETTINGS, sound: false, look: 'candy' });
+    expect(s.set({ look: 'hazy' })).toEqual({ ...DEFAULT_SETTINGS, sound: false, look: 'hazy' });
+    expect(JSON.parse(kv.getItem(SETTINGS_KEY)!)).toEqual({ ...DEFAULT_SETTINGS, look: 'hazy' });
+    expect(new SettingsStore(kv).current).toEqual({ ...DEFAULT_SETTINGS, look: 'hazy' });
   });
   it('storage that throws keeps settings in memory', () => {
     const bad = { getItem: () => { throw new Error('x'); }, setItem: () => { throw new Error('x'); }, removeItem: () => {} };

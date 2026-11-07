@@ -4,7 +4,7 @@
 //   [--cloud-of cast.json [--n 16]] [--budget-min 60] [--pool a.json,b.json]
 //   [--stars-into packages/keystone/src/stars.json] [--replay cast.json [--phase cloud] [--n 16]]
 //   [--extend cast.json [--n 50]] [--pool a.json,b.json [--t3 pooled|best]] [--waive skill,stable]
-//   [--bounce off|0.3]
+//   [--bounce off|0.3] [--batch-timeout-min 30]
 // <level>: a built-in level id, or --level-file path.json (a LevelDef), or
 // --scenario S3 --param W=50 ... (the automatic scenario level), or --draft B1a
 // (keystone-lab drafts.ts). --explore N plays N competent lines only and
@@ -34,7 +34,8 @@
 // although those gates failed (applyWaivers: a documented call, recorded as the stars' `waived`;
 // fair, limits and complete are never waivable). Exit codes still report the failed gates.
 // --bounce off|e plays a variant of the level with Bounce at e (withBounce: roadmap B6's probe);
-// it changes the level hash, so it refuses --stars-into.
+// it changes the level hash, so it refuses --stars-into. --batch-timeout-min (30; 0 off): a batch of
+// plays still running after that is a hung page or GPU, closed and replayed like a lost page.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { compileLevel, type LevelDef, levelById, scenarioLevel, STAR_METRICS, type StarMetric, type StarsDef } from '@tb/keystone';
 import { exitNow } from '@tb/testkit';
@@ -134,7 +135,7 @@ let player: CastPlayer, close = async (): Promise<string[]> => [];
 let reopens: readonly string[] = [];
 const reopenNote = () => reopens.length ? `\n\nThe cast page was lost and reopened ${reopens.length} time(s); each batch it lost was replayed whole on the new page:\n${reopens.map((r) => `- ${r}`).join('\n')}\n` : '';
 if (engine === 'gpu' || engine === 'gpu-rapier') {
-  const p = await openBrowserCastPlayer({ engine: engine === 'gpu' ? 'gpu' : 'rapier', ...(flags.has('channel') ? { channel: flags.get('channel')! } : {}), headed: flags.has('headed'), ...(maxSteps !== undefined ? { maxSteps } : {}) });
+  const p = await openBrowserCastPlayer({ engine: engine === 'gpu' ? 'gpu' : 'rapier', ...(flags.has('channel') ? { channel: flags.get('channel')! } : {}), headed: flags.has('headed'), ...(maxSteps !== undefined ? { maxSteps } : {}), ...(flags.has('batch-timeout-min') ? { batchTimeoutMs: Number(flags.get('batch-timeout-min')) * 60_000 } : {}) });
   player = p; close = p.close; reopens = p.reopens;
   if (p.software) console.log(`note: ${p.adapter} is a software adapter: the cast is valid, its timings are not performance results`);
 } else if (engine === 'ref' || engine === 'rapier') player = nodeCastPlayer({ kind: engine });

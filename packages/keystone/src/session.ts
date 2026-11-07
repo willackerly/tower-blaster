@@ -6,6 +6,7 @@ import { massOf, type RemoveEvent, type SpawnEvent, type Vec3 } from '@tb/engine
 import { GRAVITY } from './materials.ts';
 import { itemYield, levelCharges, plungerYield } from './arsenal.ts';
 import { castStars, type CompiledLevel, type Scoring, scoringOf, settleOf } from './level.ts';
+import type { IceCrack } from './ice.ts';
 import { collapseFraction, floorPotential_mJ, homePotential_mJ, homeSkyline, objectiveMet, type OutcomeFacts, outcomeScore } from './outcome.ts';
 import { ammoInFlight, crownDown, heritageBroken, leverage, levelScore, type LevelScore, levelTier, refereedScore, roundLeverage, type Observation, type Reductions, type SettleRule, type SettleState, settleCap, settleUpdate, type ShotOutcome, skyline } from './rules.ts';
 import type { RackItem } from './rack.ts';
@@ -28,7 +29,7 @@ export type Feedback =
   /** An ice block cracked further (ice.ts): crack level 1 to 7, where it started (body frame, -1..1 per axis) and a seed for its pattern. */
   | { t: 'iceCrack'; step: number; body: number; level: number; at: Vec3; seed: number }
   /** An ice block shattered: removed at `step`, its pieces (engine ids) spawned in its place; dv the hit that did it, m/s. */
-  | { t: 'shatter'; step: number; body: number; pieces: number[]; dv: number }
+  | { t: 'shatter'; step: number; body: number; pieces: number[]; dv: number; cracks: IceCrack[] }
   | { t: 'settled'; step: number; shot: number; outcome: ShotOutcome }
   /**
    * A shot fired while shot `shot` was still running (rapid fire) closed it: its outcome is taken on

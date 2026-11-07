@@ -9,8 +9,8 @@ import { buildScenario } from '@tb/scenarios';
 import { Body, readStruct, Shape, TIER } from '@tb/schema';
 import { RapierHost } from '@tb/adapter-rapier';
 import { TieredEngine } from '@tb/lattice';
-import { ADAPT_MAX, ADAPT_REF, adaptedExposure, hallArch, hallScaled, hallUniforms, HAZY_DAY, OLYMPIA, linearToSrgb, lookByName, lookUniforms, parseRealOptions, REAL_DEFAULTS, REAL_KNOBS, REAL_POLISH_OFF, realLook, writeRealOptions, CLEAR_DAY, MIE_H, mieExtinction, multiTable, normalize, OZONE, OZONE_WIDTH, RAYLEIGH, RAYLEIGH_H, skyRadiance, skyViewDir, skyViewUv, sunAtGround, sunDiscRadiance, transmittance, transmittanceHMu, transmittanceTable, transmittanceUv } from '../src/index.ts';
-import { agx, aoFootReference, debrisClass, debrisSpawnReference, debrisWeight, newDebrisReference, chipCount, chipStepReference, CHIP_POOL, CHIPS_PER_EVENT, debrisRings, DEFAULT_DEBRIS, DEFAULT_SPARKS, dustCount, dustStepReference, DUST_PER_EVENT, DUST_POOL, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, SEG, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
+import { BLOCK_JITTER, WARM_AXIS, STONE_PALETTES, ADAPT_MAX, ADAPT_REF, adaptedExposure, hallArch, hallScaled, hallUniforms, HAZY_DAY, OLYMPIA, linearToSrgb, lookByName, lookUniforms, parseRealOptions, REAL_DEFAULTS, REAL_KNOBS, REAL_POLISH_OFF, realLook, writeRealOptions, CLEAR_DAY, MIE_H, mieExtinction, multiTable, normalize, OZONE, OZONE_WIDTH, RAYLEIGH, RAYLEIGH_H, skyRadiance, skyViewDir, skyViewUv, sunAtGround, sunDiscRadiance, transmittance, transmittanceHMu, transmittanceTable, transmittanceUv } from '../src/index.ts';
+import { agx, aoFootReference, debrisClass, debrisSpawnReference, debrisWeight, newDebrisReference, chipCount, chipStepReference, CHIP_POOL, CHIPS_PER_EVENT, debrisRings, DEFAULT_DEBRIS, DEFAULT_SPARKS, dustCount, dustStepReference, DUST_PER_EVENT, DUST_POOL, bevelNormal, type V3, CANDY_NIGHT, CTL, HOT_FULL, MAX_EVENTS, SPAWN_BUDGET, FX_WORDS, packFx, tintWord, unpackFx, frustumPlanes, linearToOklab, listMatches, oklabToLinear, srgbToLinear, lookAt, lookOf, lookRange, MATERIAL, multiply, SEG, SEGMENTS, packBodies, changedRanges, drawnTier, packShapes, paletteOf, perspective, unpackLook } from '../src/index.ts';
 import { gpu, call, type D } from './harness.ts';
 
 describe('looks', () => {
@@ -240,6 +240,58 @@ describe('real look options', () => {
     expect(realLook(parseRealOptions(new URLSearchParams()))).toEqual(realLook(REAL_DEFAULTS));
     expect(realLook({ visibility: 8 }).atmosphere!.visibility).toBe(8);
   });
+  it('masonry (R7): mosaic pulls the blocks toward the palette mean, the light ones hardest, and warmth adds a warm/cool drift', () => {
+    const lin = (c: V3) => c.map(srgbToLinear) as V3;
+    const STONES = ['limestone', 'sandstone', 'granite', 'concrete', 'pine'] as const;
+    const OLD = { mosaic: 1, warmth: 0 }; // the look before R7, exactly
+    // mosaicRamp: 1 is the palette, 0 its OKLab mean five times.
+    for (const stone of STONES) {
+      const full = realLook({ stone, ...OLD }).ramp, none = realLook({ stone, mosaic: 0 }).ramp;
+      const pal = STONE_PALETTES[stone].map((h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255) as V3);
+      expect(full).toEqual(pal);
+      for (const c of none) c.forEach((x, k) => expect(x).toBeCloseTo(none[0]![k]!, 9));
+    }
+    expect(realLook(OLD).stone).toMatchObject({ jitter: BLOCK_JITTER, warmth: 0 });
+    expect(realLook(OLD).hueStep).toBe(4);
+    // The blocks as the shader makes them (shaders.ts realAlbedo): a ramp key, the lightness jitter, the tower's
+    // hue turn, the warm/cool drift. Their luminance spread (std / mean) and their spread along WARM_AXIS (std).
+    const blocks = (o: Parameters<typeof realLook>[0]) => {
+      const l = realLook(o), jit = l.stone!.jitter!, warm = l.stone!.warmth!, step = (l.hueStep * Math.PI) / 180, Y: number[] = [], B: number[] = [];
+      for (const key of l.ramp) for (const u of [0, 0.25, 0.5, 0.75, 1]) for (const v of [0, 0.5, 1]) for (let t = 0; t < 16; t++) {
+        const lab = linearToOklab(lin(key)), a = (t - 2.5) * step, c = Math.cos(a), s = Math.sin(a);
+        const ok: V3 = [lab[0] * (1 + (u - 0.5) * jit), c * lab[1] - s * lab[2] + (v - 0.5) * warm * WARM_AXIS[0], s * lab[1] + c * lab[2] + (v - 0.5) * warm * WARM_AXIS[1]];
+        const rgb = oklabToLinear(ok);
+        Y.push(0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]);
+        B.push(ok[1] * WARM_AXIS[0] + ok[2] * WARM_AXIS[1]);
+      }
+      const sd = (x: number[]) => { const m = x.reduce((p, q) => p + q) / x.length; return [Math.sqrt(x.reduce((p, q) => p + (q - m) ** 2, 0) / x.length), m] as const; };
+      const [ys, ym] = sd(Y), [bs] = sd(B);
+      return { y: ys / ym, b: bs };
+    };
+    const L = (o: Parameters<typeof realLook>[0]) => realLook(o).ramp.map((k) => linearToOklab(lin(k))[0]);
+    for (const stone of STONES) {
+      const before = blocks({ stone, ...OLD }), now = blocks({ stone });
+      // Measured: limestone 14.3% -> 11.0%, sandstone 20.8 -> 16.1 (two blind Opus reviews preferred this to 4% or 6%).
+      expect(before.y, stone).toBeGreaterThan(0.13);
+      expect(now.y / before.y, stone).toBeGreaterThan(0.7);
+      expect(now.y / before.y, stone).toBeLessThan(0.85);
+      // The lightest key comes in harder than the darkest (no near-white block beside a dark one).
+      const l0 = L({ stone, ...OLD }), l1 = L({ stone }), m0 = l0.reduce((p, q) => p + q) / 5, m1 = l1.reduce((p, q) => p + q) / 5;
+      const up = (Math.max(...l1) - m1) / (Math.max(...l0) - m0), down = (m1 - Math.min(...l1)) / (m0 - Math.min(...l0));
+      expect(up, stone).toBeLessThan(0.76); // about 0.74 (m^1.5, the mean shifting with it)
+      expect(down, stone).toBeGreaterThan(0.75); // about 0.78 (m)
+      expect(down - up, stone).toBeGreaterThan(0.02);
+      // The warm/cool drift: 0.025 span on its own (uniform over three values: std 0.0102).
+      expect(now.b - blocks({ stone, ...OLD, warmth: 0 }).b, stone).toBeGreaterThan(0);
+      expect(blocks({ stone, mosaic: 0 }).b, stone).toBeCloseTo(0.025 * Math.sqrt(2 / 3) / 2, 3);
+      expect(blocks({ stone, mosaic: 0, warmth: 0 }).b, stone).toBeLessThan(1e-9);
+    }
+    expect(REAL_DEFAULTS).toMatchObject({ mosaic: 0.8, warmth: 0.025 });
+    expect(Math.hypot(...WARM_AXIS)).toBeCloseTo(1, 12);
+    expect(WARM_AXIS[0] / WARM_AXIS[1]).toBeCloseTo(0.3, 12);
+    expect(realLook({ mosaic: 0 }).stone!.jitter).toBe(0);
+    expect(realLook({}).stone!.warmth).toBe(0.025);
+  });
   it('rejects values out of range or not numbers', () => {
     for (const [key, k] of Object.entries(REAL_KNOBS)) {
       expect(() => parseRealOptions(new URLSearchParams({ [`real.${key}`]: String(k.max + 1) }))).toThrow(new RegExp(`real.${key}`));
@@ -361,7 +413,7 @@ describe('atmosphere (CPU twin)', () => {
 
 describe('fx records', () => {
   it('all-zero words mean no effect', () => {
-    expect(unpackFx(new Uint32Array(FX_WORDS))).toEqual({ tint: [1, 1, 1], emissive: 0, scale: 1, anchor: false, paint: false, matte: false, band: false, mark: 0, flashAt: 0, flash: 0 });
+    expect(unpackFx(new Uint32Array(FX_WORDS))).toEqual({ tint: [1, 1, 1], emissive: 0, scale: 1, anchor: false, paint: false, matte: false, band: false, mark: 0, coat: 0, flashAt: 0, flash: 0 });
     const w = new Uint32Array(FX_WORDS);
     packFx({}, w);
     expect(Array.from(w)).toEqual([0, 0, 0, 0]);
@@ -1107,7 +1159,7 @@ describe('GPU cull and compaction', () => {
     const out = await call('cull', cases);
     for (const r of out) {
       expect(r.error, `seed ${r.seed}`).toBeNull();
-      expect(r.lists, `seed ${r.seed}`).toEqual([null, null, null, null, null, null]);
+      expect(r.lists, `seed ${r.seed}`).toEqual(SEGMENTS.map(() => null));
       expect(r.argsOk).toBe(true);
       expect(r.recordErr, `seed ${r.seed}`).toBeLessThan(2e-5);
     }
@@ -1121,8 +1173,12 @@ describe('GPU cull and compaction', () => {
     expect(out[7]!.counts[SEG.boxFar]).toBeGreaterThan(50);
     expect(out[8]!.counts[SEG.box]).toBe(0);
     expect(out[8]!.counts[SEG.boxFar]).toBeGreaterThan(10);
-    // boxIce: empty without ice; with it, ice boxes leave box and boxFar for boxIce, their shadows stay.
+    // boxIce: empty without ice; with it, ice boxes leave box and boxFar for boxIce, and their shadows leave
+    // boxShadow for boxIceShadow (the screen-door caster).
     for (const r of out.slice(0, 9)) expect(r.counts[SEG.boxIce], `seed ${r.seed}`).toBe(0);
+    for (const r of out.slice(0, 9)) expect(r.counts[SEG.boxIceShadow], `seed ${r.seed}`).toBe(0);
+    expect(out[9]!.counts[SEG.boxIceShadow], JSON.stringify(out[9]!.counts)).toBeGreaterThan(20);
+    expect(out[9]!.counts[SEG.boxShadow], JSON.stringify(out[9]!.counts)).toBeGreaterThan(20);
     expect(out[9]!.counts[SEG.boxIce], JSON.stringify(out[9]!.counts)).toBeGreaterThan(20);
     expect(out[9]!.counts[SEG.box], JSON.stringify(out[9]!.counts)).toBeGreaterThan(20);
     expect(out[9]!.counts[SEG.boxFar], JSON.stringify(out[9]!.counts)).toBeGreaterThan(20);
@@ -1404,8 +1460,8 @@ describe('drawing', () => {
     expect(r.prevEqual).toBe(true); // beforeStep() copied the state into prev
     // Uniforms only (frame, cull, spark and light params, spark control reset): measured 1602 B (the debris params and counters added 24, the
     // hall's 2 vec4 in the frame 48 with padding; realism step 7 48: the frame's ballSteel and the composite's tone map and grain,
-    // measured 1698; Bullet Time's fxGain in the frame 16 more, 1714, its grade in a spare post word). Any per-body upload is 41 x Body.size more.
-    expect(r.bytesPerFrame).toBeLessThanOrEqual(1720);
-    expect(1720).toBeLessThan(41 * Body.size);
+    // measured 1698; the frame's iceShadow 16 and Bullet Time's fxGain 16 more, 1730, its grade in a spare post word). Any per-body upload is 41 x Body.size more.
+    expect(r.bytesPerFrame).toBeLessThanOrEqual(1732);
+    expect(1732).toBeLessThan(41 * Body.size);
   });
 });

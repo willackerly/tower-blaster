@@ -25,6 +25,12 @@ export interface BrowserCastOptions {
   batch?: number;
   /** Times a batch is replayed on a reopened page after the page is lost under it (default 2). */
   retries?: number;
+  /**
+   * A batch still running after this many ms is taken as a hung page or GPU (B1 at Bounce 0.4 on the M5,
+   * 2026-11-06: no progress for 2.5 h): the page is closed, which loses it, so the batch is replayed on a fresh
+   * page like any lost page, and after the retries the cast fails instead of hanging. Default 30 min; 0 is off.
+   */
+  batchTimeoutMs?: number;
 }
 
 /** A way to lose the cast page, for tests: navigate it away (its context is destroyed) or close it. */
@@ -44,6 +50,8 @@ export interface BrowserCastPlayer extends CastPlayer {
   readonly reopens: string[];
   /** Test hook: loses the page about 0.5 s into the next batch (or rest), so the reopen and replay path runs. */
   injectFault(kind: PageFault): void;
+  /** Sets the batch watchdog (BrowserCastOptions.batchTimeoutMs) from the next batch on; for tests. */
+  setBatchTimeout(ms: number): void;
   /** The level at rest on the page's engine (the cast page's rest: pre-settle, then `steps` with nothing fired). */
   rest(level: LevelDef, steps: number): Promise<RestReport>;
   close(): Promise<string[]>;
@@ -90,13 +98,18 @@ export async function openBrowserCastPlayer(opts: BrowserCastOptions = {}): Prom
     throw e;
   }
   const playMs: number[] = [], reopens: string[] = [], batch = Math.max(1, opts.batch ?? 4);
-  let fault: PageFault | null = null;
+  let fault: PageFault | null = null, batchTimeoutMs = opts.batchTimeoutMs ?? 30 * 60_000;
   // Runs fn on the live page; a page lost under it (see page-retry.ts) is reopened and fn run again.
   const onPage = <T>(what: string, fn: (p: Page) => Promise<T>): Promise<T> => withPageRetry(
     () => {
-      const p = page!, run = fn(p);
+      const p = page!, run = fn(p), limit = batchTimeoutMs;
       if (fault) { const f = fault; fault = null; setTimeout(() => { void injectFault(p, f); }, 500); }
-      return run;
+      if (!(limit > 0)) return run;
+      const watchdog = setTimeout(() => {
+        console.error(`cast: ${what}: no result after ${(limit / 60_000).toFixed(1)} min; closing the page as hung`);
+        void p.close().catch(() => undefined);
+      }, limit);
+      return run.finally(() => clearTimeout(watchdog));
     },
     async () => {
       const p = await openPage();
@@ -127,6 +140,7 @@ export async function openBrowserCastPlayer(opts: BrowserCastOptions = {}): Prom
     },
     rest: (level, steps) => onPage('rest', (p) => p.evaluate(([lv, n]) => window.__cast.rest(lv, n), [level, steps] as const)),
     injectFault(kind) { fault = kind; },
+    setBatchTimeout(ms) { batchTimeoutMs = ms; },
     close,
   };
 }

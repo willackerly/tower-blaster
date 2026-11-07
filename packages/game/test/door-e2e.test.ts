@@ -8,6 +8,7 @@
 // place (no page load), with N and P walking the trials only.
 import { describe, expect, it } from 'vitest';
 import { B1, L1, type Shot, TRIAL_LEVELS, writeShots } from '@tb/keystone';
+import { DEFAULT_SETTINGS, doorChange, type Settings } from '../src/settings.ts';
 import { gamePage } from './page.ts';
 
 const game = gamePage();
@@ -95,49 +96,55 @@ describe('front door', () => {
     // The settings sit behind Advanced settings, closed until it is clicked.
     expect(await page.locator('.kg-door [data-act="look"]').count()).toBe(0);
     await page.locator('.kg-door [data-act="advanced"]').click();
-    await page.locator('.kg-door [data-act="look"][data-arg="real"]').click();
-    await page.locator('.kg-door [data-act="sound"][data-arg="off"]').click();
-    await page.locator('.kg-door [data-act="sharp"][data-arg="1"]').click();
+    // Each setting clicked, and what it changes by its option's door row (settings.ts doorChange): what is stored after.
+    const changed: Partial<Settings> = {};
+    const pick = async (act: string, arg = '') => {
+      await page.locator(`.kg-door [data-act="${act}"]${arg ? `[data-arg="${arg}"]` : ''}`).click();
+      Object.assign(changed, doorChange(act, arg, { ...DEFAULT_SETTINGS, ...changed }));
+    };
+    await pick('look', 'real');
+    await pick('sound');
+    await pick('sharp', '1');
     // Camera: still by default; Dynamic turns the follow and the shake on at once, over the URL's keystone.shake=0, which goes.
     expect(await page.locator('.kg-door [data-act="camera"].on').innerText()).toBe('Still');
     expect(await page.evaluate(() => window.__game.feel)).toMatchObject({ follow: false, shake: false });
-    await page.locator('.kg-door [data-act="camera"][data-arg="dynamic"]').click();
+    await pick('camera', 'dynamic');
     expect(await page.evaluate(() => window.__game.feel)).toMatchObject({ follow: true, shake: true });
     expect(new URLSearchParams(await page.evaluate(() => location.search)).has('keystone.shake')).toBe(false);
     // Rapid fire: on by default; Off applies to the game at once.
     expect(await page.locator('.kg-door [data-act="rapid"].on').innerText()).toBe('On');
     expect(await page.evaluate(() => window.__game.feel.rapid)).toBe(true);
-    await page.locator('.kg-door [data-act="rapid"][data-arg="off"]').click();
+    await pick('rapid', 'off');
     expect(await page.evaluate(() => window.__game.feel.rapid)).toBe(false);
     // Duel turns: the turn view on by default; Leave it applies to the game at once.
     expect(await page.locator('.kg-door [data-act="duelview"].on').innerText()).toBe('Turn the view');
     expect(await page.evaluate(() => window.__game.feel.turnView)).toBe(true);
-    await page.locator('.kg-door [data-act="duelview"][data-arg="off"]').click();
+    await pick('duelview', 'off');
     expect(await page.evaluate(() => window.__game.feel.turnView)).toBe(false);
     // Launch height: High by default; Level's applies to the game at once (the launcher moves to the level's own).
     expect(await page.locator('.kg-door [data-act="launch"].on').innerText()).toBe('High');
     expect(await page.evaluate(() => window.__game.feel.launch)).toBe('high');
-    await page.locator('.kg-door [data-act="launch"][data-arg="level"]').click();
+    await pick('launch', 'level');
     expect(await page.evaluate(() => window.__game.feel.launch)).toBe('level');
     // Stone marks: carved by default (L1's four crowns carry the crosshair); Off clears every stone at once, Carved recarves them.
     expect(await page.locator('.kg-door [data-act="marks"].on').innerText()).toBe('Carved');
     const hits = () => page.evaluate(() => window.__game.marks().filter((m) => m === 1).length);
     expect(await hits()).toBe(4);
-    await page.locator('.kg-door [data-act="marks"][data-arg="off"]').click();
+    await pick('marks', 'off');
     expect(await page.evaluate(() => window.__game.feel.marks)).toBe(false);
     expect(await page.evaluate(() => window.__game.marks().some((m) => m !== 0))).toBe(false);
-    await page.locator('.kg-door [data-act="marks"][data-arg="on"]').click();
+    await pick('marks', 'on');
     expect(await hits()).toBe(4);
-    await page.locator('.kg-door [data-act="marks"][data-arg="off"]').click();
+    await pick('marks', 'off');
     // Hand-over: the duel's pass-the-device card, on by default; Skip stores it off.
     expect(await page.locator('.kg-door [data-act="handoff"].on').innerText()).toBe('Card');
-    await page.locator('.kg-door [data-act="handoff"][data-arg="off"]').click();
+    await pick('handoff', 'off');
     expect(await page.evaluate(() => window.__game.feel.handoff)).toBe(false);
     // Layout (docs/game/phone-hud.md): Classic takes the HUD out of its docked class at once.
     expect(await page.evaluate(() => document.getElementById('hud')!.classList.contains('kg-dock'))).toBe(true);
-    await page.locator('.kg-door [data-act="layout"][data-arg="classic"]').click();
+    await pick('layout', 'classic');
     expect(await page.evaluate(() => document.getElementById('hud')!.classList.contains('kg-dock'))).toBe(false);
-    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('tb.settings.v1')!))).toEqual({ sound: false, look: 'real', sharp: 1, camera: 'dynamic', rapid: false, duelView: false, handoff: false, launch: 'level', marks: false, layout: 'classic', quality: 'auto' });
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('tb.settings.v1')!))).toEqual({ ...DEFAULT_SETTINGS, ...changed });
     expect(await page.evaluate(() => window.__game.maxDpr)).toBe(1);
     expect(new URLSearchParams(await page.evaluate(() => location.search)).has('look')).toBe(false);
 
@@ -145,7 +152,7 @@ describe('front door', () => {
     await page.waitForFunction(() => window.__game?.status === 'running', undefined, { timeout: MINUTES });
     await page.locator('.kg-door [data-act="advanced"]').click();
     expect(await page.locator('.kg-door [data-act="look"].on').innerText()).toBe('Photoreal');
-    expect(await page.locator('.kg-door [data-act="sound"].on').innerText()).toBe('Off');
+    expect(await page.locator('.kg-door [data-act="sound"]').innerText()).toBe('Off');
     expect(await page.locator('.kg-door [data-act="camera"].on').innerText()).toBe('Dynamic');
     expect(await page.evaluate(() => window.__game.feel)).toMatchObject({ follow: true, shake: true, rapid: false, turnView: false });
     expect(await page.locator('.kg-door [data-act="duelview"].on').innerText()).toBe('Leave it');
