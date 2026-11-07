@@ -13,6 +13,7 @@ export const layout = {
     door: {
       act: 'layout',
       label: 'Layout',
+      player: true,
       choices: [
         { arg: 'docked', value: 'docked', text: 'Docked', title: "On a phone the HUD docks to the screen's edges; the result card waits a moment after the round, then docks aside so the collapse stays in view" },
         { arg: 'classic', value: 'classic', text: 'Classic', title: 'One HUD panel at the top left, and the result card in the middle as soon as the round ends' },

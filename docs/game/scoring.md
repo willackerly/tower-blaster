@@ -110,3 +110,77 @@ against the level's `mason.stars`, which are 0.9 of the recorded tier authors' p
 (`keystone-lab mason-solutions.ts masonStarsFrom`). The stamp is ROBUST, STANDS or WOBBLY. The card
 reads "c of K" from `LevelScore.worlds` (with the counts each star needs at this budget) and the budget
 from `LevelScore.mason`. No leverage, gold or heritage star loss.
+
+## What leverage means, and leverage as a share (PT31, agent playtest round 2)
+
+Round 2 (`docs/game/agent-playtest-2.md`, J1 #6 and #7, J3 #19 and #20) found three things. Leverage was never
+explained. A shot that moved nothing showed "×0.00 (Brute)". On T-X2, the Leverage line paid 1,687 of the round's
+2,071 points at 12% down.
+
+**One explanation, one place.** `hud.ts LEVERAGE_MEANS` is the only text that explains leverage: "Leverage ×N means
+the structure's fall gave back N times the energy you fired. Reach the level's gold line for the gold badge." The
+Chamber page of How to play shows it, and so does the tooltip on the card's leverage figure. `leverageWords` writes
+the card's figure:
+
+- "nothing fell" when the round's leverage is 0, so there is never a tier name at ×0.00;
+- `leverage ×L · gold at ×G` under the gold line, so the card names the target instead of "Brute";
+- `leverage ×L (Tier)` from the line up;
+- the figure alone on a level without a line.
+
+**Leverage points as a share (opt-in).** `rules.ts leveragePoints(shots, line, span_mJ, mode)` is called by both
+`levelScore` and `outcomeTally` (agreed with the scoring owner). Under `'share'`, each shot pays
+
+    500 × min(2, log2(1 + L_i / line)) × f_i
+
+- `L_i` is the shot's own leverage (`ShotOutcome.leverage`).
+- `line` is the level's gold line (`shareLine`: `levelGoldLine`, else `DEFAULT_GOLD`).
+- `f_i` is the shot's share of what could fall: its dPE over PE(B0) − PE_floor, the same span `collapseFraction`
+  uses. It is clamped at 0, and capped so the shares never sum past 1.
+
+What this gives:
+
+- A shot that brings nothing down adds 0.
+- A whole fall at the gold line pays 500, and from 3× the line (Elegant) it pays the cap of 1,000.
+- The line is at most 1,000 for any sequence. A seeded sweep of 2,000 random sequences checks this, including falls
+  summing past the span, raised structures and leverage of 1e9 (`packages/keystone/test/leverage-points.test.ts`).
+- A pull fires no energy, so its leverage is 0 and it adds 0 here; its fall pays on the Collapse line.
+- On T-X2's shape (12% down at ×60), the line falls from 1,687 to at most 120.
+
+**The default stays `'log'`**, `300 log2(1 + roundLeverage)`, which every score so far was made under, until the
+score-metric casts (B2, `metric: 'score'`) are recast under the new rule. `LevelDef.levPoints: 'share'` or the URL
+rule `?keystone.levpoints=share` turns it on. Like the other level rules, it joins the level hash (`'log'` hashes as
+absent) and marks the level custom. Cast stars therefore never show against points made under the other rule.
+Making `'share'` the default is row PT31b: recast B2 under it, then flip.
+
+### Alternatives considered
+
+- **Scale by the share of bodies displaced** instead of the PE share. This was rejected with the scoring owner. A
+  displaced count treats a pebble falling off the top the same as a slab falling, and T-X2's inner collapse displaces
+  bodies you cannot see. The PE share is the quantity the Collapse line and the collapse objective already use.
+- **A per-shot cap without the share.** This still pays most of the round for a shot that moves 1% at high leverage,
+  which is the T-X2 complaint.
+- **Flip the default now.** This would invalidate B2's score-metric stars (cast on Metal, hash-keyed) and every saved
+  best total. Opt-in keeps both until the recast.
+
+## The note after a shot that did nothing (PT31)
+
+`packages/game/src/dud.ts` and `play.ts noteShot` handle this. It is on by default; `keystone.dudnote=0` turns it off.
+
+After a settled shot, one amber line (`.kg-note`) floats over where the shot was aimed, in two cases:
+
+- **A dud.** The shot displaced under 1% of the structure's bodies and brought no crown down. The note is "Nothing
+  moved: try the cannonball", naming the hardest-hitting item left in the rack when it hits at least 1.5× harder than
+  the one just fired. Otherwise it is "Nothing moved: try another spot".
+  - "Hits" (`itemPunch`) is a launched body's kinetic energy at full power plus a weapon's yield, or a drop's weight
+    over the structure's height.
+  - A pull, plunger or quake fires no body, so it gets no dud note.
+- **An inner collapse (T-X2).** The shot brought down at least 5% (collapse fraction), the skyline fell less than 2%,
+  and under 1% of the bodies left the lot. The note is "Gave way inside: 12% down". This case is checked first,
+  because such a shot moved something even when few bodies crossed the displaced line.
+
+There is no note in a duel (its turn has its own float), and none after the round's last shot (the card covers it).
+`GameHandle.shotNote` holds the text for tests.
+
+- The pure parts are tested in `packages/game/test/dud.test.ts`.
+- `packages/game/test/dud-e2e.test.ts` runs the game page on L2. A marble wide of the lintel floats "Nothing moved:
+  try the cannonball", a retry clears it, and `keystone.dudnote=0` floats nothing.

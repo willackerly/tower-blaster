@@ -20,6 +20,6 @@ export const look = {
     stored: (v) => (typeof v === 'string' && LOOKS[v] ? v : undefined),
     // Checked by parseGameParams (lookName), as every game key is.
     url: (q) => q.get('look') ?? undefined,
-    door: { act: 'look', label: 'Look', choices: LOOK_CHOICES.map((c) => ({ arg: c.look, value: c.look, text: c.label })) },
+    door: { act: 'look', label: 'Look', player: true, choices: LOOK_CHOICES.map((c) => ({ arg: c.look, value: c.look, text: c.label })) },
   }),
 } satisfies GameOption;

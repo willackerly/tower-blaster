@@ -8,7 +8,7 @@ import { quatAngle } from '@tb/geom';
 import { GRAVITY, MATERIALS, ROLES } from './materials.ts';
 
 const ROLE_HERITAGE = ROLES.indexOf('heritage');
-import type { CompiledLevel, LevelDef } from './level.ts';
+import type { CompiledLevel, LevelDef, LevPoints } from './level.ts';
 
 export const HEIGHT_BINS = 64;
 export const BANDS = 8;
@@ -410,6 +410,38 @@ export function roundLeverage(shots: readonly Pick<ShotOutcome, 'ke' | 'yield' |
   return leverage(released, energyFired(shots));
 }
 
+/** Leverage points under the 'log' rule (LEV_POINTS): w log2(1 + L) on the round's leverage L, floored. */
+export const logLeveragePoints = (L: number, w = 300) => Math.floor(w * Math.log2(1 + Math.max(0, L)));
+/** The 'share' rule's points for a shot that brings everything down at its level's gold line... */
+export const SHARE_POINTS = 500;
+/** ...and the most a shot's leverage can multiply them by (log2(1 + L / line), reached at 3x the line: Elegant). */
+export const SHARE_CAP = 2;
+
+/**
+ * A round's Leverage line (docs/game/scoring.md; PT31, agreed with the scoring owner). 'log': logLeveragePoints on
+ * roundLeverage, as every level scored before PT31. 'share': per shot, SHARE_POINTS x min(SHARE_CAP, log2(1 + L_i /
+ * line)) x f_i, where L_i is the shot's own leverage (ShotOutcome.leverage), `line` the level's gold line and f_i the
+ * shot's share of what could fall: its dPE over `span_mJ` (PE(B0) - PE_floor, collapseFraction's span), clamped at 0
+ * and so that the shares never sum past 1. So a shot that brings nothing down adds 0, the line is at most
+ * SHARE_POINTS x SHARE_CAP = 1,000 for any sequence, and a pull (no energy fired, leverage 0) adds 0: its fall pays
+ * on the Collapse line. Floored. `w`: the 'log' weight (par 300; outcome OUTCOME_WEIGHTS.leverage).
+ */
+export function leveragePoints(shots: readonly Pick<ShotOutcome, 'ke' | 'yield' | 'dPE_mJ' | 'leverage'>[], line: number, span_mJ: number, mode: LevPoints, w = 300): number {
+  if (mode === 'log') return logLeveragePoints(roundLeverage(shots), w);
+  if (!(span_mJ > 0) || !(line > 0)) return 0;
+  let left = 1, points = 0;
+  for (const o of shots) {
+    const f = Math.min(left, Math.max(0, o.dPE_mJ / span_mJ));
+    if (!(f > 0)) continue;
+    left -= f;
+    points += SHARE_POINTS * Math.min(SHARE_CAP, Math.log2(1 + Math.max(0, o.leverage) / line)) * f;
+  }
+  return Math.floor(points);
+}
+
+/** The line a level's 'share' leverage points are measured against: its gold line, else DEFAULT_GOLD (an outcome level without lGold has no badge, but the share still needs a scale). */
+export const shareLine = (def: LevelDef): number => levelGoldLine(def) ?? DEFAULT_GOLD;
+
 /** The energy fired over `shots`, J (each one's ke + yield): what roundLeverage divides by, and the energy star metric. */
 export function energyFired(shots: readonly Pick<ShotOutcome, 'ke' | 'yield'>[]): number {
   let fired = 0;
@@ -603,9 +635,10 @@ export const partsStamp = (spent: number, partsPar: number) => (spent <= partsPa
  * A level's score at its end. `spent`: the build's cost (build.ts placedCost), read on a Rube Lab level
  * on a level with a parts par (def.build.par): there the stars are partsStars on it, less one for any
  * heritage broken (never under one), the stamp is partsStamp, the score carries `parts`, and there is no
- * gold (a contraption's one plunger is not a stroke to beat).
+ * gold (a contraption's one plunger is not a stroke to beat). `span_mJ`: what could fall (PE(B0) - PE_floor), read by
+ * the 'share' leverage points rule (leveragePoints) only.
  */
-export function levelScore(def: LevelDef, shots: ShotOutcome[], cleared: boolean, structureCount: number, spent = 0): LevelScore {
+export function levelScore(def: LevelDef, shots: ShotOutcome[], cleared: boolean, structureCount: number, spent = 0, span_mJ = 0): LevelScore {
   const s = shots.length, par = parWithFreezes(def, shots);
   const L = roundLeverage(shots);
   const cmax = Math.min(12, Math.max(0, ...shots.map((o) => o.crownsDown)));
@@ -613,7 +646,7 @@ export function levelScore(def: LevelDef, shots: ShotOutcome[], cleared: boolean
   const lines: ScoreLine[] = [
     // Stroke points reward a clear in few strokes: none for a round that did not clear (PT16).
     { label: 'Strokes', value: cleared ? 1000 * Math.max(0, par + 3 - s) : 0 },
-    { label: 'Leverage', value: Math.floor(300 * Math.log2(1 + L)) },
+    { label: 'Leverage', value: leveragePoints(shots, shareLine(def), span_mJ, def.levPoints ?? 'log') },
     { label: 'Combo', value: (50 * cmax * (cmax + 1)) / 2 },
   ];
   if (cleared && s === 1 && par >= 2) lines.push({ label: 'Ace', value: 2000 });

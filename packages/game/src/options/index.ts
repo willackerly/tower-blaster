@@ -7,6 +7,7 @@ import { balls } from './balls.ts';
 import { budgetMs } from './budget.ts';
 import { camera } from './camera.ts';
 import { coats } from './coats.ts';
+import { dudNote } from './dudnote.ts';
 import { follow } from './follow.ts';
 import { frames } from './frames.ts';
 import { frozenLook } from './frozenlook.ts';
@@ -66,4 +67,5 @@ export const OPTIONS = [
   sleepTint,
   pullAnim,
   frozenLook,
+  dudNote,
 ] as const;

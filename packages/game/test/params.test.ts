@@ -141,6 +141,18 @@ describe('rule overrides', () => {
     expect(() => parse('?keystone.freeze=-1')).toThrow(/keystone.freeze must be a whole number from 0 to 9: -1/);
     expect(() => parse('?keystone.freeze=')).toThrow(/keystone.freeze must be a whole number from 0 to 9: $/);
   });
+  it('keystone.levpoints picks how leverage pays points (PT31): a custom level with its own hash; refuses a bad one', () => {
+    const p = parse('?level=L1&keystone.levpoints=share');
+    expect(p.rules).toEqual({ levPoints: 'share' });
+    expect(p.level).toEqual({ ...L1, levPoints: 'share', custom: true });
+    expect(compileLevel(p.level).hash).not.toBe(compileLevel(L1).hash);
+    expect(compileLevel(parse('?level=L1&keystone.levpoints=log').level).hash).toBe(compileLevel(L1).hash);
+    const q = new URLSearchParams();
+    writeLevelRules({ levPoints: 'share' }, q);
+    expect(q.toString()).toBe('keystone.levpoints=share');
+    expect(levelRules(q)).toEqual({ levPoints: 'share' });
+    expect(() => parse('?keystone.levpoints=sqrt')).toThrow(/keystone.levpoints must be log or share: sqrt/);
+  });
   it('the physics keys set the level\'s physics block; off turns Bounce off', () => {
     const p = parse('?level=L2&keystone.iterations=20&keystone.gapSlop=0&keystone.bounce=0.4');
     expect(p.level.physics).toEqual({ iterations: 20, gapSlop: 0, bounce: 0.4 });
