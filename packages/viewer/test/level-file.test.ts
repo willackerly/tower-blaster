@@ -72,10 +72,14 @@ describe('level files', () => {
     const def: LevelDef = { ...structuredClone(L2), scoring: 'outcome', autobank: true, settle: 'v1', custom: true, physics: { iterations: 20, gapSlop: 0, bounce: null, pairsPerBody: 24, presettle: 120 } };
     expect(parseLevelDef(JSON.parse(levelJson(def)))).toEqual(def);
     expect(parseLevelDef(JSON.parse(levelJson({ ...def, physics: { bounce: 0.4 } }))).physics).toEqual({ bounce: 0.4 });
+    // GPU sleep (E2.5) reads back; not a boolean, or with bounce, is refused.
+    expect(parseLevelDef(JSON.parse(levelJson({ ...def, physics: { sleep: true, iterations: 30 } }))).physics).toEqual({ sleep: true, iterations: 30 });
     const bad = (physics: unknown) => () => parseLevelDef({ ...structuredClone(L2), physics });
     expect(bad({ iterations: 0 })).toThrow(/level.physics.iterations must be a whole number from 1 to 200/);
     expect(bad({ bounce: 'yes' })).toThrow(/level.physics.bounce must be a number/);
     expect(bad({ substeps: 2 })).toThrow(/level.physics: unknown key substeps/);
+    expect(bad({ sleep: 1 })).toThrow(/level.physics.sleep must be/);
+    expect(bad({ sleep: true, bounce: 0.4 })).toThrow(/level.physics.sleep does not go with bounce/);
     expect(() => parseLevelDef({ ...structuredClone(L2), settle: 'v9' })).toThrow(/level.settle must be v1 or v2 or v3 or v4: v9/);
   });
 

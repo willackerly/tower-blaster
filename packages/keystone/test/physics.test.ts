@@ -22,10 +22,11 @@ class CountingEngine implements PhysicsEngine {
 
 describe('physics block', () => {
   it('defaults to the settings par lines are pinned at', () => {
-    expect(PHYSICS_DEFAULTS).toEqual({ iterations: AVBD_ITERATIONS, gapSlop: AVBD_GAP_SLOP, bounce: null, presettle: PRESETTLE_STEPS });
+    expect(PHYSICS_DEFAULTS).toEqual({ iterations: AVBD_ITERATIONS, gapSlop: AVBD_GAP_SLOP, bounce: null, presettle: PRESETTLE_STEPS, sleep: false });
     expect(physicsOf(L1)).toEqual(PHYSICS_DEFAULTS);
     expect(physicsOf({ ...L1, physics: { iterations: 20, bounce: 0.4, pairsPerBody: 24 } })).toEqual({ ...PHYSICS_DEFAULTS, iterations: 20, bounce: 0.4, pairsPerBody: 24 });
     expect(physicsOf({ ...L1, physics: { bounce: null } }).bounce).toBeNull();
+    expect(physicsOf({ ...L1, physics: { sleep: true } }).sleep).toBe(true);
   });
 
   it('refuses values out of range, naming the field', () => {
@@ -37,14 +38,20 @@ describe('physics block', () => {
     expect(() => checkPhysics({ bounce: 1.5 })).toThrow(/physics.bounce must be from 0 to 1, or null for off/);
     expect(() => compileLevel({ ...L1, physics: { iterations: 0 } })).toThrow(/physics.iterations/);
     expect(() => checkPhysics({ iterations: 1, gapSlop: 0, bounce: 0, pairsPerBody: 1, presettle: 0 })).not.toThrow();
+    // Sleep is a boolean, and not with Bounce (the restitution pass does not know sleepers yet).
+    expect(() => checkPhysics({ sleep: 1 as unknown as boolean })).toThrow(/physics.sleep must be true or false: 1/);
+    expect(() => checkPhysics({ sleep: true, bounce: 0.4 })).toThrow(/physics.sleep does not go with bounce yet/);
+    expect(() => compileLevel({ ...L1, physics: { sleep: true, bounce: 0.4 } })).toThrow(/physics.sleep does not go with bounce/);
+    expect(() => checkPhysics({ sleep: true, bounce: null })).not.toThrow();
+    expect(() => checkPhysics({ sleep: false, bounce: 0.4 })).not.toThrow();
   });
 
   it('every field is part of the level hash; fields at their defaults hash as absent', () => {
     const hash = (physics?: LevelDef['physics']) => compileLevel({ ...L1, ...(physics ? { physics } : {}) }).hash;
-    const all = [hash(), hash({ iterations: 20 }), hash({ gapSlop: 0 }), hash({ bounce: 0.4 }), hash({ pairsPerBody: 16 }), hash({ presettle: 120 })];
+    const all = [hash(), hash({ iterations: 20 }), hash({ gapSlop: 0 }), hash({ bounce: 0.4 }), hash({ pairsPerBody: 16 }), hash({ presettle: 120 }), hash({ sleep: true })];
     expect(new Set(all).size).toBe(all.length);
     expect(hash({})).toBe(hash());
-    expect(hash({ iterations: 40, gapSlop: 3e-5, bounce: null, presettle: 300 })).toBe(hash());
+    expect(hash({ iterations: 40, gapSlop: 3e-5, bounce: null, presettle: 300, sleep: false })).toBe(hash());
     expect(hash()).toBe(compileLevel(L1).hash);
   });
 

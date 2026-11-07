@@ -74,11 +74,12 @@ function stars(v: unknown, where: string): StarsDef {
 /** A level's physics block (@tb/keystone PhysicsBlock), ranges as checkPhysics. */
 function physics(v: unknown, where: string): PhysicsBlock {
   const o = object(v, where);
-  only(o, ['iterations', 'gapSlop', 'bounce', 'pairsPerBody', 'presettle'], where);
+  only(o, ['iterations', 'gapSlop', 'bounce', 'pairsPerBody', 'presettle', 'sleep'], where);
   const p: PhysicsBlock = {};
   for (const k of ['iterations', 'pairsPerBody', 'presettle'] as const) if (o[k] !== undefined) p[k] = int(o[k], `${where}.${k}`);
   if (o.gapSlop !== undefined) p.gapSlop = num(o.gapSlop, `${where}.gapSlop`);
   if (o.bounce !== undefined) p.bounce = o.bounce === null ? null : num(o.bounce, `${where}.bounce`);
+  if (o.sleep !== undefined) p.sleep = bool(o.sleep, `${where}.sleep`);
   checkPhysics(p, where);
   return p;
 }
