@@ -2,13 +2,13 @@
 // and insets, and the search opens every level with crowns or heritage on a view that shows them (the CPU ID
 // raster's measure; sightlines-gpu.test.ts checks the same on the renderer's own ID pass under the real HUD).
 import { describe, expect, it } from 'vitest';
-import { B2, compileLevel, L1, L5, LEVELS, levelById, SERIES } from '@tb/keystone';
+import { B2, compileLevel, FUSE_LEVELS, L1, L5, LEVELS, levelById, SERIES } from '@tb/keystone';
 import { panelTimeline } from '../src/fuse-timeline.ts';
 import { DEFAULT_FRAMING, viewProj } from '@tb/render/camera';
 import { transform } from '@tb/render/math';
 import {
-  baseYaw, clearOfHud, CONFIRM_PX, CROWNS_SEEN, defaultInsets, fitBox, fitShares, FUSE_PANEL_SHARE, HERITAGE_SEEN, hudRects, type Insets, joinInsets, NO_INSETS, openingDirection, openingInsets, PORTRAIT_HUD_SHARE,
-  scoreView, searchViews, showsObjectives, structureBox, TOP_MARGIN, viewOf,
+  baseYaw, clearOfHud, CONFIRM_PX, CROWNS_SEEN, defaultInsets, fitBox, fitShares, framedBox, FUSE_PANEL_PX, FUSE_PANEL_SHARE, HERITAGE_SEEN, hudRects, type Insets, joinInsets, NO_INSETS, openingDirection, openingInsets, PORTRAIT_HUD_SHARE,
+  scoreView, searchViews, showsObjectives, structureBox, TOP_MARGIN, viewOf, WIDE_HUD,
 } from '../src/view.ts';
 
 const PHONE = 390 / 844, WIDE = 1.6;
@@ -98,9 +98,13 @@ describe('the opening view shows the objectives (PT1)', () => {
 });
 
 describe('openingInsets', () => {
-  it('adds the fuse panel\'s band upright on a level with charges (F1), nothing wide or without charges (L1)', () => {
+  it('adds the fuse panel\'s band upright and its column wide (as fitBox counts the square) on a level with charges (F1), nothing without (L1)', () => {
     expect(openingInsets(PHONE, true)).toEqual({ bottom: FUSE_PANEL_SHARE });
-    expect(openingInsets(WIDE, true)).toBeUndefined();
+    // 320 of 1280 px is a quarter of the screen; of the middle square (x 240 to 1040 px) it covers 960 to 1040, 0.1.
+    expect(openingInsets(WIDE, true, 1280)!.right).toBeCloseTo(fitShares({ ...NO_INSETS, right: FUSE_PANEL_PX / 1280 }, WIDE).right, 12);
+    expect(openingInsets(WIDE, true, 1280)!.right).toBeCloseTo(80 / 800, 9);
+    expect(openingInsets(WIDE, true, 3000)!.right).toBe(0); // a wide window: the panel is outside the square
+    expect(openingInsets(WIDE, false)).toBeUndefined();
     expect(openingInsets(PHONE, false)).toBeUndefined();
     expect(panelTimeline(compileLevel(levelById('F1')))).not.toBeNull();
     expect(panelTimeline(compileLevel(L1))).toBeNull();
@@ -205,5 +209,44 @@ describe('docked on a phone, the opening view keeps clear of the HUD as measured
     expect(clearOfHud(docked, PHONE, min, max, UP_HUD)).toBe(true);
     const height = (o: typeof guess) => { const e = extent(o, PHONE, min, max); return e[3]! - e[2]!; };
     expect(height(docked)).toBeGreaterThan(height(guess));
+  });
+});
+
+/** The screen box (shares of the width and height from the top left, as ScreenRect) of a box's corners under orbit o. */
+function screenBox(o: ReturnType<typeof viewOf>, aspect: number, min: number[], max: number[]) {
+  const [x0, x1, y0, y1] = extent(o, aspect, min, max);
+  return { left: (x0! + 1) / 2, right: (x1! + 1) / 2, top: (1 - y1!) / 2, bottom: (1 - y0!) / 2 };
+}
+const overlaps = (a: { left: number; right: number; top: number; bottom: number }, b: typeof a) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+
+describe('a fold level\'s opening view frames its yard clear of the panels (PT24)', () => {
+  it('framedBox: the structure and the lot (and the compass), only on a fold level', () => {
+    expect(framedBox(compileLevel(L1))).toEqual(structureBox(compileLevel(L1)));
+    for (const def of FUSE_LEVELS) {
+      const c = compileLevel(def), f = framedBox(c), s = structureBox(c);
+      expect(f.min[0]).toBeLessThanOrEqual(Math.min(s.min[0], c.lot.min[0]));
+      expect(f.min[2]).toBeLessThanOrEqual(Math.min(s.min[2], c.lot.min[1]));
+      expect(f.max[0]).toBeGreaterThanOrEqual(Math.max(s.max[0], c.lot.max[0]));
+      expect(f.max[2]).toBeGreaterThanOrEqual(Math.max(s.max[2], c.lot.max[1]));
+      expect([f.min[1], f.max[1]]).toEqual([0, c.height]);
+    }
+    // F1's yard reaches 12.75 m west, past its structure's box (2 m): the case that opened with the yard off screen.
+    const f1 = compileLevel(FUSE_LEVELS[0]!);
+    expect(f1.lot.min[0]).toBeLessThan(structureBox(f1).min[0] - 10);
+  });
+
+  // 1280 x 800 with the Timeline down the right (300 px, 12 from the edge) and the HUD at the top left; an upright
+  // phone with a docked strip, tray and the panel on the tray (as fuse-layout-e2e.test.ts measures them, about).
+  const DESK_PANEL = { left: 1 - FUSE_PANEL_PX / 1280, top: 0, right: 1, bottom: 1 };
+  const UP_BAND: Insets = { top: 110 / 844, bottom: (844 - 420) / 844, left: 0, right: 0 };
+  it.each(FUSE_LEVELS.map((d) => [d.id, d] as const))('%s: the lot inside the screen and off the Timeline and HUD at 1280 x 800, and inside the free band upright', (_, def) => {
+    const c = compileLevel(def), lotMin = [c.lot.min[0], 0, c.lot.min[1]], lotMax = [c.lot.max[0], 0, c.lot.max[1]];
+    const wide = viewOf(c, WIDE, undefined, undefined, undefined, { insets: openingInsets(WIDE, true, 1280) });
+    const box = screenBox(wide, WIDE, lotMin, lotMax);
+    expect(box.left >= 0 && box.right <= 1 && box.top >= 0 && box.bottom <= 1, `${def.id} wide: ${JSON.stringify(box)}`).toBe(true);
+    expect(overlaps(box, DESK_PANEL), `${def.id} wide: the yard under the Timeline ${JSON.stringify(box)}`).toBe(false);
+    expect(overlaps(box, WIDE_HUD), `${def.id} wide: the yard under the HUD ${JSON.stringify(box)}`).toBe(false);
+    const up = viewOf(c, PHONE, undefined, undefined, undefined, { insets: openingInsets(PHONE, true), hud: UP_BAND });
+    expect(clearOfHud(up, PHONE, lotMin as never, lotMax as never, UP_BAND), `${def.id} upright`).toBe(true);
   });
 });

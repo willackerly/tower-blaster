@@ -36,7 +36,7 @@ import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { limitsHit } from '@tb/engine-api';
-import { aimAt, compileLevel, launcherPos, type LaunchItem, levelById, type LevelDef, scenarioLevel, settleAllowance, type Shot } from '@tb/keystone';
+import { aimAt, CHORUS_LINES, compileLevel, launcherPos, type LaunchItem, levelById, type LevelDef, readShots, scenarioLevel, settleAllowance, type Shot } from '@tb/keystone';
 import { browser, useViewer } from './e2e-harness.ts';
 import { openRules, ready } from './keystone-page.ts';
 import { powerState } from './power.ts';
@@ -77,7 +77,8 @@ const q = (xs: number[], p: number) => { const s = [...xs].sort((a, b) => a - b)
 
 /** budgetMs: keystone.budget (absent: the default); a w- case other than w-grenade has a rack of just its weapon. */
 /** opener: fire the level's own pre-aimed opener (solutions.ace's first shot) with its own rack; fx: keystone.fx. */
-interface Case { name: string; scene: Scene; ammo: 'cannonball' | 'w-grenade' | 'w-cluster' | 'w-grenadem' | 'w-grenadexl' | 'w-bomb'; iterations: 40 | 20; rendered: boolean; budgetMs?: number; frames?: 'half' | 'auto'; screenshots?: boolean; opener?: boolean; fx?: 'damage' | 'classic' }
+/** line: fire this recorded shot (writeShots text) instead of aiming one. */
+interface Case { name: string; scene: Scene; ammo: 'cannonball' | 'w-grenade' | 'w-cluster' | 'w-grenadem' | 'w-grenadexl' | 'w-bomb'; iterations: 40 | 20; rendered: boolean; budgetMs?: number; frames?: 'half' | 'auto'; screenshots?: boolean; opener?: boolean; fx?: 'damage' | 'classic'; line?: string }
 const FX_RUNS = 5;
 /** PT2's cost: B1 and B3 openers rendered, damage vs classic, runs interleaved (B1 small: the same level, 1k blocks, plain). */
 const FX_CASES: Case[] = ['B1', 'B3'].flatMap((id) => Array.from({ length: FX_RUNS }, (_, r) => (['damage', 'classic'] as const).map((fx): Case => (
@@ -109,6 +110,11 @@ const ALL: Case[] = [
   { name: 'b3-grenadexl-40-rendered', scene: B3_CITY, ammo: 'w-grenadexl', iterations: 40, rendered: true },
   { name: 'b3-grenadem-40-rendered', scene: B3_CITY, ammo: 'w-grenadem', iterations: 40, rendered: true },
   ...FX_CASES,
+  // M9 Chorus (docs/game/chorus.md): CH1's 64 worlds of 45 blocks (2.9k bodies plus 64 balls) in one solve, its
+  // obvious shot, which splits the worlds; rendered for frame times (the roadmap's "real time on the M5"), and
+  // offscreen for step cost. The viewer has no Chorus panel; the game page's adds a 2D redraw 6 times a second.
+  { name: 'ch1-chorus-rendered', scene: { scenario: '', params: {}, search: 'level=CH1', level: 'CH1' }, ammo: 'cannonball', iterations: 40, rendered: true, line: CHORUS_LINES.CH1!.obvious },
+  { name: 'ch1-chorus', scene: { scenario: '', params: {}, search: 'level=CH1', level: 'CH1' }, ammo: 'cannonball', iterations: 40, rendered: false, line: CHORUS_LINES.CH1!.obvious },
 ];
 // Rendered frames take up to a second on SwiftShader: the rendered case is a real GPU's only.
 const ONLY = process.env.TB_PROBE_CASES ? new RegExp(process.env.TB_PROBE_CASES) : null;
@@ -141,7 +147,7 @@ describe.runIf(RUN)('G4 probe: a 10k level\'s shot on a real GPU', () => {
       const def: LevelDef = own ? { ...base, rack: [k.ammo] } : base;
       const opener = k.opener ? base.solutions?.ace?.[0] ?? base.solutions?.par?.[0] : undefined;
       if (k.opener && !opener) throw new Error(`${base.id} has no recorded opener`);
-      const shot = opener ?? shotAt(def, k.ammo, 3, 6);
+      const shot = k.line ? readShots(k.line)[0]! : opener ?? shotAt(def, k.ammo, 3, 6);
       const search = `/?${k.scene.search}&rules=keystone${k.iterations !== 40 ? `&keystone.iterations=${k.iterations}` : ''}${own ? `&keystone.rack=${k.ammo}` : ''}${k.budgetMs !== undefined ? `&keystone.budget=${k.budgetMs}` : ''}${k.frames ? `&keystone.frames=${k.frames}` : ''}${k.fx ? `&keystone.fx=${k.fx}` : ''}${SMALL ? '&keystone.presettle=30' : ''}${k.rendered ? '' : '&offscreen=1'}`;
       const o = await openRules(search, k.rendered && !SMALL ? { width: 1440, height: 900 } : undefined, 10 * MINUTES);
       if (!o) return ctx.skip();
