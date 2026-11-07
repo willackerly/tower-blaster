@@ -22,7 +22,7 @@
 // camera-relative position and radius; colour times intensity). Lights
 // do not cast shadows. flashSlot is the CPU twin of the slot rule.
 import { Body, ImpactEvent, RenderRecord, TIER, wgslStruct } from '@tb/schema';
-import { CTL, MAX_EVENTS, type Sparks } from './sparks.ts';
+import { CTL, MATERIAL_ICE, MAX_EVENTS, type Sparks } from './sparks.ts';
 import { MATERIAL } from './looks.ts';
 import type { BodySource } from './source.ts';
 import type { V3 } from './math.ts';
@@ -127,6 +127,8 @@ fn flashPick(@builtin(global_invocation_id) id: vec3u) {
   let e = id.x;
   if (e >= min(eventCount[0], ${MAX_EVENTS}u)) { return; }
   let ev = events[e];
+  // Ice is cold (PT38): its impacts throw shards and frost, no hot flash.
+  if ((ev.packed >> 28u) == ${MATERIAL_ICE}u) { return; }
   let s = select(ev.strength, ev.strength * p.ballFlash, (ev.packed >> 28u) == ${MATERIAL.ball}u);
   let q = u32(clamp(s / p.flashFull, 0.0, 1.0) * 4095.0);
   if (q == 0u) { return; }

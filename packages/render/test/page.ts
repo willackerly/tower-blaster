@@ -7,7 +7,7 @@ import { emptySnapshot, TAG_BALL, type BodyDesc, type Snapshot } from '@tb/engin
 import { readBuffer, sharedDevice } from '@tb/gpu';
 import { Body, RenderRecord, Shape, TIER, readStruct } from '@tb/schema';
 import {
-  packSurface, agx, AGX_WGSL, TONE_MAPS, TONE_WGSL, toneMapped, GRAIN_WGSL, grainNoise, grainPixels, grained, agxBase, pbrNeutral, aces, type ToneMap, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, WOOD_WGSL, WOOD_RING_M, woodRings, PCG_WGSL, pcg3d, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post, Culler, cullReference, FLOOR_REACH, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform, translation, normalize, rockIn, ROCK_CELL, ROCK_CLUMP, ROCK_SINK, sunOf, hallTraceCpu, HALL_MAT, OLYMPIA, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, CLASSIC_SPARKS, sparkBucketReference, type SparkParams, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, debrisSpawnReference, dustStepReference, chipStepReference, type SparkState, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
+  packSurface, ICE_BIT, MATERIAL_ICE, agx, AGX_WGSL, TONE_MAPS, TONE_WGSL, toneMapped, GRAIN_WGSL, grainNoise, grainPixels, grained, agxBase, pbrNeutral, aces, type ToneMap, type RealOptions, type LookParams, fromHalf, Atmosphere, CLEAR_DAY, transmittance, transmittanceHMu, multiScattering, skyViewDir, skyRadiance, skyViewUv, sampleTransmittance, ambientOf, distanceToGround, meteredIlluminance, Materials, heightNormal, STONES, GROUNDS, MATERIAL_LAYERS, WOOD_WGSL, WOOD_RING_M, woodRings, PCG_WGSL, pcg3d, MACRO_LAYER, layerTile, materialSample, macroSample, adaptedExposure, LUMA, R_TOP, R_GROUND, FX_WORDS, packFx, toHalf, bevelNormal, BEVEL_WGSL, oklabToLinear, OKLAB_WGSL, Post, Culler, cullReference, FLOOR_REACH, GpuBodySource, invert, listMatches, lookAt, makeGpuBodies, multiply, packBodies, perspective, Renderer, SEG, SEGMENTS, SnapshotSource, transform, translation, normalize, rockIn, ROCK_CELL, ROCK_CLUMP, ROCK_SINK, sunOf, hallTraceCpu, HALL_MAT, OLYMPIA, BOX_VERTS, SPHERE_VERTS, SUN, Sparks, CTL, CLASSIC_SPARKS, sparkBucketReference, type SparkParams, MAX_EVENTS, flashSlot, FLASHES, MAX_BALLS, TRAIL, Lights, LIGHTS, LIGHT_META, LIGHT_PACKED, MATERIAL, AoVolume, aoGrid, aoFrame, splatReference, composeReference, AO_FOOT_WGSL, AO_SAMPLE_WGSL, AO_SEAM_WGSL, AO_ONE, type SplatBody, unpackImpacts, unpackSparks, spawnReference, stepReference, debrisSpawnReference, dustStepReference, chipStepReference, type SparkState, type Impact, type BodySource, type CullFrame, type FrameParams, type RendererOptions, type V3,
   COAT_PAINT,
 } from '../src/index.ts';
 import { LOOKS, lookByName, realLook } from './looks.ts';
@@ -1094,10 +1094,10 @@ function sparkShapes(): ArrayBuffer {
   return out;
 }
 
-async function sparkFrame(device: GPUDevice, sp: Sparks, src: BodySource, dt = 0, groundY = -100, mode: 'sparks' | 'debris' = 'sparks', dvScale = 1) {
+async function sparkFrame(device: GPUDevice, sp: Sparks, src: BodySource, dt = 0, groundY = -100, mode: 'sparks' | 'debris' = 'sparks', dvScale = 1, surfaces?: GPUBuffer) {
   const enc = device.createCommandEncoder();
   const pass = enc.beginComputePass();
-  sp.encode(pass, src, { dt, groundY, mode, dvScale });
+  sp.encode(pass, src, { dt, groundY, mode, dvScale, ...(surfaces ? { surfaces } : {}) });
   pass.end();
   device.queue.submit([enc.finish()]);
   const ctl = Array.from(new Uint32Array(await readBuffer(device, sp.ctl)));
@@ -1367,6 +1367,100 @@ export async function sparkFlood(n: number, classic = false) {
   const err = await device.popErrorScope();
   sp.destroy();
   return { ctl: hit.ctl, events: hit.events.length, distinct: slots.size, live, error: err?.message ?? null };
+}
+
+/**
+ * Ice debris (PT38): four boxes each take the same knock, slots 1 and 3 ice (surface words). In sparks mode
+ * and in debris mode: the events' material bits (MATERIAL_ICE for the ice slots, the look's otherwise), and
+ * the particles born that frame with and without ICE_BIT, per kind (spark, dust, chip), against how many the
+ * ice and the stone events should throw.
+ */
+export async function iceDebrisSpawn() {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const cap = 4;
+  const base: RawBody[] = Array.from({ length: cap }, (_, i) => ({ pos: [i * 3, 2, 0] as V3, vel: [0, 0, 0] as V3, shape: 0 }));
+  const next: RawBody[] = base.map((b) => ({ ...b, vel: [5, 6, 3] as V3 })); // off every face: full weight in debris mode
+  const words = new Uint32Array(cap);
+  for (const i of [1, 3]) words[i] = packSurface({ kind: 'ice', seed: 7 + i });
+  const surfaces = device.createBuffer({ size: words.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(surfaces, 0, words);
+  const run = async (mode: 'sparks' | 'debris') => {
+    const src = rawSource(device, bodyWords(base, cap), bodyWords(base, cap), sparkShapes(), new Uint32Array(cap), cap, cap) as BodySource & { count: number };
+    const sp = new Sparks(device);
+    await sparkFrame(device, sp, src, 0, -100, mode, 1, surfaces); // first sight
+    device.queue.writeBuffer(src.bodies, 0, bodyWords(next, cap));
+    const r = await sparkFrame(device, sp, src, 0, -100, mode, 1, surfaces);
+    const pool = unpackSparks(await readBuffer(device, sp.sparks));
+    const [dustRing] = sp.rings;
+    const count = (from: number, to: number) => {
+      const live = pool.slice(from, to).filter((s) => s.age >= 0);
+      return { ice: live.filter((s) => (s.packed & ICE_BIT) !== 0).length, other: live.filter((s) => (s.packed & ICE_BIT) === 0).length };
+    };
+    const events = r.events.sort((a, b) => (a.packed & 0xffffff) - (b.packed & 0xffffff)).map((e) => ({ slot: e.packed & 0xffffff, material: e.packed >>> 28, strength: e.strength }));
+    // Sparks mode uses the whole pool; debris mode the dust ring, then the chip ring.
+    const out = { events, all: count(0, pool.length), dust: count(0, dustRing), chips: count(dustRing, pool.length) };
+    sp.destroy();
+    return out;
+  };
+  const sparks = await run('sparks'), debris = await run('debris');
+  surfaces.destroy();
+  const err = await device.popErrorScope();
+  return { sparks, debris, iceMaterial: MATERIAL_ICE, error: err?.message ?? null };
+}
+
+/**
+ * Ice debris's colour (PT38): the same burst, once as stone and once as ice (Renderer.burst ice), drawn after
+ * `frames` frames of `dt` s in look `look` (candy: sparks and the impact flash; real: dust and chips), against the frame
+ * with sparks off. Over the pixels the burst changes by more than 6 (of 255) near its projection, where the
+ * frame without it is not warm: how many, how many are warm (red over blue by more than 10: amber sparks, the
+ * flash's glow, sand), and how many blue (blue over red).
+ */
+export async function iceDebrisHue(look: 'candy' | 'real', frames: number, dt: number, keep = false) {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs = [box([2, 1, -5], [2, 2, 0.3], [0, 0, 0, 1])];
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  src.update(snapshotOf(descs), descs);
+  const f: FrameParams = { ...camera([0, 1.5, 6], [0, 1, 0]), groundY: 0, time: 1, dt };
+  const at: V3 = [-1.5, 1.2, 0];
+  const draw = async (burst: 'none' | 'stone' | 'ice') => {
+    const rend = new Renderer(device, { size: [W, H] }, { format: 'rgba8unorm' });
+    rend.look = look === 'real' ? { ...realLook({ stoneDetail: 0, groundDetail: 0, hills: 0 }), bloomMix: 0, vignette: 0 } : { ...rend.look, bloomMix: 0 };
+    rend.toggles.sparks = burst !== 'none';
+    rend.setSource(src);
+    rend.setShadowBounds([0, 1, -3], 10);
+    for (let i = 0; i < frames; i++) {
+      if (i === 0) rend.burst(at, [0, 1, 0], 18, { ice: burst === 'ice' });
+      await rend.render({ ...f, time: 1 + i * dt });
+    }
+    const px = (await rend.render({ ...f, time: 1 + frames * dt }, true, true))!.pixels!;
+    rend.destroy();
+    return px;
+  };
+  const off = await draw('none'), stone = await draw('stone'), ice = await draw('ice');
+  const c = transform(f.viewProj, at), ox = ((c[0] / c[3]) * 0.5 + 0.5) * W, oy = (0.5 - (c[1] / c[3]) * 0.5) * H;
+  const tally = (a: typeof off) => {
+    let changed = 0, warm = 0, blue = 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      if (Math.hypot(x + 0.5 - ox, y + 0.5 - oy) > 0.35 * H) continue;
+      const o = y * a.bytesPerRow + 4 * x;
+      const d = Math.max(...[0, 1, 2].map((k) => Math.abs(a.data[o + k]! - off.data[o + k]!)));
+      // Only over what is not warm already (the sky and the ground, not the red box): the colour seen there is
+      // the burst's own. (A difference is no measure: white added over blue adds more red than blue.)
+      if (d <= 6 || off.data[o]! - off.data[o + 2]! > 10) continue;
+      changed++;
+      const r = a.data[o]!, b = a.data[o + 2]!;
+      if (r - b > 10) warm++;
+      if (b - r > 0) blue++;
+    }
+    return { changed, warm, blue };
+  };
+  const err = await device.popErrorScope();
+  // Tight RGBA rows for screenshots (ICE_SHOTS).
+  const tight = (a: typeof off) => { const out: number[] = []; for (let y = 0; y < H; y++) for (let k = 0; k < 4 * W; k++) out.push(a.data[y * a.bytesPerRow + k]!); return out; };
+  return { stone: tally(stone), ice: tally(ice), W, H, ...(keep ? { shots: { stone: tight(stone), ice: tight(ice) } } : {}), error: err?.message ?? null };
 }
 
 /**
