@@ -331,9 +331,14 @@ export class SleepPass {
   }
 
   /** A new body in slot i: awake, not quiet, never woken, its window starting at its pose. */
-  add(i: number, pos: Vec3, rot: Quat): void {
+  /**
+   * Body i's sleep state as it enters the world: awake with an empty quiet window, or (`asleep`: engine-api asleep.ts)
+   * as a body that fell asleep there, its counter at T (all the neighbour veto asks of a sleeper) and marked as having
+   * slept, so the wake pass that wakes it opens a new window and counts the wake, exactly as for any other sleeper.
+   */
+  add(i: number, pos: Vec3, rot: Quat, asleep = false): void {
     const v = new DataView(new ArrayBuffer(SleepBody.size));
-    writeStruct(v, SleepBody, 0, { anchorPos: pos, quiet: 0, anchorRot: rot, wakes: 0, slept: 0 });
+    writeStruct(v, SleepBody, 0, { anchorPos: pos, quiet: asleep ? this.rule.steps : 0, anchorRot: rot, wakes: 0, slept: asleep ? 1 : 0 });
     this.device.queue.writeBuffer(this.state, i * SleepBody.size, v.buffer);
   }
 

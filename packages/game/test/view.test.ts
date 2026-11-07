@@ -7,7 +7,7 @@ import { panelTimeline } from '../src/fuse-timeline.ts';
 import { DEFAULT_FRAMING, viewProj } from '@tb/render/camera';
 import { transform } from '@tb/render/math';
 import {
-  baseYaw, CROWNS_SEEN, defaultInsets, fitBox, FUSE_PANEL_SHARE, HERITAGE_SEEN, type Insets, joinInsets, NO_INSETS, openingDirection, openingInsets, PORTRAIT_HUD_SHARE,
+  baseYaw, clearOfHud, CONFIRM_PX, CROWNS_SEEN, defaultInsets, fitBox, fitShares, FUSE_PANEL_SHARE, HERITAGE_SEEN, hudRects, type Insets, joinInsets, NO_INSETS, openingDirection, openingInsets, PORTRAIT_HUD_SHARE,
   scoreView, searchViews, showsObjectives, structureBox, TOP_MARGIN, viewOf,
 } from '../src/view.ts';
 
@@ -133,5 +133,77 @@ describe('viewOf', () => {
     expect(y0!).toBeGreaterThanOrEqual(-1 + 2 * 0.3 - 1e-9);
     const w = viewOf(c, WIDE), [, , , top] = extent(w, WIDE, min, max);
     expect(top!).toBeLessThanOrEqual(1 - 2 * TOP_MARGIN + 1e-9);
+  });
+});
+
+describe('docked on a phone, the opening view keeps clear of the HUD as measured (PT3b, docs/game/phone-hud.md)', () => {
+  // The docked HUD's bands as play.ts dockedHud measures them (layout.ts hudInsets of the phone-hud-e2e boxes):
+  // upright the strip to 100 of 844 px and the tray with its hint from 639; sideways the rail to 228 of 844.
+  const UP_HUD: Insets = { top: 100 / 844, bottom: (844 - 639) / 844, left: 0, right: 0 };
+  const SIDE = 844 / 390, SIDE_HUD: Insets = { ...NO_INSETS, left: 228 / 844 };
+  const levels = SERIES.flat().filter((d) => compileLevel(d).meta.n > 0);
+  const LEVELS_WITH_GOALS = SERIES.flat().filter((d) => { const c = compileLevel(d); return c.meta.crowns.length + c.meta.heritage.length > 0 && c.meta.n < 1000; });
+
+  it('fitShares: upright as measured; wide, a rail\'s share of the screen becomes the part of fitBox\'s middle square it covers', () => {
+    expect(fitShares(UP_HUD, PHONE)).toEqual(UP_HUD);
+    const side = (l: number, a: number) => fitShares({ ...NO_INSETS, left: l, right: l }, a);
+    expect(side(0.3, 1.6).left).toBeCloseTo((1 - 1.6 * 0.4) / 2, 12); // the rail reaches into the square: 0.18 of it
+    expect(side(0.3, 1.6).right).toBeCloseTo(0.18, 12);
+    expect(side(0.25, SIDE).left).toBe(0); // the rail ends before the square starts
+    expect(side(0.5, 1)).toEqual({ top: 0, bottom: 0, left: 0.5, right: 0.5 }); // a square screen: the same
+    expect(fitShares({ top: 0.2, bottom: 0.3, left: 0, right: 0 }, SIDE)).toEqual({ top: 0.2, bottom: 0.3, left: 0, right: 0 });
+  });
+
+  it('defaultInsets with the HUD: its band in place of the upright guess, never under the top margin; the search masks nothing', () => {
+    expect(defaultInsets(PHONE)).toEqual({ ...NO_INSETS, top: PORTRAIT_HUD_SHARE });
+    expect(defaultInsets(PHONE, UP_HUD)).toEqual(UP_HUD);
+    expect(defaultInsets(PHONE, { ...UP_HUD, top: 0.05 }).top).toBe(TOP_MARGIN);
+    expect(defaultInsets(SIDE, SIDE_HUD)).toEqual({ ...NO_INSETS, top: TOP_MARGIN, left: fitShares(SIDE_HUD, SIDE).left });
+    expect(hudRects(PHONE, UP_HUD, 'docked')).toEqual([]);
+    expect(hudRects(WIDE, defaultInsets(WIDE), 'docked')).toEqual([]);
+    expect(hudRects(WIDE, defaultInsets(WIDE))).toHaveLength(1); // the floating panel, as before
+  });
+
+  it.each(levels.map((d) => [d.id, d] as const))('%s: every corner of the structure on screen clear of the strip, the tray and the rail; the objectives in sight', (_, def) => {
+    const c = compileLevel(def), { min, max } = structureBox(c);
+    for (const [a, hud] of [[PHONE, UP_HUD], [SIDE, SIDE_HUD]] as const) {
+      const extra = openingInsets(a, panelTimeline(c) !== null);
+      const o = viewOf(c, a, undefined, undefined, undefined, { insets: extra, hud });
+      // On the real screen (screen shares, clearOfHud's NDC): inside the screen less the HUD and the level's panels.
+      expect(clearOfHud(o, a, min, max, joinInsets(hud, extra)), `${def.id} at ${a.toFixed(2)}`).toBe(true);
+      if (c.meta.crowns.length + c.meta.heritage.length === 0) continue;
+      const ins = joinInsets(defaultInsets(a, hud), extra), s = scoreView(c, openingDirection(c, a, ins, 'docked'), a, ins, 'docked');
+      expect(showsObjectives(s), `${def.id} at ${a.toFixed(2)}: ${JSON.stringify(s)}`).toBe(true);
+    }
+  });
+
+  it('a pick is confirmed at CONFIRM_PX: T-X3B docked upright (yaw 66 passed at 74 x 160 with a crown the page\'s frame hid) opens on a view whose crowns show at the fine raster too', () => {
+    const c = compileLevel(levelById('T-X3B')), hud: Insets = { top: 0.0861, bottom: 0.2431, left: 0, right: 0 }, ins = defaultInsets(PHONE, hud);
+    const coarse66 = scoreView(c, { yaw: 66, pitch: 12 }, PHONE, ins, 'docked'), fine66 = scoreView(c, { yaw: 66, pitch: 12 }, PHONE, ins, 'docked', CONFIRM_PX);
+    expect(showsObjectives(coarse66)).toBe(true);
+    expect(showsObjectives(fine66)).toBe(false);
+    const dir = openingDirection(c, PHONE, ins, 'docked');
+    expect(dir).not.toEqual({ yaw: 66, pitch: 12 });
+    expect(showsObjectives(scoreView(c, dir, PHONE, ins, 'docked', CONFIRM_PX))).toBe(true);
+  });
+
+  it.each(LEVELS_WITH_GOALS.map((d) => [d.id, d] as const))('%s: a search that finds a passing view returns one that passes at CONFIRM_PX (wide, upright, docked upright)', (_, def) => {
+    const c = compileLevel(def);
+    for (const [a, ins, hud] of [[WIDE, defaultInsets(WIDE), 'panel'], [PHONE, defaultInsets(PHONE), 'panel'], [PHONE, defaultInsets(PHONE, UP_HUD), 'docked']] as const) {
+      const { pick, scored } = searchViews(c, a, ins, hud);
+      if (!scored.some((s) => showsObjectives(s))) continue; // no view passes even coarse: the fallback, judged as before
+      const fine = scoreView(c, pick, a, ins, hud, CONFIRM_PX);
+      if (showsObjectives(scoreView(c, pick, a, ins, hud))) expect(showsObjectives(fine), `${def.id} at ${a.toFixed(2)} ${hud}: ${JSON.stringify(fine)}`).toBe(true);
+    }
+  });
+
+  it('L1 upright: its base clears the tray (it opened 2% under it on the guess) and the structure takes more of the screen', () => {
+    const c = compileLevel(L1), { min, max } = structureBox(c);
+    const guess = viewOf(c, PHONE, undefined, undefined, undefined, { mode: 'classic' });
+    const docked = viewOf(c, PHONE, undefined, undefined, undefined, { mode: 'classic', hud: UP_HUD });
+    expect(clearOfHud(guess, PHONE, min, max, UP_HUD)).toBe(false);
+    expect(clearOfHud(docked, PHONE, min, max, UP_HUD)).toBe(true);
+    const height = (o: typeof guess) => { const e = extent(o, PHONE, min, max); return e[3]! - e[2]!; };
+    expect(height(docked)).toBeGreaterThan(height(guess));
   });
 });

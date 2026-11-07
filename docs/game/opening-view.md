@@ -18,12 +18,22 @@ The opening camera (`packages/game/src/view.ts`) is now two separate choices.
    - **Spread.** The view's *exposure* (visible pixels over every body's unoccluded pixels) is at least 80% of
      the best yaw's at that pitch. A row seen end-on fails this gate.
 
+   - **Confirmed at a finer raster** (PT3b, 2026-11-07). The search counts on a 160 px raster, where a small
+     crown is a few pixels. A view that passes both gates there is drawn again at `CONFIRM_PX` (480) and taken
+     only if its objectives pass there too. Found by the PT1 GPU gate once the docked phone HUD changed the
+     insets: T-X3B upright opened at yaw 66, a crown at 0.39 of itself on the coarse raster and 0.20 in the
+     page's own 390 x 844 frame. It changes 5 of 37 levels' views at the wide and classic upright shapes (A3,
+     T-B4A, T-X3B wide; L2, L4 upright), each a coarse-only pass, and costs one more raster a pick (about 10 ms
+     on B3). Raising the whole search to the finer raster was the alternative: about 9 times the pixels for every
+     view scored, to fix a few picks.
+
    If no view passes, the one that shows the most objectives wins. The search is deterministic and pure.
-   It is remembered per level hash, screen shape and insets, and the next level's search runs during the
-   prefetch.
+   It is remembered per level hash, screen shape, insets and HUD shape, and the next level's search runs during
+   the prefetch.
 2. **How far and where** (`fitBox`). This is an exact fit of the structure's box into the screen's free area,
-   which is the screen minus its *insets*: 10% of sky on a wide screen (PT14), the HUD band on an upright phone,
-   plus any band that `play.ts` measures and passes. The area is shrunk by `fit` 1.05 about its middle.
+   which is the screen minus its *insets*: 10% of sky on a wide screen (PT14), the HUD band on an upright phone
+   (the 40% guess, or docked the band `play.ts` measures from the HUD's boxes, PT3b: docs/game/phone-hud.md),
+   plus a level's own panels (`openingInsets`). The area is shrunk by `fit` 1.05 about its middle.
    - For a fixed view direction, keeping each corner inside each edge of the area is linear in the eye's
      position. So the least back-off, and the sideways shift that achieves it, come in closed form: a max over
      corner pairs, per axis.

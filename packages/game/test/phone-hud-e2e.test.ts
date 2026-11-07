@@ -7,7 +7,11 @@
 //        a failed round's primary button is Retry; the last chamber level leads on to Undercut.
 import { describe, expect, it } from 'vitest';
 import type { Page } from 'playwright';
-import { compileLevel, L1, type Shot } from '@tb/keystone';
+import { compileLevel, L1, levelById, type Shot } from '@tb/keystone';
+import { DEFAULT_FRAMING } from '@tb/render/camera';
+import { panelTimeline } from '../src/fuse-timeline.ts';
+import { hudInsets } from '../src/layout.ts';
+import { clearOfHud, joinInsets, openingInsets, structureBox } from '../src/view.ts';
 import { gamePage, ready } from './page.ts';
 
 const game = gamePage();
@@ -144,6 +148,47 @@ describe('the docked phone HUD (PT3)', () => {
     expect(errors).toEqual([]);
     await page.close();
   }, 5 * MINUTES);
+});
+
+describe('the opening camera keeps clear of the docked HUD (PT3b)', () => {
+  for (const id of ['L1', 'L2', 'B1']) it(`${id}: every corner of the structure on screen clear of the strip, tray and hint upright, and of the rail sideways`, async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    for (const [name, phone] of PHONES) {
+      const { width: W, height: H } = phone.viewport;
+      // offscreen=WxH: the camera's shape is the phone's (offscreen=1 draws 640 x 400 whatever the window).
+      const o = await game.open(`/?level=${id}&engine=rapier&offscreen=${W}x${H}&door=0&progress=off`, 2 * MINUTES, phone);
+      if (!o) return ctx.skip();
+      const { page, errors } = o;
+      await ready(page, 2 * MINUTES);
+      const got = await page.evaluate(() => {
+        const box = (sel: string) => { const e = document.querySelector(sel); if (!e || !e.getClientRects().length) return null; const r = e.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; };
+        return { view: window.__game.view, hud: window.__game.openingHud, rail: [box('.kg-hud .st'), box('.kg-hud .tray')].filter((b) => b !== null), hint: box('.kg-hud .tch-hint') };
+      });
+      // The page used the band its HUD shows, measured here on its own: upright the strip, the tray and the touch hint
+      // over it (bands); sideways the rail, and the hint right of it at the top (a band down to its bottom, not over the base).
+      expect(got.hint, `${name}: the touch hint before the first shot`).not.toBeNull();
+      const measured = name === 'upright' ? hudInsets([...got.rail, got.hint!], W, H) : { ...hudInsets(got.rail, W, H), top: (got.hint!.y + got.hint!.h) / H };
+      if (name === 'sideways') expect(got.hint!.y + got.hint!.h, 'sideways the hint is in the top band, not beside the tray').toBeLessThan(0.2 * H);
+      expect(got.hud, `${name}: the opening view's HUD band`).not.toBeNull();
+      for (const k of ['top', 'bottom', 'left', 'right'] as const) expect(got.hud![k], `${name}: ${k}`).toBeCloseTo(measured[k], 9);
+      const c = compileLevel(levelById(id)), { min, max } = structureBox(c);
+      const orbit = { ...got.view, fovY: (DEFAULT_FRAMING.fov * Math.PI) / 180 };
+      expect(clearOfHud(orbit, W / H, min, max, joinInsets(measured, openingInsets(W / H, panelTimeline(c) !== null))), `${id} ${name}: the structure clear of the HUD`).toBe(true);
+      expect(errors).toEqual([]);
+      await page.close();
+    }
+  }, 6 * MINUTES);
+
+  it('Layout classic (keystone.hud=panel): no measured band, the opening view frames under the upright guess as before', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const o = await game.open('/?level=L1&engine=rapier&offscreen=390x844&door=0&progress=off&keystone.hud=panel', 2 * MINUTES, UPRIGHT);
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await ready(page, 2 * MINUTES);
+    expect(await page.evaluate(() => window.__game.openingHud)).toBeNull();
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 3 * MINUTES);
 });
 
 describe('the result card (PT4)', () => {

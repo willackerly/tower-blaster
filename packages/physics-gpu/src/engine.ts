@@ -3,7 +3,7 @@
 // one command buffer per step. Parameters are the reference solver's (physics-ref AvbdParams), so
 // the two engines can be run side by side on the same settings. With AvbdParams.restitution on,
 // the solve ends with the restitution pass (restitution.ts).
-import { type BodyDesc, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineCheckpoint, type EngineHealth, type EngineInfo, gravityChanges, inertiaOf, type InputEvent, isPinned, kicks, massOf, type PhysicsEngine, type SceneDesc, scenePins, type Snapshot, queueInputs, spawnedBodies, TIER_FREE, type Vec3 } from '@tb/engine-api';
+import { type BodyDesc, checkBlast, checkInputQueue, DEFAULT_RESTITUTION_COMBINE, emptySnapshot, type EngineCheckpoint, type EngineHealth, type EngineInfo, gravityChanges, inertiaOf, type InputEvent, isPinned, kicks, startsAsleep, massOf, type PhysicsEngine, type SceneDesc, scenePins, type Snapshot, queueInputs, spawnedBodies, TIER_FREE, type Vec3 } from '@tb/engine-api';
 import { boundingRadius } from '@tb/geom';
 import { assertStorageFits, createDevice, isSoftwareAdapter, Readback } from '@tb/gpu';
 import { type AvbdParams, avbdVariant, checkColoring, checkGapSlop, checkRecords, checkRemoved, checkRestitution, DEFAULT_AVBD, RESTITUTION_DEFAULTS } from '@tb/physics-ref';
@@ -466,14 +466,15 @@ export class GpuAvbdEngine implements PhysicsEngine {
       device!.queue.writeBuffer(target, i * layout.size, v.buffer);
     };
     const m = massOf(b);
-    // A pinned body (pins.ts): asleep from the start and never woken, at rest whatever its description says.
-    const pinned = isPinned(b), linVel: Vec3 = pinned ? [0, 0, 0] : b.linVel;
-    one(Body, { pos: b.pos, invMass: 1 / m, rot: b.rot, linVel, flags: pinned ? PINNED : AWAKE, angVel: pinned ? [0, 0, 0] : b.angVel, shape: i }, parts!.bodies);
+    // A pinned body (pins.ts): asleep from the start and never woken, at rest whatever its description says. A body that
+    // starts asleep (engine-api asleep.ts) is a sleeper from the start too, where the engine sleeps, until the wake pass wakes it.
+    const pinned = isPinned(b), asleep = !pinned && startsAsleep(b) && parts!.sleep !== null, still = pinned || asleep, linVel: Vec3 = still ? [0, 0, 0] : b.linVel;
+    one(Body, { pos: b.pos, invMass: 1 / m, rot: b.rot, linVel, flags: pinned ? PINNED : asleep ? 0 : AWAKE, angVel: still ? [0, 0, 0] : b.angVel, shape: i }, parts!.bodies);
     one(Shape, b.shape.kind === 'box' ? { half: b.shape.half, kind: 0 } : { half: [b.shape.radius, 0, 0], kind: 1 }, parts!.shapes);
     one(BodyProps, { inertia: inertiaOf(b), mass: m, friction: b.friction, radius: boundingRadius(b.shape), sphere: b.shape.kind === 'sphere' ? 1 : 0, restitution: restitutionWord(b.restitution) }, parts!.props);
     // prevVel = initial velocity, as the reference (no adaptive warm-start kick on the first step).
     one(SolverBody, { prevVel: linVel }, parts!.solver.solver);
-    parts!.sleep?.add(i, b.pos, b.rot);
+    parts!.sleep?.add(i, b.pos, b.rot, asleep);
   }
 
   /**
