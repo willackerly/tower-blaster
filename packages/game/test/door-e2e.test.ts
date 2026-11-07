@@ -185,10 +185,12 @@ describe('trials on the door', () => {
     expect(await page.locator('.kg-door .card.trial').count()).toBe(0);
     await page.locator('.kg-door [data-act="trials"]').click();
     expect(await page.locator('.kg-door .card.trial').count()).toBe(TRIAL_LEVELS.length);
-    expect(await page.locator('.kg-door .card.trial .id').allInnerTexts()).toEqual(TRIAL_LEVELS.map((d) => d.id));
+    // Each card shows the trial's number (PT18) and carries its id.
+    expect(await page.locator('.kg-door .card.trial .id').allInnerTexts()).toEqual(TRIAL_LEVELS.map((_, i) => `Trial ${i + 1}`));
+    expect(await page.locator('.kg-door .card.trial').evaluateAll((cs) => cs.map((c) => (c as HTMLElement).dataset.id))).toEqual(TRIAL_LEVELS.map((d) => d.id));
     // Play still offers the first rated level, not a trial.
     expect(await page.locator('.kg-door .play').innerText()).toBe(`Play · ${B1.name}`);
-    await page.locator('.kg-door .card[aria-label^="T-X1 "]').click();
+    await page.locator('.kg-door .card[data-id="T-X1"]').click();
     await page.waitForFunction(() => window.__game.level === 'T-X1' && window.__game.ready, undefined, { timeout: MINUTES, polling: 100 });
     expect(new URLSearchParams(await page.evaluate(() => location.search)).get('level')).toBe('T-X1');
     // The trial is outcome-scored with its objective (the last domino down) and nothing cast.
@@ -222,7 +224,9 @@ describe('trials on the door', () => {
     await page.waitForFunction(() => window.__game?.status === 'running', undefined, { timeout: MINUTES });
     expect(await page.evaluate(() => window.__game.level)).toBe('T-X3B');
     expect(await page.locator('.kg-door .card.trial').count()).toBe(TRIAL_LEVELS.length);
-    expect(await page.locator('.kg-door .card.current .id').innerText()).toBe('T-X3B');
+    // The card shows the trial's number, not its id (PT18); the id stays in the URL and data-id.
+    expect(await page.locator('.kg-door .card.current').getAttribute('data-id')).toBe('T-X3B');
+    expect(await page.locator('.kg-door .card.current .id').innerText()).toBe(`Trial ${TRIAL_LEVELS.findIndex((l) => l.id === 'T-X3B') + 1}`);
     expect(errors).toEqual([]);
     await page.close();
   }, 3 * MINUTES);

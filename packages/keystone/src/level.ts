@@ -230,7 +230,7 @@ export interface LevelDef {
   rube?: { partsPar: number };
   /**
    * Made from an authored level by overrides (URL keys keystone.*): it plays, but cast stars do not
-   * apply ("custom: stars not recorded"). Not part of the hash: the overrides already are.
+   * apply (the game's CUSTOM_NOTE). Not part of the hash: the overrides already are.
    */
   custom?: boolean;
 }

@@ -50,7 +50,18 @@ Measured (browser test, Rapier, 1x): upright the strip and tray together are 26.
 
 The upright camera frames the structure below the top 40% of the screen (`view.ts` `PORTRAIT_HUD_SHARE`), sized for the old tall panel. With the docked HUD the free band is from about 12% (under the strip) to about 76% (above the tray and the hint) of the height, and sideways right of the rail. Framing into that band is the next step: the objectives thread (PT1/PT14) is generalising `viewOf` to take screen insets, and this page will pass the band it measures from the HUD's boxes. Until it lands, L1 upright opens with the bottom 2% of its base under the tray's top edge (every other rated level clears it; measured from `viewOf` at 390 x 844).
 
+## The Build panel (C9) on a docked phone (PT18, 2026-11-07)
+
+A level with a build phase (trial T-W1 Domino Workshop, [placement.md](placement.md)) shows C9's Build panel. Docked (`ui.ts` DOCK_CSS, the panel being the HUD's sibling `.kg-build`):
+
+- **Building:** the aim tray is put away (`body.kg-building`: nothing fires until Play, so its chips, power and slot would only promise what cannot happen) and the panel takes its place: upright a bottom sheet the tray's width, at most 46% of the height; sideways on the right below the Menu button, `min(340px, 42vw)` wide, at most the height under Menu; either scrolls if its rows need more. The status strip or rail stays, so the objective and the crowns stay in view.
+- **Before and after building** (the level loaded as built, before its first shot, when B builds again): only the panel's Build button, under the Menu button in the column the upright strip leaves free (its 76 px margin) or at the top right sideways. The tray is back.
+
+Measured (browser test, 1x): upright the building panel is 374 x 255 px at the bottom (30% of the height), clear of the strip (top 65 px) and Menu; sideways 340 x 318 px at the right, clear of the 220 px rail. The Build button is 61 x 56 px at (321, 64) upright and (775, 64) sideways, clear of the strip, rail, tray and Menu. `game/test/phone-door-build-e2e.test.ts` checks every box inside the screen and apart, Play and Cancel on top, a tap in the free band still placing a piece, and Play bringing the tray back, at 390 x 844 and 844 x 390. Layout Classic (`keystone.hud=panel`) keeps C9's own placement (top right, or docked at the bottom under 640 px wide).
+
+Alternatives: the panel above the tray (both visible) left about a third of an upright screen to build on, for a tray that does nothing while building; a collapsible panel (a Build chip that opens a sheet) hid Play and the tools behind a tap on every placement; the panel inside the HUD element (a third group) would put the editor's markup into the HUD's per-frame string, which the viewer and every HUD test read.
+
 ## Not done here
 
-- The copy on the door and in the HUD (PT18) follows this layout; that thread was told when it landed.
+- The copy on the door and in the HUD (PT18) followed this layout: [front-door.md](front-door.md), "Player-facing copy".
 - A real-phone check (WebGPU on a phone) belongs to the next human or agent playtest round.
