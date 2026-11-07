@@ -4,7 +4,69 @@
 // panel column); the banner and the result card place themselves.
 
 import { DUEL_CSS } from './duel-hud.ts';
+import { TOUCH_HELP } from './hud.ts';
 import { LOT_CSS } from './lot-hud.ts';
+
+/** A phone held upright: at most this wide. Sideways: at most this tall. The docked HUD's media queries (DOCK_CSS). */
+export const DOCK_PORTRAIT = '(orientation: portrait) and (max-width: 640px)';
+export const DOCK_SIDEWAYS = '(orientation: landscape) and (max-height: 500px)';
+
+/**
+ * The docked phone HUD (docs/game/phone-hud.md), on a touch screen whose HUD element has kg-dock (the game
+ * page's Layout setting, keystone.hud). The HUD element covers the screen without catching a touch; its two
+ * groups (hud.ts hudHtml: .st status, .tray aim tray) are the panels. Upright: the status a strip at the top
+ * (clear of the Menu button), the tray at the bottom. Sideways: both down a rail on the left. Rows that are
+ * not live yet keep their place (lev pre, slot empty), so the HUD keeps one size through the round. The touch
+ * hint and the out-of-reach warning sit just outside the tray, so they never change its size either.
+ */
+export const DOCK_CSS = `
+  @media ${DOCK_PORTRAIT}, ${DOCK_SIDEWAYS} {
+    body.kg-touch .kg-hud.kg-dock { position: fixed; inset: 0; top: 0; left: 0; min-width: 0; max-width: none; padding: 8px; box-sizing: border-box; background: none; backdrop-filter: none; -webkit-backdrop-filter: none; border-radius: 0; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; font-size: 12.5px; line-height: 1.3; }
+    body.kg-touch .kg-dock > .st, body.kg-touch .kg-dock > .tray { pointer-events: auto; background: rgba(17, 20, 28, 0.8); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); border-radius: 10px; padding: 5px 10px; box-sizing: border-box; position: relative; }
+    body.kg-touch .kg-dock .st .title { font-size: 14px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    body.kg-touch .kg-dock .st .custom, body.kg-touch .kg-dock .slot-row .note { display: none; }
+    body.kg-touch .kg-dock .st .lev.pre { display: flex; visibility: hidden; }
+    body.kg-touch .kg-dock .st .lev > span:last-child { display: inline-block; min-width: 3.4em; }
+    body.kg-touch .kg-dock .st .meter { margin: 4px 0 14px; }
+    body.kg-touch .kg-dock .st .goals { margin: 0; padding: 0; border: 0; }
+    body.kg-touch .kg-dock .st .goals ul { display: none; }
+    body.kg-touch .kg-dock .tray { display: flex; flex-direction: column; gap: 5px; flex: none; padding: 5px 8px; }
+    body.kg-touch .kg-dock .tray .chips { margin: 0; flex-wrap: nowrap; overflow-x: auto; }
+    body.kg-touch .kg-dock .tray .chip { flex: none; }
+    body.kg-touch .kg-dock .tray .ctl { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 10px; min-height: 44px; }
+    body.kg-touch .kg-dock .tray .ctl .row > span:first-child { display: none; }
+    body.kg-touch .kg-dock .tray .ctl .row { flex: 1; }
+    body.kg-touch .kg-dock .tray .ctl .power { flex: 1; gap: 4px; }
+    body.kg-touch .kg-dock .tray .ctl .bar { flex: 1; width: auto; min-width: 48px; }
+    body.kg-touch .kg-dock .tray .ctl .launch { flex: 1; text-align: center; white-space: nowrap; }
+    body.kg-touch .kg-dock .tray .ctl .launch::before { content: '↕ '; color: #9aa3b8; }
+    body.kg-touch .kg-dock .slot-row, body.kg-touch .kg-dock .slot-row.idle { display: flex; gap: 8px; margin: 0; }
+    body.kg-touch .kg-dock .slot, body.kg-touch .kg-dock .slot.empty { display: flex; flex: 1; min-height: 44px; }
+    body.kg-touch .kg-dock .slot button { flex: 1; margin: 0; }
+    body.kg-touch .kg-dock .slot .skipping { flex: 1; align-self: center; text-align: center; }
+    body.kg-touch .kg-dock .acts button { margin: 0; }
+    body.kg-touch .kg-dock .above { position: absolute; left: 0; right: 0; bottom: 100%; margin-bottom: 6px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; pointer-events: none; }
+    body.kg-touch .kg-dock .above > * { background: rgba(17, 20, 28, 0.8); border-radius: 6px; padding: 4px 8px; }
+    body.kg-touch .kg-dock .tch-hint { display: block; color: #c3cad8; font-size: 12px; }
+    body.kg-touch .kg-dock ~ .kg-help { display: none; }
+  }
+  @media ${DOCK_PORTRAIT} {
+    body.kg-touch .kg-dock > .st { margin-right: 76px; display: flex; flex-wrap: wrap; column-gap: 12px; flex: none; }
+    body.kg-touch .kg-dock .st > * { flex: none; }
+    body.kg-touch .kg-dock .st .title, body.kg-touch .kg-dock .st .duel { flex-basis: 100%; }
+    /* The Down bar beside "Shot n  Down x%", not under it: a line saved. */
+    body.kg-touch .kg-dock .st .meter { flex: 1 1 110px; align-self: flex-start; margin: 5px 0 14px; }
+    body.kg-touch .kg-dock .st .row { gap: 4px; justify-content: flex-start; }
+    body.kg-touch .kg-dock .st .row > span:first-child { color: #9aa3b8; }
+    /* The objective says itself ("bring 40% down"): its label goes, so leverage and freezes share its line. */
+    body.kg-touch .kg-dock .st .obj > span:first-child { display: none; }
+  }
+  @media ${DOCK_SIDEWAYS} {
+    body.kg-touch .kg-hud.kg-dock { right: auto; width: clamp(200px, 28vw, 250px); }
+    body.kg-touch .kg-dock > .st { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+    body.kg-touch .kg-dock .above { left: 100%; right: auto; bottom: 0; margin: 0 0 0 8px; width: max-content; max-width: 50vw; }
+  }
+`;
 
 export const GAME_CSS = `
   .kg-panel { position: fixed; background: rgba(17, 20, 28, 0.8); color: #e8ebf2; border-radius: 10px; padding: 12px 14px; backdrop-filter: blur(6px); }
@@ -35,6 +97,27 @@ export const GAME_CSS = `
   .kg-banner.crack { color: #f0806a; }
   .kg-result { top: 50%; left: 50%; transform: translate(-50%, -50%); min-width: 300px; max-height: calc(100vh - 24px); overflow-y: auto; box-sizing: border-box; display: none; padding: 20px 24px; font: 14px/1.45 system-ui, sans-serif; }
   .kg-result.show { display: block; animation: kg-rise 0.3s ease-out; }
+  /* The docked card (layout.ts, PT4): aside on the right, below the Menu button, sliding in; its buttons stay in view while the rest scrolls. */
+  .kg-result.dock { top: 64px; right: 12px; left: auto; transform: none; width: 360px; min-width: 0; max-height: calc(100% - 76px); padding-bottom: 0; }
+  .kg-result.dock.show { animation: kg-slide 0.3s ease-out; }
+  .kg-result.dock .actions { position: sticky; bottom: 0; margin: 14px -24px 0; padding: 10px 24px 16px; background: rgb(17, 20, 28); flex-wrap: wrap; }
+  .kg-result.dock .actions [data-act="save"] { order: 1; }
+  .kg-tally { top: 12px; left: 50%; transform: translateX(-50%); display: none; padding: 6px 14px; font: 14px/1.4 system-ui, sans-serif; white-space: nowrap; max-width: calc(100vw - 24px); box-sizing: border-box; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+  .kg-tally.show { display: block; animation: kg-fade 0.25s ease-out; }
+  .kg-tally .name { color: #9aa3b8; } .kg-tally .stars { color: #f7b955; } .kg-tally .small { color: #9aa3b8; font-size: 12px; }
+  @media ${DOCK_PORTRAIT} {
+    .kg-result.dock { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-height: 58%; padding: 14px 16px 0; }
+    .kg-result.dock .actions { margin: 10px -16px 0; padding: 8px 16px 12px; }
+    .kg-tally { top: 8px; left: 8px; right: 84px; transform: none; max-width: none; background: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+    body.kg-tallying.kg-touch .kg-dock .st > * { visibility: hidden; }
+  }
+  @media ${DOCK_SIDEWAYS} {
+    .kg-result.dock { top: auto; bottom: 8px; right: 8px; width: min(600px, calc(100vw - 16px)); max-height: calc(100% - 64px); padding: 12px 18px 0; grid-template-columns: 1fr 1fr; column-gap: 22px; align-items: start; }
+    .kg-result.dock.show { display: grid; }
+    .kg-result.dock .c2 { position: sticky; top: 0; }
+    .kg-result.dock .stamp { margin-top: 4px; }
+    .kg-result.dock .actions { margin: 10px -18px 0 0; padding: 8px 18px 12px 0; }
+  }
   .kg-result .name { font-size: 22px; font-weight: 700; }
   .kg-result .sub { color: #9aa3b8; margin-bottom: 10px; }
   .kg-result .line { display: flex; justify-content: space-between; padding: 3px 0; opacity: 0; animation: kg-slam 0.25s cubic-bezier(.2,1.6,.4,1) forwards; }
@@ -46,10 +129,12 @@ export const GAME_CSS = `
   .kg-result .gold.got { color: #f7b955; font-weight: 700; }
   .kg-result .lost { margin-top: 2px; font-size: 13px; opacity: 0; animation: kg-slam 0.3s ease-out forwards; }
   .kg-hud .lev .shot { opacity: 0.75; margin-left: 4px; line-height: 1; white-space: nowrap; }
+  .kg-hud .lev .shot.held { visibility: hidden; }
   .kg-result .actions { display: flex; gap: 8px; margin-top: 14px; }
   .kg-result button { font: inherit; padding: 7px 12px; border: 0; border-radius: 6px; background: #2b3242; color: #e8ebf2; cursor: pointer; }
   .kg-result button.primary { background: #d8693f; }
   .kg-hud button.bank { font: inherit; padding: 4px 10px; border: 0; border-radius: 6px; background: #d8693f; color: #fff; cursor: pointer; margin-top: 6px; }
+  .kg-hud button.skip { font: inherit; padding: 4px 10px; border: 1px solid #ffffff55; border-radius: 6px; background: #ffffff1a; color: #fff; cursor: pointer; margin-top: 6px; }
   .kg-hud button.freeze { font: inherit; padding: 4px 10px; border: 0; border-radius: 6px; background: #3f8fd8; color: #fff; cursor: pointer; margin-top: 6px; }
   .kg-hud .pace.frozen { background: #3f8fd8; color: #fff; }
   .kg-hud .spent { opacity: 0.4; }
@@ -64,15 +149,42 @@ export const GAME_CSS = `
   .kg-hud .meter .tick.obj b { top: 17px; color: #e0a84a; }
   .kg-hud .meter .tick.got { background: #fff; }
   .kg-hud .meter .tick.got b { color: #f7b955; }
-  .kg-hud .acts { justify-content: flex-start; gap: 8px; margin-top: 6px; }
+  /* The action slot (hud.ts slotAction): one button where Fire the first shot, Freeze, Resume and Bank take turns. */
+  .kg-hud .slot-row { justify-content: flex-start; gap: 10px; }
+  .kg-hud .slot-row .note { flex: 1; text-align: right; }
+  .kg-hud .slot { display: inline-flex; gap: 8px; align-items: center; }
+  .kg-hud .slot button.skip { margin-top: 0; }
+  .kg-hud .slot-row.idle, .kg-hud .slot.empty, .kg-hud .lev.pre, .kg-hud .tch-hint { display: none; }
+  body.kg-touch .kg-hud .slot-row.idle { display: flex; }
+  .kg-hud .acts { gap: 8px; }
   .kg-hud .acts.kg-tch { display: none; }
   body.kg-touch .kg-hud .acts.kg-tch { display: flex; }
   .kg-hud .acts button { font: inherit; padding: 4px 10px; border: 0; border-radius: 6px; background: #3a4459; color: #e8ebf2; cursor: pointer; box-shadow: inset 0 0 0 1px #5a6680; }
+  .kg-hud .acts button.ico { font: 700 22px/1 system-ui, sans-serif; padding: 0; }
+  .kg-hud button:disabled { opacity: 0.35; cursor: default; }
   .kg-banner.hold { opacity: 1; animation: none; }
+  .kg-build { top: 52px; right: 12px; max-width: 330px; font: 13px/1.45 system-ui, sans-serif; }
+  .kg-build[hidden] { display: none; }
+  .kg-build summary { cursor: pointer; font-weight: 650; }
+  .kg-build .edit { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .kg-build .buttons { display: flex; flex-wrap: wrap; gap: 5px; }
+  .kg-build button { font: inherit; padding: 4px 8px; border: 0; border-radius: 5px; background: #2b3242; color: #e8ebf2; cursor: pointer; }
+  .kg-build button.on, .kg-build button.go { background: #d8693f; color: #fff; }
+  .kg-build button:disabled { color: #6b7387; cursor: default; }
+  .kg-build .key { font-size: 10px; color: #9aa3b8; margin-left: 3px; }
+  .kg-build button.on .key, .kg-build button.go .key { color: #ffe3d6; }
+  .kg-build .snap { font-size: 12px; color: #c9cfdc; }
+  .kg-build .out { font-size: 12px; min-height: 1.45em; }
+  .kg-build .out.warn { color: #f5b169; }
+  body.kg-touch .kg-build .key { display: none; }
+  body.kg-touch .kg-build button { min-height: 40px; padding: 6px 10px; }
+  @media (max-width: 640px) { .kg-build { top: auto; bottom: 12px; left: 12px; right: 12px; max-width: none; } body.kg-building #help { display: none; } }
   .kg-help button { font: inherit; padding: 0 2px; border: 0; background: none; color: #9fc3ff; cursor: pointer; }
   .kg-help button:hover { text-decoration: underline; }
   @keyframes kg-slam { from { opacity: 0; transform: scale(1.6); } to { opacity: 1; transform: scale(1); } }
   @keyframes kg-stamp { from { opacity: 0; transform: rotate(-6deg) scale(2.4); } to { opacity: 1; transform: rotate(-6deg) scale(1); } }
+  @keyframes kg-slide { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+  @keyframes kg-fade { from { opacity: 0; } to { opacity: 1; } }
   @keyframes kg-rise { from { opacity: 0; transform: translate(-50%, -44%); } to { opacity: 1; transform: translate(-50%, -50%); } }
   @keyframes kg-pop { 50% { transform: scale(1.5); } }
   @keyframes kg-banner { 0% { opacity: 0; transform: scale(0.6); } 15% { opacity: 1; transform: scale(1.08); } 70% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1); } }
@@ -87,7 +199,8 @@ export const GAME_CSS = `
   body.kg-touch .kg-hud .chip { min-height: 44px; padding: 0 14px; }
   body.kg-touch .kg-hud .chip:not(.on) { background: #3a4459; box-shadow: inset 0 0 0 1px #5a6680; }
   body.kg-touch .kg-hud button.pw { width: 44px; height: 44px; background: #3a4459; box-shadow: inset 0 0 0 1px #5a6680; font-size: 22px; }
-  body.kg-touch .kg-hud button.opener, body.kg-touch .kg-hud button.bank, body.kg-touch .kg-hud .acts button { min-height: 44px; padding: 0 14px; margin-bottom: 8px; }
+  body.kg-touch .kg-hud button.opener, body.kg-touch .kg-hud button.bank, body.kg-touch .kg-hud button.freeze, body.kg-touch .kg-hud button.skip { min-height: 44px; padding: 0 14px; margin-bottom: 8px; }
+  body.kg-touch .kg-hud .acts button { width: 44px; height: 44px; margin-bottom: 8px; }
   body.kg-touch .kg-hud button, body.kg-touch .kg-result button { touch-action: manipulation; }
   body.kg-touch .kg-result button { min-height: 44px; padding: 0 16px; }
   body.kg-touch .kg-menu { min-height: 44px; min-width: 64px; }
@@ -99,7 +212,7 @@ export const GAME_CSS = `
     /* The lot sheet keeps its count line; its goals are on the result card (the HUD would cover the structure). */
     body.kg-touch .kg-hud .goals ul { display: none; }
   }
-${LOT_CSS}${DUEL_CSS}`;
+${DOCK_CSS}${LOT_CSS}${DUEL_CSS}`;
 
 /**
  * The game page's hint line in play: the few controls a first shot needs, and where the rest are. The HUD
@@ -109,10 +222,10 @@ export const GAME_HELP = 'click: fire · drag: orbit · wheel: zoom · <kbd>U</k
 /** The most characters the hint line may show (its text, keys included): one line at the game page's width. */
 export const HELP_BUDGET = 80;
 /** Every control, for the game page's ? (and the viewer's help under Keystone rules, which has room). */
-export const GAME_KEYS = 'hover: aim · click: fire · drag: orbit (the launcher follows you) · right-drag: pan · wheel: zoom · <kbd>1</kbd>–<kbd>4</kbd> ammo · <kbd>Q</kbd>/<kbd>E</kbd> power · <kbd>W</kbd>/<kbd>S</kbd> launcher up and down · hold <kbd>Space</kbd>: fast · <kbd>F</kbd> fire the first shot (when offered) · <kbd>B</kbd> bank (outcome levels) · <kbd>T</kbd> freeze and resume (Bullet Time levels) · <kbd>U</kbd> or <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo the last shot · <kbd>R</kbd> restart · <kbd>N</kbd>/<kbd>P</kbd> level · <kbd>M</kbd> mute';
+export const GAME_KEYS = 'hover: aim · click: fire · drag: orbit (the launcher follows you) · right-drag: pan · wheel: zoom · <kbd>1</kbd>–<kbd>4</kbd> ammo · <kbd>Q</kbd>/<kbd>E</kbd> power · <kbd>W</kbd>/<kbd>S</kbd> launcher up and down · hold <kbd>Space</kbd>: fast · <kbd>K</kbd> skip to the settle · <kbd>F</kbd> fire the first shot (when offered) · <kbd>B</kbd> bank (outcome levels) · <kbd>T</kbd> freeze and resume (Bullet Time levels) · <kbd>U</kbd> or <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo the last shot · <kbd>R</kbd> restart · <kbd>N</kbd>/<kbd>P</kbd> level · <kbd>M</kbd> mute';
 
-/** The help line on a touch screen (body.kg-touch): the gestures of touch.ts; the HUD's Undo and Restart buttons do what U and R do. */
-export const TOUCH_HELP = 'drag: aim · lift: fire · two fingers: turn · pinch: zoom · add a finger mid-aim: cancel';
+/** The help line on a touch screen (hud.ts, where the docked HUD shows it above its tray until the first shot). */
+export { TOUCH_HELP };
 
 /**
  * The game page's help panel: the desktop hint line, or every key once `?` (or its button) opens them,

@@ -33,6 +33,19 @@
   #dev button:disabled { background: #2b3242; color: #9aa3b8; cursor: default; }
   #dev .out { font-size: 12px; min-height: 1.45em; }
   #dev .out.warn { color: #f5b169; }
+  #build { flex-shrink: 0; max-width: 330px; }
+  #build summary { cursor: pointer; font-weight: 600; }
+  #build .edit { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+  #build .buttons { display: flex; flex-wrap: wrap; gap: 5px; }
+  #build button { font: inherit; padding: 4px 8px; border: 0; border-radius: 5px; background: #2b3242; color: #e8ebf2; cursor: pointer; }
+  #build button:hover { background: #3a4459; }
+  #build button.on, #build button.go { background: #d8693f; color: #fff; }
+  #build button:disabled { color: #6b7387; cursor: default; }
+  #build .key { font-size: 10px; color: #9aa3b8; margin-left: 3px; }
+  #build button.on .key, #build button.go .key { color: #ffe3d6; }
+  #build .snap { font-size: 12px; color: #c9cfdc; }
+  #build .out { font-size: 12px; min-height: 1.45em; }
+  #build .out.warn { color: #f5b169; }
   #presets { top: 12px; right: 12px; display: flex; flex-direction: column; gap: 6px; max-width: 200px; }
   #controls { min-height: 0; overflow-y: auto; }
   #controls summary { cursor: pointer; font-weight: 600; }
@@ -63,7 +76,7 @@
   <details id="controls" class="panel"></details>
 </div>
 <div id="presets" class="panel"></div>
-<div id="help" class="panel">drag: orbit (up past the ground: look up) · right-drag / shift-drag: pan · wheel: zoom · click: fire · space: fire at centre · R: reset · P: pause</div>
+<div id="help" class="panel">drag: orbit (up past the ground: look up) · right-drag / shift-drag: pan · wheel: zoom · click: fire · space: fire at centre · R: reset · P: pause · B: build</div>
 <div id="error" class="panel"></div>
 <script type="module" src="./src/main.ts"></script>
 </body>

@@ -136,10 +136,12 @@ describe('restitution off (the default)', () => {
     expect(new AvbdReferenceEngine({ ...ON, restitutionRounds: 3 }).info.variant).toMatchObject({ restitutionThreshold: RESTITUTION_DEFAULTS.restitutionThreshold, restitutionRounds: 3 });
   });
 
-  it('checks its params and the ground\'s restitution: threshold finite and >= 0, rounds an integer >= 1, ground restitution in [0, 1]', async () => {
+  it('checks its params and the ground\'s restitution: threshold finite and >= 0, rounds an integer >= 1, anchor cut in [0, 1], ground restitution in [0, 1]', async () => {
     for (const t of [-0.1, NaN, Infinity]) expect(() => new AvbdReferenceEngine({ restitutionThreshold: t })).toThrow(`restitutionThreshold must be a finite number >= 0, got ${t}`);
     for (const r of [0, 2.5, -1, NaN]) expect(() => new AvbdReferenceEngine({ ...ON, restitutionRounds: r })).toThrow(`restitutionRounds must be an integer >= 1, got ${r}`);
     expect(() => new AvbdReferenceEngine({ ...ON, restitutionThreshold: 0, restitutionRounds: 1 })).not.toThrow();
+    for (const c of [-0.1, 1.5, NaN]) expect(() => new AvbdReferenceEngine({ ...ON, restitutionAnchorCut: c })).toThrow(`restitutionAnchorCut must be a number in [0, 1], got ${c}`);
+    for (const c of [0, 1e-4, 1]) expect(() => new AvbdReferenceEngine({ ...ON, restitutionAnchorCut: c })).not.toThrow();
     for (const g of [-0.1, 1.5, NaN]) await expect(new AvbdReferenceEngine().init(sceneOf([], { groundE: g }))).rejects.toThrow(`ground.restitution must be in [0, 1], got ${g}`);
     await expect(new AvbdReferenceEngine().init(sceneOf([], { groundE: 1 }))).resolves.toBeUndefined();
   });
@@ -284,13 +286,13 @@ describe('restitution on', () => {
   // The pass's details have no measure of their own, so these runs pin them by the top cube's velocity at step 100,
   // after its second landing. A 1e-12 m change of its start moves that by at most 4e-11 m/s; each of the mutants
   // named moves it by 1e-4 m/s or more. A solver change that moves it needs them re-measured.
-  const flatOntoTwo = async (params: Partial<AvbdParams>) => {
+  const flatOntoTwo = async (params: Partial<AvbdParams>, steps = 600) => {
     const e = 0.9, scene = sceneOf([cube([-0.55, 0.5, 0], { e }), cube([0.55, 0.5, 0], { e }), cube([0, 1.5 + 25 / (2 * G), 0], { e })], { groundE: e });
     const eng = new AvbdReferenceEngine(params);
     await eng.init(scene);
     const E0 = shadowEnergy(eng, scene.gravity);
     let eMax = E0, up = 0, second: Vec3 = [0, 0, 0];
-    for (let k = 1; k <= 600; k++) {
+    for (let k = 1; k <= steps; k++) {
       eng.step();
       eMax = Math.max(eMax, shadowEnergy(eng, scene.gravity));
       up = Math.max(up, eng.world!.bodies[2]!.linVel[1]);
@@ -300,18 +302,52 @@ describe('restitution on', () => {
   };
 
   it('a cube dropped flat onto two cubes (two bouncing manifolds) gains no energy, comes to rest, and pins the pass\'s details', async () => {
-    const r = await flatOntoTwo(ON);
-    // Measured: gain 0, end speed 1.9e-9 m/s. The top cube comes to rest on the left cube, 0.2 m over its edge, where
-    // the solve creeps (2.3e-10 m/s at step 700, 6e-7 at 3000: the solve's, as nothing bounces after step 173).
+    const r = await flatOntoTwo(ON, 3000);
+    // Measured: gain 0, end speed 2.0e-7 m/s (step 600 1.4e-4, 1200 5.8e-6). The top cube comes to rest on the left
+    // cube, 0.3 m over its edge, where the solve creeps (as nothing bounces after the first second). Before the jam
+    // guard (restitutionAnchorCut 1e-4) one later bounce differed and it came to rest 2 mm away: 3.3e-10 m/s at step
+    // 600, 2.2e-7 at 1200, 4.7e-9 at 3000.
     expect(r.gain).toBeLessThan(1e-9);
-    expect(r.end).toBeLessThan(1e-7);
+    expect(r.end).toBeLessThan(1e-6);
     // The first rebound off the two resting cubes, which the ground anchors: measured 4.522 m/s at a landing of
     // 5 m/s (without anchors 3.843: below).
     expect(r.up).toBeGreaterThan(4.4);
     // Mutants: ANCHOR_MUTANTS.
-    expect(r.second[0]).toBeCloseTo(-0.9372779876561279, 6);
-    expect(r.second[1]).toBeCloseTo(1.1363908744799265, 6);
-    expect(r.second[2]).toBeCloseTo(0.034325408213933935, 6);
+    expect(r.second[0]).toBeCloseTo(-0.9372779711976533, 6);
+    expect(r.second[1]).toBeCloseTo(1.136396802085072, 6);
+    expect(r.second[2]).toBeCloseTo(0.0343254042656057, 6);
+    // restitutionAnchorCut 1e-4 is the pass before the jam guard: these were pinned then.
+    const old = await flatOntoTwo({ ...ON, restitutionAnchorCut: 1e-4 }, 100);
+    expect(old.second[0]).toBeCloseTo(-0.9372779876561279, 12);
+    expect(old.second[1]).toBeCloseTo(1.1363908744799265, 12);
+    expect(old.second[2]).toBeCloseTo(0.034325408213933935, 12);
+  });
+
+  // The jam guard (restitutionAnchorCut): a row the anchors hold all but a fraction f of moves a seated body 1/f times
+  // as fast as a free row would to meet its target. This knock jams without the guard: measured, with the cap off,
+  // the pass threw a seated cube at 52.2 m/s (6.5 times the ball's 8 m/s) and the scene gained 73% of |E0|; with the
+  // guard (0.2, the default) it gains nothing and its fastest body is 14.5 m/s (a cube falling from the 12-cube
+  // tower's top reaches 15.3).
+  it('the jam guard: an S5 knock at e 0.6 and 8 m/s throws no seated cube, without the energy cap; at the old cut (1e-4) it does', async () => {
+    const run = async (cut: number) => {
+      const eng = new AvbdReferenceEngine({ ...ON, iterations: 10, restitutionEnergyCap: false, restitutionAnchorCut: cut });
+      const s = withE(knock(8), 0.6), scene = { ...s, ground: { ...s.ground!, restitution: 0.6 } };
+      await eng.init(scene);
+      eng.step();
+      const E0 = shadowEnergy(eng, scene.gravity);
+      let eMax = E0, vMax = 0;
+      for (let k = 0; k < 240; k++) {
+        eng.step();
+        eMax = Math.max(eMax, shadowEnergy(eng, scene.gravity));
+        vMax = Math.max(vMax, maxSpeed(eng));
+      }
+      return { gain: (eMax - E0) / Math.abs(E0), vMax };
+    };
+    const guarded = await run(RESTITUTION_DEFAULTS.restitutionAnchorCut), old = await run(1e-4);
+    expect(guarded.gain).toBeLessThan(1e-9);
+    expect(guarded.vMax).toBeLessThan(20);
+    expect(old.vMax).toBeGreaterThan(40);
+    expect(old.gain).toBeGreaterThan(0.5);
   });
 
   it('without anchors (restitutionAnchors false) the pass is the one before them, to the float', async () => {
