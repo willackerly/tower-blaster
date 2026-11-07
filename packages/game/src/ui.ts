@@ -28,6 +28,8 @@ export const DOCK_CSS = `
     body.kg-touch .kg-dock .st .custom, body.kg-touch .kg-dock .slot-row .note { display: none; }
     body.kg-touch .kg-dock .st .lev.pre { display: flex; visibility: hidden; }
     body.kg-touch .kg-dock .st .fit { justify-items: start; }
+    body.kg-touch .kg-dock .fit > .sz { display: inline; visibility: hidden; }
+    body.kg-touch .kg-dock .ctl .row.held { display: flex; visibility: hidden; }
     body.kg-touch .kg-dock .st .lev > span:last-child { display: inline-block; min-width: 3.4em; }
     body.kg-touch .kg-dock .st .meter { margin: 4px 0 14px; }
     body.kg-touch .kg-dock .st .goals { margin: 0; padding: 0; border: 0; }
@@ -256,8 +258,10 @@ export const GAME_CSS = `
   .kg-hud .slot button.skip { margin-top: 0; }
   .kg-hud .slot-row.idle, .kg-hud .slot.empty, .kg-hud .lev.pre, .kg-hud .tch-hint { display: none; }
   .h-look, body.kg-nofire .h-fire { display: none; }
-  .kg-hud .fit { display: inline-grid; justify-items: end; } .kg-hud .fit > * { grid-area: 1 / 1; } .kg-hud .fit > .sz { visibility: hidden; font-style: normal; }
-  .kg-hud .ctl .row.held { visibility: hidden; }
+  /* The widest-value sizers and held aim rows (PT30) reserve space only in the docked phone HUD (DOCK_CSS), whose size
+     the opening view was framed against; the desktop panel keeps its old size, which its fixed WIDE_HUD guess was set for. */
+  .kg-hud .fit { display: inline-grid; justify-items: end; } .kg-hud .fit > * { grid-area: 1 / 1; } .kg-hud .fit > .sz { display: none; font-style: normal; }
+  .kg-hud .ctl .row.held { display: none; }
   body.kg-nofire .h-look { display: inline; }
   body.kg-touch .kg-hud .slot-row.idle { display: flex; }
   .kg-hud .acts { gap: 8px; }
