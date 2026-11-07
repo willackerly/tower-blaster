@@ -22,7 +22,7 @@ class CountingEngine implements PhysicsEngine {
 
 describe('physics block', () => {
   it('defaults to the settings par lines are pinned at', () => {
-    expect(PHYSICS_DEFAULTS).toEqual({ iterations: AVBD_ITERATIONS, gapSlop: AVBD_GAP_SLOP, bounce: null, presettle: PRESETTLE_STEPS, sleep: false });
+    expect(PHYSICS_DEFAULTS).toEqual({ iterations: AVBD_ITERATIONS, gapSlop: AVBD_GAP_SLOP, bounce: null, presettle: PRESETTLE_STEPS, sleep: false, asleep: false });
     expect(physicsOf(L1)).toEqual(PHYSICS_DEFAULTS);
     expect(physicsOf({ ...L1, physics: { iterations: 20, bounce: 0.4, pairsPerBody: 24 } })).toEqual({ ...PHYSICS_DEFAULTS, iterations: 20, bounce: 0.4, pairsPerBody: 24 });
     expect(physicsOf({ ...L1, physics: { bounce: null } }).bounce).toBeNull();

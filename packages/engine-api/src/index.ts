@@ -34,6 +34,13 @@ export interface BodyDesc {
    * an infinite mass. Its velocities are ignored. Absent or false: a free body.
    */
   pinned?: boolean;
+  /**
+   * Starts asleep (asleep.ts, roadmap C22): in a scene with SceneDesc.sleep, on an engine that sleeps, the body is
+   * a sleeper from its first step and stays one until the engine's own wake rules wake it (something moving touches
+   * it, a blast, a removal next to it). A hint: an engine that does not sleep runs it awake. Only for a body at rest
+   * where it is put. Absent or false: awake.
+   */
+  asleep?: boolean;
 }
 
 export const TAG_BALL = -1;
@@ -323,5 +330,6 @@ export * from './island-observer.ts';
 export * from './islands.ts';
 export * from './observe.ts';
 export * from './pinned.ts';
+export * from './asleep.ts';
 export * from './remove.ts';
 export * from './snapshot-observer.ts';
