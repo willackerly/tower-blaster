@@ -4,7 +4,7 @@
 // hash pins the exact scene a recorded solution was made against.
 import { type BodyDesc, massOf, quantiseVec3, type SceneDesc, type Vec3 } from '@tb/engine-api';
 import { DEFAULT_GAP, DEFAULT_UNIT, encodeTag, GRAVITY, MATERIALS, materialId, type MaterialName, type Role, ROLES } from './materials.ts';
-import { peOf_mJ, SETTLE_RULES, type SettleRule } from './rules.ts';
+import { checkRunWindow, peOf_mJ, SETTLE_RULES, type SettleRule } from './rules.ts';
 import { type Arm, armLoad, chargeIssues, levelArm, rackArms } from './arsenal.ts';
 import { loadIssues, loadTier } from '@tb/weapons';
 import { chargeWeaponOf, isLaunchItem, isRackItem, itemRef, type LevelWeapon, PLUNGER, QUAKE, RACK_ITEM_NAMES, rackBodies, type RackItem, speedOf, WEAPON_KEY, weaponOf } from './rack.ts';
@@ -217,12 +217,24 @@ export interface LevelDef {
    */
   settle?: SettleRule;
   /**
+   * A wave level's run window (roadmap C22, docs/game/wavefront.md), seconds over 30 and at most RUN_WINDOW_MAX: a shot
+   * settles by it at the latest instead of the settle rule's cap, and not before its wave's front has died (rules.ts
+   * RUN_WINDOW_MAX's note: no stragglers, and v4's steady collapse only while nothing is fast). Same settle rule
+   * otherwise. Absent: the rule's cap. Part of the hash when given.
+   */
+  runWindow?: number;
+  /**
    * Bullet Time (C2, docs/game/undercut-bullet-time.md): the most shots that may go in while another
    * runs, each cutting it (rapid fire, Session.fire); 0 allows none. Absent: no limit. The game lets
    * the player freeze the world to aim them; a freeze costs nothing until a shot goes in. Part of the
    * hash (URL key keystone.freeze), so stars cast without a budget never show with one.
    */
   freeze?: number;
+  /**
+   * Wavefront's Cut (docs/game/wavefront.md): a pull goes in only while a shot runs, so a wave is cut live,
+   * never before it starts (with rapid fire, or in Bullet Time when the player has rapid fire off). Part of the hash.
+   */
+  cut?: true;
   /** The physics the level plays at (default Keystone's: PHYSICS_DEFAULTS). Part of the level hash, so stars cast at one setting never show at another. */
   physics?: PhysicsBlock;
   /** Aftershock (quake.ts): what the quake dial allows, for a level whose rack holds a quake. Part of the hash. */
@@ -290,14 +302,21 @@ export interface PhysicsBlock {
    * (the restitution pass does not know sleepers yet). Rapier sleeps either way (SceneDesc.sleep).
    */
   sleep?: boolean;
+  /**
+   * Every structure body starts asleep (engine-api asleep.ts, BodyDesc.asleep; roadmap C22): a sleeper from the first
+   * step until the wave reaches it, never solved before then, so a 10k field costs nothing to stand and its pre-settle
+   * steps are skipped. Needs sleep (an engine that does not sleep runs the bodies awake; Rapier does). Part of the
+   * hash when on.
+   */
+  asleep?: boolean;
 }
 
 /**
  * Keystone's settings, as every par line is pinned at: 40 iterations, 3e-5 m slop, no Bounce, 300
  * pre-settle steps (driver.ts AVBD_ITERATIONS, AVBD_GAP_SLOP, PRESETTLE_STEPS give the reasons).
  */
-export const PHYSICS_DEFAULTS = { iterations: 40, gapSlop: 3e-5, bounce: null, presettle: 300, sleep: false } as const satisfies PhysicsBlock;
-export type ResolvedPhysics = { iterations: number; gapSlop: number; bounce: number | null; presettle: number; sleep: boolean; pairsPerBody?: number };
+export const PHYSICS_DEFAULTS = { iterations: 40, gapSlop: 3e-5, bounce: null, presettle: 300, sleep: false, asleep: false } as const satisfies PhysicsBlock;
+export type ResolvedPhysics = { iterations: number; gapSlop: number; bounce: number | null; presettle: number; sleep: boolean; asleep: boolean; pairsPerBody?: number };
 
 /**
  * Solver iterations every Mason level plays at (LevelDef.mason, mason.ts), whatever its physics block, a URL override
@@ -311,7 +330,7 @@ export function physicsOf(d: LevelDef): ResolvedPhysics {
   return {
     iterations: d.mason ? MASON_ITERATIONS : p.iterations ?? PHYSICS_DEFAULTS.iterations, gapSlop: p.gapSlop ?? PHYSICS_DEFAULTS.gapSlop,
     bounce: p.bounce === undefined ? PHYSICS_DEFAULTS.bounce : p.bounce, presettle: p.presettle ?? PHYSICS_DEFAULTS.presettle,
-    sleep: p.sleep ?? PHYSICS_DEFAULTS.sleep,
+    sleep: p.sleep ?? PHYSICS_DEFAULTS.sleep, asleep: p.asleep ?? PHYSICS_DEFAULTS.asleep,
     ...(p.pairsPerBody !== undefined ? { pairsPerBody: p.pairsPerBody } : {}),
   };
 }
@@ -328,6 +347,8 @@ export function checkPhysics(p: PhysicsBlock, where = 'physics'): void {
   if (p.bounce !== undefined && p.bounce !== null && !(p.bounce >= 0 && p.bounce <= 1)) throw new Error(`${where}.bounce must be from 0 to 1, or null for off: ${p.bounce}`);
   if (p.ice !== undefined) checkIce(p.ice, `${where}.ice`);
   if (p.sleep !== undefined && typeof p.sleep !== 'boolean') throw new Error(`${where}.sleep must be true or false: ${p.sleep}`);
+  if (p.asleep !== undefined && typeof p.asleep !== 'boolean') throw new Error(`${where}.asleep must be true or false: ${p.asleep}`);
+  if (p.asleep === true && p.sleep !== true) throw new Error(`${where}.asleep needs ${where}.sleep: true (bodies start asleep only where the engine sleeps)`);
   if (p.sleep === true && p.bounce !== undefined && p.bounce !== null) throw new Error(`${where}.sleep does not go with bounce yet (the restitution pass does not know sleepers): bounce ${p.bounce}`);
 }
 
@@ -341,6 +362,7 @@ function physicsKey(p: PhysicsBlock | undefined): PhysicsBlock | undefined {
   if (p.presettle !== undefined && p.presettle !== PHYSICS_DEFAULTS.presettle) out.presettle = p.presettle;
   if (p.pairsPerBody !== undefined) out.pairsPerBody = p.pairsPerBody;
   if (p.sleep !== undefined && p.sleep !== PHYSICS_DEFAULTS.sleep) out.sleep = p.sleep;
+  if (p.asleep !== undefined && p.asleep !== PHYSICS_DEFAULTS.asleep) out.asleep = p.asleep;
   return Object.keys(out).length ? out : undefined;
 }
 
@@ -451,6 +473,7 @@ export function hashString(s: string): string {
 export function compileLevel(def: LevelDef): CompiledLevel {
   if (def.physics) checkPhysics(def.physics);
   if (def.settle !== undefined) checkSettle(def.settle);
+  if (def.runWindow !== undefined) checkRunWindow(def.runWindow);
   if (def.quake !== undefined) checkQuakeRules(def.quake);
   if (def.heritage !== undefined && def.heritage !== 'pose' && def.heritage !== 'standing') throw new Error(`heritage must be pose or standing: ${String(def.heritage)}`);
   const h = unitOf(def), p = pitchOf(def) * h;
@@ -525,6 +548,8 @@ export function compileLevel(def: LevelDef): CompiledLevel {
   };
   // Bounce: the structure and the ground at e (the engine's restitution pass is turned on from the same block).
   if (bounce !== null) for (const b of bodies) b.restitution = bounce;
+  // physics.asleep: the structure starts asleep (engine-api asleep.ts).
+  if (physicsOf(def).asleep) for (const b of bodies) if (!b.pinned) b.asleep = true;
   const lot = { min: [def.lot.min[0] * p, def.lot.min[1] * p] as [number, number], max: [def.lot.max[0] * p, def.lot.max[1] * p] as [number, number] };
   const frame: ShotFrame = { unit: h, pitch: pitchOf(def), centre: [(lot.min[0] + lot.max[0]) / 2, (lot.min[1] + lot.max[1]) / 2], launcher: def.launcher };
   // Solutions don't change the scene, and the stars are cast against the hash (StarsDef.hash).

@@ -31,6 +31,8 @@ export * from './stroke.ts';
 export * from './build.ts';
 export * from './rube-levels.ts';
 export * from './rube-play.ts';
+export * from './wave-play.ts';
+export * from './wave-levels.ts';
 export * from './mason.ts';
 export * from './mason-judge.ts';
 export * from './mason-levels.ts';
