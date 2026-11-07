@@ -1,6 +1,6 @@
 // W6 Orchard (M6 Lay at 1k, docs/game/wavefront.md) on Rapier: a pre-laid field of 1,021 dominoes forking four times
-// into sixteen bells. The authored run round the wall to the field's trunk rings all sixteen on every one of 30
-// nudged builds (every fork in the field has to hold, every time); nothing built, or a run into the wall, rings
+// into sixteen bells. The authored run round the wall to the field's trunk rings all sixteen on every one of 10
+// nudged builds (30 nightly) (every fork in the field has to hold, every time); nothing built, or a run into the wall, rings
 // none. 150 nudges of both solutions and the parts-par search run with WAVE_SLOW=1 (about 30 minutes here).
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
@@ -9,10 +9,11 @@ import { build } from '../src/rube.ts';
 import { layPar, nudgeClears, steps } from '../src/lay.ts';
 import { LAY_SOLUTIONS } from '../src/lay-solutions.ts';
 
-const SLOW = process.env.WAVE_SLOW === '1';
-// 30 nudges (none may fail) keep the file near 150 s on CI; the 98% claim rests on WAVE_SLOW's 150 of each run
+const SLOW = process.env.WAVE_SLOW === '1', NIGHTLY = process.env.PHYSICS_GPU_SLOW === '1';
+// 10 nudges (none may fail) on a PR keep the file near 2 minutes on a CI runner (30 took 266 to 375 s there, over the
+// per-file budget, O5); the nightly (PHYSICS_GPU_SLOW=1) plays 30. The 98% claim rests on WAVE_SLOW's 150 of each run
 // (150 of 150 clean: at 95% confidence, at least 98.0% of nudges clear; docs/game/wavefront.md).
-const NUDGES = SLOW ? 150 : 30, MAY_FAIL = Math.floor(0.02 * NUDGES);
+const NUDGES = SLOW ? 150 : NIGHTLY ? 30 : 10, MAY_FAIL = Math.floor(0.02 * NUDGES);
 
 describe('W6 Orchard on Rapier', () => {
   it('holds about 1,000 dominoes and sixteen bells', () => {
