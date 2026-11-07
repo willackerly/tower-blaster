@@ -96,7 +96,7 @@ describe('front door', () => {
     expect(await page.locator('.kg-door [data-act="look"]').count()).toBe(0);
     await page.locator('.kg-door [data-act="advanced"]').click();
     await page.locator('.kg-door [data-act="look"][data-arg="real"]').click();
-    await page.locator('.kg-door [data-act="sound"]').click();
+    await page.locator('.kg-door [data-act="sound"][data-arg="off"]').click();
     await page.locator('.kg-door [data-act="sharp"][data-arg="1"]').click();
     // Camera: still by default; Dynamic turns the follow and the shake on at once, over the URL's keystone.shake=0, which goes.
     expect(await page.locator('.kg-door [data-act="camera"].on').innerText()).toBe('Still');
@@ -145,7 +145,7 @@ describe('front door', () => {
     await page.waitForFunction(() => window.__game?.status === 'running', undefined, { timeout: MINUTES });
     await page.locator('.kg-door [data-act="advanced"]').click();
     expect(await page.locator('.kg-door [data-act="look"].on').innerText()).toBe('Photoreal');
-    expect(await page.locator('.kg-door [data-act="sound"]').innerText()).toBe('Off');
+    expect(await page.locator('.kg-door [data-act="sound"].on').innerText()).toBe('Off');
     expect(await page.locator('.kg-door [data-act="camera"].on').innerText()).toBe('Dynamic');
     expect(await page.evaluate(() => window.__game.feel)).toMatchObject({ follow: true, shake: true, rapid: false, turnView: false });
     expect(await page.locator('.kg-door [data-act="duelview"].on').innerText()).toBe('Leave it');
@@ -178,7 +178,9 @@ describe('trials on the door', () => {
     expect(await page.locator('.kg-door .card.trial').count()).toBe(0);
     await page.locator('.kg-door [data-act="trials"]').click();
     expect(await page.locator('.kg-door .card.trial').count()).toBe(TRIAL_LEVELS.length);
-    expect(await page.locator('.kg-door .card.trial .id').allInnerTexts()).toEqual(TRIAL_LEVELS.map((d) => d.id));
+    // Each card shows the trial's number (PT18) and carries its id.
+    expect(await page.locator('.kg-door .card.trial .id').allInnerTexts()).toEqual(TRIAL_LEVELS.map((_, i) => `Trial ${i + 1}`));
+    expect(await page.locator('.kg-door .card.trial').evaluateAll((cs) => cs.map((c) => (c as HTMLElement).dataset.id))).toEqual(TRIAL_LEVELS.map((d) => d.id));
     // Play still offers the first rated level, not a trial.
     expect(await page.locator('.kg-door .play').innerText()).toBe(`Play · ${B1.name}`);
     await page.locator('.kg-door .card[data-id="T-X1"]').click();
