@@ -8,7 +8,7 @@ import { quatAngle } from '@tb/geom';
 import { GRAVITY, MATERIALS, ROLES } from './materials.ts';
 
 const ROLE_HERITAGE = ROLES.indexOf('heritage');
-import type { CompiledLevel, LevelDef } from './level.ts';
+import type { CompiledLevel, LevelDef, LevPoints } from './level.ts';
 
 export const HEIGHT_BINS = 64;
 export const BANDS = 8;
@@ -66,6 +66,25 @@ export function checkRunWindow(s: unknown, where = 'runWindow'): number {
 }
 /** A run window of `seconds` in steps of dt. */
 export const runWindowSteps = (seconds: number, dt: number) => Math.round(seconds / dt);
+/**
+ * A level's own end condition (LevelDef.end, agent playtest PT32): when the mode's job is done, the shot settles
+ * `after` seconds later, whatever the settle rule says of the bodies still moving. One kind so far: 'rung', every
+ * bell of a bell objective rung (Rube Lab). A bell stays rung, so the outcome is decided at the ring; the wait lets the
+ * player see it. It is one more way the settle rule settles (settleUpdate's `done`), never a second settle path, and
+ * it never settles before SETTLE_MIN or during a flight or a hold; the cap still ends a run that never rings.
+ */
+export interface LevelEnd { on: 'rung'; after: number }
+/** The longest end wait, seconds: the 10 s par cap (SETTLE_CAP at 60 Hz). */
+export const END_AFTER_MAX = 10;
+/** Throws unless e is a LevelEnd for a level whose objective is `objective` (a 'rung' end needs a bell objective), naming `where`. */
+export function checkEnd(e: unknown, objective: string, where = 'end'): LevelEnd {
+  const o = e as Partial<LevelEnd> | null;
+  if (!o || typeof o !== 'object' || o.on !== 'rung') throw new Error(`${where}.on must be rung: ${JSON.stringify(e)}`);
+  if (Object.keys(o).some((k) => k !== 'on' && k !== 'after')) throw new Error(`${where} takes only on and after: ${JSON.stringify(e)}`);
+  if (typeof o.after !== 'number' || !Number.isFinite(o.after) || o.after < 0 || o.after > END_AFTER_MAX) throw new Error(`${where}.after must be seconds from 0 to ${END_AFTER_MAX}: ${String(o.after)}`);
+  if (objective !== 'bell') throw new Error(`${where}.on rung needs a bell objective, not ${objective}`);
+  return { on: 'rung', after: o.after };
+}
 /** Settle v3's frozen structure: no live body faster than this (m/s; any fall passes it within 0.05 s), */
 export const FROZEN_SPEED = 0.5;
 /** for this many steps, */
@@ -100,15 +119,15 @@ export interface Reductions {
   maxAngSpeed: number;
   /** Potential energy of the structure, sum of round(m g y * 1000) in index order. */
   pe_mJ: number;
-  /** The part of pe_mJ that is heritage's (a fold level's collapse is the building's: outcome.ts buildingOnly). */
-  peHeritage_mJ: number;
+  /** The part of pe_mJ outside the building (asideOf: heritage and props; a fold level's collapse is the building's: outcome.ts buildingOnly). */
+  peAside_mJ: number;
   /** Structure bodies more than DISPLACED h from the shot baseline. */
   displaced: number;
   /** Structure bodies whose centre is outside the lot grown by 0.5 h. */
   outOfLot: number;
   /**
    * Fuse & Fold's spill, in integer grams (docs/game/fuse-and-fold.md): the building's mass (structure bodies
-   * that are not heritage and not removed) and the part of it whose centre is outside the lot grown by 0.5 h.
+   * that are not aside, asideOf, and not removed) and the part of it whose centre is outside the lot grown by 0.5 h.
    * spillOf divides them: C11's spill (footprint.ts) with the lot as the target mask.
    */
   mass_g: number;
@@ -181,13 +200,34 @@ export function ammoInFlight(c: CompiledLevel, contact: boolean, y: number, spee
   return !contact && speed >= QUIET_SPEED && y > rest + 0.05 * c.frame.unit;
 }
 
+/** Part kinds whose bodies are props, not building: the pieces, domino runs and balls a level or a player places (M5b's fuses). */
+const PROP_KINDS: ReadonlySet<string> = new Set(['piece', 'run', 'ball']);
+/** Whether body i of a fold level is a prop (PROP_KINDS), which its building, collapse, spill and weapon scale (arsenal.ts levelBlock) leave out. */
+export const foldProp = (c: CompiledLevel, i: number): boolean => c.def.objective.kind === 'fold' && PROP_KINDS.has(c.def.parts[c.meta.part[i]!]!.kind);
+const asides = new WeakMap<CompiledLevel, Uint8Array>();
+
+/**
+ * Per structure body, 1 where a fold level's building leaves it out (outcome.ts buildingOnly): heritage, which stands
+ * outside it, and props (PROP_KINDS: a domino fuse's lead, run and socket, M5b). Collapse, spill and the building's
+ * mass read the rest. Shipped fold levels F1 to F5 have no props, so their numbers are as before.
+ */
+export function asideOf(c: CompiledLevel): Uint8Array {
+  let a = asides.get(c);
+  if (a) return a;
+  const m = c.meta;
+  a = new Uint8Array(m.n);
+  for (let i = 0; i < m.n; i++) a[i] = m.role[i] === ROLE_HERITAGE || PROP_KINDS.has(c.def.parts[m.part[i]!]!.kind) ? 1 : 0;
+  asides.set(c, a);
+  return a;
+}
+
 export function reduceCpu(s: Snapshot, prevLinVel: Float64Array | null, c: CompiledLevel, base: Baseline, step: number): Reductions {
   const { meta: m } = c, h = c.frame.unit, dt = c.scene.dt;
   const r: Reductions = {
-    step, nAwake: 0, maxSpeed: 0, maxAngSpeed: 0, pe_mJ: 0, peHeritage_mJ: 0, displaced: 0, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(HEIGHT_BINS), impacts: new Uint32Array(MATERIALS.length * BANDS),
+    step, nAwake: 0, maxSpeed: 0, maxAngSpeed: 0, pe_mJ: 0, peAside_mJ: 0, displaced: 0, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(HEIGHT_BINS), impacts: new Uint32Array(MATERIALS.length * BANDS),
     nMoving: 0, movingBox: Float64Array.of(Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity), ammoSpeed: 0,
   };
-  const top = Math.max(c.height, 1e-9);
+  const top = Math.max(c.height, 1e-9), aside = asideOf(c);
   for (let i = 0; i < s.count; i++) {
     const structure = i < m.n;
     if (!structure && !ammoLive(c, s, i)) continue;
@@ -213,12 +253,12 @@ export function reduceCpu(s: Snapshot, prevLinVel: Float64Array | null, c: Compi
     const x = s.pos[3 * i]!, y = s.pos[3 * i + 1]!, z = s.pos[3 * i + 2]!;
     const pe = peOf_mJ(m.mass[i]!, y);
     r.pe_mJ += pe;
-    if (m.role[i] === ROLE_HERITAGE) r.peHeritage_mJ += pe;
+    if (aside[i]) r.peAside_mJ += pe;
     const dx = x - base.pos[3 * i]!, dy = y - base.pos[3 * i + 1]!, dz = z - base.pos[3 * i + 2]!;
     if (dx * dx + dy * dy + dz * dz > (DISPLACED * h) ** 2) r.displaced++;
     const out = outsideLot(c, x, z, 0.5 * h);
     if (out) r.outOfLot++;
-    if (m.role[i] !== ROLE_HERITAGE && s.tier?.[i] !== TIER_FREE) {
+    if (!aside[i] && s.tier?.[i] !== TIER_FREE) {
       const g = Math.round(m.mass[i]! * 1000);
       r.mass_g += g;
       if (out) r.spill_g += g;
@@ -274,8 +314,8 @@ export class CpuObserver {
 
 // ---- Settling ----
 
-/** quietSince: the first step of the current quiet run. v3's frozen run: its first step and the D and displaced count there. */
-export interface SettleState { quietSince: number | null; frozenSince?: number | null; frozenD?: number; frozenDisplaced?: number; steadySince?: number | null; steadyD?: number }
+/** quietSince: the first step of the current quiet run. v3's frozen run: its first step and the D and displaced count there. doneSince: the first step of the level's end condition's current run (LevelEnd). */
+export interface SettleState { quietSince: number | null; frozenSince?: number | null; frozenD?: number; frozenDisplaced?: number; steadySince?: number | null; steadyD?: number; doneSince?: number | null }
 
 /** Whether one observed state counts as quiet under `rule`, for a structure of n bodies (`wave`: under a run window, no stragglers). */
 export function quietUnder(rule: SettleRule, r: Reductions, n: number, wave = false): boolean {
@@ -310,10 +350,12 @@ export const settleHeld = (rule: SettleRule, inFlight: boolean, hold: boolean): 
  * at rest before the ammo arrives (asleep on Rapier, nothing awake) settled a far shot 20 steps after
  * the launch with the ball still in the air (agent playtest PT10). `window`: a wave level's run window in steps
  * (runWindowSteps), the cap instead of the rule's, with the settle waiting for the front to die (RUN_WINDOW_MAX's note).
+ * `done`: the level's end condition (LevelEnd, Session.observe): whether it holds now, and how many steps after it first
+ * held (in an unbroken run) the shot settles; a flight or a hold restarts the run.
  */
-export function settleUpdate(st: SettleState, r: Reductions, spawnStep: number, rule: SettleRule = 'v1', n = 0, d = 0, inFlight = false, window?: number): { state: SettleState; settled: boolean } {
+export function settleUpdate(st: SettleState, r: Reductions, spawnStep: number, rule: SettleRule = 'v1', n = 0, d = 0, inFlight = false, window?: number, done?: { met: boolean; steps: number }): { state: SettleState; settled: boolean } {
   const cap = settleCap(rule, window), wave = window !== undefined;
-  if (inFlight) return { state: rule === 'v4' ? { quietSince: null, frozenSince: null, steadySince: null } : rule === 'v3' ? { quietSince: null, frozenSince: null } : { quietSince: null }, settled: r.step - spawnStep >= cap };
+  if (inFlight) return { state: { ...(rule === 'v4' ? { quietSince: null, frozenSince: null, steadySince: null } : rule === 'v3' ? { quietSince: null, frozenSince: null } : { quietSince: null }), ...(done ? { doneSince: null } : {}) }, settled: r.step - spawnStep >= cap };
   const quiet = quietUnder(rule, r, n, wave);
   const quietSince = quiet ? (st.quietSince ?? r.step) : null;
   const old = r.step - spawnStep;
@@ -334,7 +376,13 @@ export function settleUpdate(st: SettleState, r: Reductions, spawnStep: number, 
     state.steadyD = keep ? st.steadyD : d;
     if (state.steadySince != null && r.step - state.steadySince + 1 >= STEADY_STEPS) frozen = true;
   }
-  const settled = old >= cap || (old >= SETTLE_MIN && (r.nAwake === 0 || frozen || (quietSince !== null && r.step - quietSince + 1 >= SETTLE_QUIET)));
+  let ended = false;
+  if (done) {
+    // The level's end condition (LevelEnd): a run of steps on which it holds, settling `steps` steps after it began.
+    state.doneSince = done.met ? (st.doneSince ?? r.step) : null;
+    ended = state.doneSince !== null && r.step - state.doneSince >= done.steps;
+  }
+  const settled = old >= cap || (old >= SETTLE_MIN && (r.nAwake === 0 || frozen || ended || (quietSince !== null && r.step - quietSince + 1 >= SETTLE_QUIET)));
   return { state, settled };
 }
 
@@ -409,6 +457,38 @@ export function roundLeverage(shots: readonly Pick<ShotOutcome, 'ke' | 'yield' |
   for (const o of shots) released += o.dPE_mJ;
   return leverage(released, energyFired(shots));
 }
+
+/** Leverage points under the 'log' rule (LEV_POINTS): w log2(1 + L) on the round's leverage L, floored. */
+export const logLeveragePoints = (L: number, w = 300) => Math.floor(w * Math.log2(1 + Math.max(0, L)));
+/** The 'share' rule's points for a shot that brings everything down at its level's gold line... */
+export const SHARE_POINTS = 500;
+/** ...and the most a shot's leverage can multiply them by (log2(1 + L / line), reached at 3x the line: Elegant). */
+export const SHARE_CAP = 2;
+
+/**
+ * A round's Leverage line (docs/game/scoring.md; PT31, agreed with the scoring owner). 'log': logLeveragePoints on
+ * roundLeverage, as every level scored before PT31. 'share': per shot, SHARE_POINTS x min(SHARE_CAP, log2(1 + L_i /
+ * line)) x f_i, where L_i is the shot's own leverage (ShotOutcome.leverage), `line` the level's gold line and f_i the
+ * shot's share of what could fall: its dPE over `span_mJ` (PE(B0) - PE_floor, collapseFraction's span), clamped at 0
+ * and so that the shares never sum past 1. So a shot that brings nothing down adds 0, the line is at most
+ * SHARE_POINTS x SHARE_CAP = 1,000 for any sequence, and a pull (no energy fired, leverage 0) adds 0: its fall pays
+ * on the Collapse line. Floored. `w`: the 'log' weight (par 300; outcome OUTCOME_WEIGHTS.leverage).
+ */
+export function leveragePoints(shots: readonly Pick<ShotOutcome, 'ke' | 'yield' | 'dPE_mJ' | 'leverage'>[], line: number, span_mJ: number, mode: LevPoints, w = 300): number {
+  if (mode === 'log') return logLeveragePoints(roundLeverage(shots), w);
+  if (!(span_mJ > 0) || !(line > 0)) return 0;
+  let left = 1, points = 0;
+  for (const o of shots) {
+    const f = Math.min(left, Math.max(0, o.dPE_mJ / span_mJ));
+    if (!(f > 0)) continue;
+    left -= f;
+    points += SHARE_POINTS * Math.min(SHARE_CAP, Math.log2(1 + Math.max(0, o.leverage) / line)) * f;
+  }
+  return Math.floor(points);
+}
+
+/** The line a level's 'share' leverage points are measured against: its gold line, else DEFAULT_GOLD (an outcome level without lGold has no badge, but the share still needs a scale). */
+export const shareLine = (def: LevelDef): number => levelGoldLine(def) ?? DEFAULT_GOLD;
 
 /** The energy fired over `shots`, J (each one's ke + yield): what roundLeverage divides by, and the energy star metric. */
 export function energyFired(shots: readonly Pick<ShotOutcome, 'ke' | 'yield'>[]): number {
@@ -485,7 +565,8 @@ export interface LevelScore {
   freezes?: { used: number; total: number };
   /**
    * Levels judged in many jittered worlds (Mason's Trial; Chorus): `cleared` of `of` worlds passed, and the worlds
-   * one, two and three stars need (`thresholds`, counts), so the card shows "c of K" once. Absent elsewhere.
+   * one, two and three stars need (`thresholds`, counts), so the card shows "c of K" once, and neither a gold badge
+   * nor a leverage tier (a Chorus round's leverage is world 0's, shown as information). Absent elsewhere.
    */
   worlds?: { cleared: number; of: number; thresholds: readonly [number, number, number] };
   /** Mason's Trial (LevelDef.mason): the build budget left and the budget, for the card's budget line. Absent elsewhere. */
@@ -584,7 +665,7 @@ export function masonThresholds(K: number, left: number, budget: number, stars: 
 
 /**
  * A Mason level's score from its judge (passes of K worlds) and the build's cost (build.ts placedCost): the two
- * lines, stars on their total (masonStars), the stamp ROBUST or WOBBLY, the shared worlds field and the budget.
+ * lines, stars on their total (masonStars), the stamp ROBUST (every world), STANDS (cleared) or WOBBLY, the shared worlds field and the budget.
  * No leverage, no gold and no heritage star loss: the heritage is the pass rule's.
  */
 export function masonScore(def: LevelDef, passes: number, K: number, spent: number): LevelScore {
@@ -603,9 +684,10 @@ export const partsStamp = (spent: number, partsPar: number) => (spent <= partsPa
  * A level's score at its end. `spent`: the build's cost (build.ts placedCost), read on a Rube Lab level
  * on a level with a parts par (def.build.par): there the stars are partsStars on it, less one for any
  * heritage broken (never under one), the stamp is partsStamp, the score carries `parts`, and there is no
- * gold (a contraption's one plunger is not a stroke to beat).
+ * gold (a contraption's one plunger is not a stroke to beat). `span_mJ`: what could fall (PE(B0) - PE_floor), read by
+ * the 'share' leverage points rule (leveragePoints) only.
  */
-export function levelScore(def: LevelDef, shots: ShotOutcome[], cleared: boolean, structureCount: number, spent = 0): LevelScore {
+export function levelScore(def: LevelDef, shots: ShotOutcome[], cleared: boolean, structureCount: number, spent = 0, span_mJ = 0): LevelScore {
   const s = shots.length, par = parWithFreezes(def, shots);
   const L = roundLeverage(shots);
   const cmax = Math.min(12, Math.max(0, ...shots.map((o) => o.crownsDown)));
@@ -613,7 +695,7 @@ export function levelScore(def: LevelDef, shots: ShotOutcome[], cleared: boolean
   const lines: ScoreLine[] = [
     // Stroke points reward a clear in few strokes: none for a round that did not clear (PT16).
     { label: 'Strokes', value: cleared ? 1000 * Math.max(0, par + 3 - s) : 0 },
-    { label: 'Leverage', value: Math.floor(300 * Math.log2(1 + L)) },
+    { label: 'Leverage', value: leveragePoints(shots, shareLine(def), span_mJ, def.levPoints ?? 'log') },
     { label: 'Combo', value: (50 * cmax * (cmax + 1)) / 2 },
   ];
   if (cleared && s === 1 && par >= 2) lines.push({ label: 'Ace', value: 2000 });

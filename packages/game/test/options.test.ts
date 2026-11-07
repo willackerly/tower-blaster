@@ -74,7 +74,8 @@ describe('the option registry', () => {
     const now: Settings = { ...DEFAULT_SETTINGS, sound: true };
     // [act, arg, the change door-page.ts made at 1d7158e]
     const cases: [string, string, Partial<Settings>][] = [
-      ['sound', '', { sound: false }],
+      // Sound was one toggle ('' flipped it); PT37 made it an On/Off pair.
+      ['sound', 'on', { sound: true }], ['sound', 'off', { sound: false }],
       ['look', 'hazy', { look: 'hazy' }], ['look', 'real', { look: 'real' }], ['look', 'candy', { look: 'candy' }],
       ['sharp', '1', { sharp: 1 }], ['sharp', '2', { sharp: 2 }],
       ['quality', 'auto', { quality: 'auto' }], ['quality', 'high', { quality: 'high' }], ['quality', 'mid', { quality: 'mid' }], ['quality', 'low', { quality: 'low' }],
@@ -82,6 +83,7 @@ describe('the option registry', () => {
       ['rapid', 'on', { rapid: true }], ['rapid', 'off', { rapid: false }],
       ['duelview', 'on', { duelView: true }], ['duelview', 'off', { duelView: false }],
       ['handoff', 'on', { handoff: true }], ['handoff', 'off', { handoff: false }],
+      ['duellead', 'on', { duelLead: true }], ['duellead', 'off', { duelLead: false }],
       ['launch', 'high', { launch: 'high' }], ['launch', 'level', { launch: 'level' }],
       ['fireside', 'behind', { fireSide: 'behind' }], ['fireside', 'side', { fireSide: 'side' }],
       ['marks', 'on', { marks: true }], ['marks', 'off', { marks: false }],
@@ -91,12 +93,12 @@ describe('the option registry', () => {
       ['layout', 'docked', { layout: 'docked' }], ['layout', 'classic', { layout: 'classic' }],
     ];
     for (const [act, arg, want] of cases) expect(doorChange(act, arg, now), `${act} ${arg}`).toEqual(want);
-    expect(doorChange('sound', '', { ...now, sound: false })).toEqual({ sound: true });
+    expect(doorChange('sound', '', { ...now, sound: false })).toBeNull(); // a pair now: a click names its side
     // Every button the door draws is one of these, and nothing else on the door is a setting.
     const html = settingRows(DEFAULT_SETTINGS, { detected: 'mid', esc: (s) => s }).join('');
     const drawn = [...html.matchAll(/data-act="([a-z]+)"(?: data-arg="([^"]*)")?/g)].map((m) => `${m[1]} ${m[2] ?? ''}`);
     expect(drawn.sort()).toEqual(cases.map(([a, g]) => `${a} ${g}`).sort());
-    for (const act of ['level', 'close', 'how', 'advanced', 'trials', 'reset', 'duel', undefined]) expect(doorChange(act, '', now)).toBeNull();
+    for (const act of ['level', 'close', 'how', 'howmode', 'advanced', 'developer', 'trials', 'reset', 'reset-yes', 'reset-no', 'duel', undefined]) expect(doorChange(act, '', now)).toBeNull();
     expect(doorChange('quality', 'ultra', now)).toBeNull();
   });
 });

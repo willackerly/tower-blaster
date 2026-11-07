@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Vec3 } from '@tb/engine-api';
 import {
-  axisOf, BALL_RADIUS, bellRung, BuildSession, catalog, compileLevel, type Hit, type LevelDef, pieceQuat, RAMP_HALF, RAMP_TILT, rampTo, RL1, RL2, RL3, RUBE_GATE, partsStars,
+  axisOf, BALL_RADIUS, bellRung, BuildSession, catalog, compileLevel, type Hit, type LevelDef, pieceQuat, RAMP_HALF, RAMP_TILT, rampTo, RL1, RL2, RL3, RUBE_END_AFTER, RUBE_GATE, RUBE_LEVELS, partsStars,
   Session, validateLevel, yawQuat,
 } from '@tb/keystone';
 
@@ -92,7 +92,7 @@ describe('bell', () => {
     const w = (x: number) => ({ idx: Int32Array.from([2]), pos: Float64Array.from([x, h, 0]), rot: Float64Array.from([0, 0, 0, 1]), linVel: new Float64Array(3), angVel: new Float64Array(3) });
     type Obs = Parameters<Session['observe']>[0];
     const red = (step: number, moving: boolean): Obs['red'] => ({
-      step, nAwake: moving ? 1 : 0, maxSpeed: moving ? 1 : 0, maxAngSpeed: 0, pe_mJ: 0, peHeritage_mJ: 0, displaced: 0, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(8), impacts: new Uint32Array(48),
+      step, nAwake: moving ? 1 : 0, maxSpeed: moving ? 1 : 0, maxAngSpeed: 0, pe_mJ: 0, peAside_mJ: 0, displaced: 0, outOfLot: 0, mass_g: 0, spill_g: 0, heightHist: new Uint32Array(8), impacts: new Uint32Array(48),
       nMoving: moving ? 1 : 0, movingBox: new Float64Array(6), ammoSpeed: 0,
     });
     s.fire({ ammo: 'plunger', fuse: [[0, 0]] }, 300);
@@ -155,6 +155,13 @@ describe('the bin: ramp, bumper and ball', () => {
 describe('stars', () => {
   it('3 at or under the parts par, 2 within half again, 1 for any clear, 0 uncleared', () => {
     expect([partsStars(true, 2, 3), partsStars(true, 3, 3), partsStars(true, 5, 3), partsStars(true, 6, 3), partsStars(false, 1, 3)]).toEqual([3, 3, 2, 1, 0]);
+  });
+  it('every Rube Lab level ends 1.5 s after its bell rings (PT32); the end is in the hash and needs a bell objective', () => {
+    for (const d of RUBE_LEVELS) expect(d.end, d.id).toEqual({ on: 'rung', after: RUBE_END_AFTER });
+    const { end: _end, ...bare } = RL1;
+    expect(compileLevel(bare).hash).not.toBe(compileLevel(RL1).hash);
+    expect(new Session(compileLevel(RL1)).endSteps).toBe(90);
+    expect(() => compileLevel({ ...bare, objective: { kind: 'collapse', min: 0.2 }, end: { on: 'rung', after: 1 } })).toThrow(/needs a bell objective/);
   });
   it('the parts par is in the level hash: a retuned par is a new level for progress records', () => {
     expect(compileLevel({ ...RL1, build: { ...RL1.build, par: 3 } }).hash).not.toBe(compileLevel(RL1).hash);

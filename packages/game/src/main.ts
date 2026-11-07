@@ -25,8 +25,9 @@ import { helpHtml, installGameStyles } from './ui.ts';
 import { goalsMode, sheetMode, sheetOpenAtLoad } from './lot-hud.ts';
 import { layoutOf } from './layout.ts';
 import { touchMode } from './touch.ts';
+import { ChorusPanel } from './chorus-view.ts';
 
-declare global { interface Window { __game: GameHandle; __progress: ProgressStore; __door: DoorPage } }
+declare global { interface Window { __game: GameHandle; __progress: ProgressStore; __door: DoorPage; __chorus: ChorusPanel } }
 
 const $ = (id: string) => document.getElementById(id)!;
 const canvas = $('c') as HTMLCanvasElement, errorEl = $('error');
@@ -35,8 +36,8 @@ window.__game = handle;
 installGameStyles();
 // The hint line; ? (or its button) shows every key, and again goes back.
 const help = $('help');
-let allKeys = false;
-const showHelp = (all: boolean) => { allKeys = all; help.innerHTML = helpHtml(all); };
+let allKeys = false, inDuel = false;
+const showHelp = (all: boolean) => { allKeys = all; help.innerHTML = helpHtml(all, inDuel); };
 showHelp(false);
 help.addEventListener('click', (e) => { if ((e.target as HTMLElement).closest('button')?.dataset.act === 'keys') showHelp(!allKeys); });
 addEventListener('keydown', (e) => { if (e.key === '?' && !(e.target instanceof HTMLInputElement)) showHelp(!allKeys); });
@@ -67,6 +68,8 @@ async function main() {
   feelFromSettings(feel, q, settings.current);
   // A duel is one shot per turn, so it never fires mid-shot whatever the Rapid fire setting says.
   if (duel) feel.rapid = false;
+  // A duel's hint line has no undo or restart (PT34).
+  if (duel) { inDuel = true; showHelp(allKeys); }
   // Where the HUD and the result card sit (layout.ts): the URL's keystone.hud / card / carddelay where they say, else the Layout setting.
   // One object, read live by the game; the HUD's kg-dock class docks it on a phone (ui.ts DOCK_CSS).
   const layout = layoutOf(q, settings.current.layout);
@@ -159,6 +162,9 @@ async function main() {
   let shown = duel ? duelLevelId(duel, 0) : level.id;
   // How this attempt's round ended, for Save session. Its shots are the session's (after an undo, the kept ones and those since).
   let ended: SessionFacts | null = null, banked = false;
+  // A Chorus level's other worlds (chorus-view.ts), beside the hero world: hidden on every other level.
+  const chorus = new ChorusPanel(document.body, () => feel.chorusView);
+  window.__chorus = chorus;
   await playKeystone({
     canvas, offscreen, offscreenSize, device, renderer, source, hud: $('hud'), banner: $('banner'), result: $('result'),
     levels: played, start: duel ? 0 : start, ...(duel ? {} : { series: seriesIdx, seriesForward: (i: number) => seriesForward(seriesIdx, i, levels) }),
@@ -176,9 +182,10 @@ async function main() {
     opener: (c) => duel ? null : openerFor(c.def, inSeries(c.def.id), preaim, progress.best(c.def.id, c.baseHash) !== null),
     hooks: {
       // The URL follows the level, keeping the other keys; a line and a rack are the level's they were made for.
-      loaded: (c) => {
+      loaded: (c, d) => {
         ended = null;
         banked = false;
+        chorus.attach(d.engine, c);
         if (c.def.id === shown || duel) return;
         shown = c.def.id;
         const u = new URLSearchParams(location.search);
@@ -191,7 +198,9 @@ async function main() {
         history.replaceState(null, '', `?${u}`);
       },
       banked: () => { banked = true; },
+      stepped: () => chorus.tick(),
       ended: (c, score, d) => {
+        chorus.end();
         if (!c.def.custom) progress.record(c.def.id, c.baseHash, score, undefined, handle.goals.filter((g) => g.met).map((g) => g.id));
         const shots: Shot[] = d.session.inputs.map((x) => ({ ...x.shot }));
         ended = { level: c.def.id, hash: c.hash, custom: Boolean(c.def.custom), engine, adapter: adapterName, shots, banked, score };

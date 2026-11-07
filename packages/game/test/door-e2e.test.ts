@@ -7,7 +7,7 @@
 // every series is listed, and a trial picked from the Trials toggle loads in
 // place (no page load), with N and P walking the trials only.
 import { describe, expect, it } from 'vitest';
-import { AFTERSHOCK_LEVELS, B1, FUSE_LEVELS, L1, type Shot, TRIAL_LEVELS, WAVE_LEVELS, writeShots } from '@tb/keystone';
+import { AFTERSHOCK_LEVELS, B1, CHORUS_LEVELS, FOLD_SERIES, L1, MASON_LEVELS, type Shot, TRIAL_LEVELS, WAVE_LEVELS, writeShots } from '@tb/keystone';
 import { DEFAULT_SETTINGS, doorChange, type Settings } from '../src/settings.ts';
 import { gamePage } from './page.ts';
 
@@ -33,8 +33,8 @@ describe('front door', () => {
     if (!o) return ctx.skip();
     const { page, errors } = o;
     expect(await page.evaluate(() => window.__door.open)).toBe(true);
-    // Every rated level (B1-B3, L1-L5, U1-U3, RL1-RL5, F1 on, A1 on, W3 on); the trials wait behind their toggle.
-    expect(await page.locator('.kg-door .card:not(.duel)').count()).toBe(16 + FUSE_LEVELS.length + AFTERSHOCK_LEVELS.length + WAVE_LEVELS.length);
+    // Every rated level (B1-B3, L1-L5, U1-U3, RL1-RL5, F1 on, A1 on, W3 on, MT1 on, CH1 on); the trials wait behind their toggle.
+    expect(await page.locator('.kg-door .card:not(.duel)').count()).toBe(16 + FOLD_SERIES.length + AFTERSHOCK_LEVELS.length + WAVE_LEVELS.length + MASON_LEVELS.length + CHORUS_LEVELS.length);
     expect(await page.locator('.kg-door [data-act="trials"]').innerText()).toBe(`TRIALS · UNRATED (${TRIAL_LEVELS.length}) ▸`);
     expect(await page.locator('.kg-door .card.duel').count()).toBe(2);
     expect(await page.locator('.kg-door .play').innerText()).toBe('Play · Long Wall');
@@ -71,8 +71,8 @@ describe('front door', () => {
     expect(await page.evaluate(() => window.__door.open)).toBe(false);
     await page.keyboard.press('Escape');
     expect(await page.evaluate(() => window.__door.open)).toBe(true);
-    // Every series, the slice first: B1 to B3, L1 to L5, U1 to U3, RL1 to RL5, then Fuse & Fold, Aftershock and Wavefront; L1 is the loaded one.
-    expect(await page.locator('.kg-door .card:not(.duel) .id').allInnerTexts()).toEqual(['B1', 'B2', 'B3', 'L1', 'L2', 'L3', 'L4', 'L5', 'U1', 'U2', 'U3', 'RL1', 'RL2', 'RL3', 'RL4', 'RL5', ...FUSE_LEVELS.map((d) => d.id), ...AFTERSHOCK_LEVELS.map((l) => l.id), ...WAVE_LEVELS.map((l) => l.id)]);
+    // Every series, the slice first: B1 to B3, L1 to L5, U1 to U3, RL1 to RL5, then Fuse & Fold, Aftershock, Wavefront, Mason's Trial and Chorus; L1 is the loaded one.
+    expect(await page.locator('.kg-door .card:not(.duel) .id').allInnerTexts()).toEqual(['B1', 'B2', 'B3', 'L1', 'L2', 'L3', 'L4', 'L5', 'U1', 'U2', 'U3', 'RL1', 'RL2', 'RL3', 'RL4', 'RL5', ...FOLD_SERIES.map((d) => d.id), ...AFTERSHOCK_LEVELS.map((l) => l.id), ...WAVE_LEVELS.map((l) => l.id), ...MASON_LEVELS.map((l) => l.id), ...CHORUS_LEVELS.map((l) => l.id)]);
     expect(await page.locator('.kg-door .card.current .id').innerText()).toBe('L1');
     await page.keyboard.press('Escape');
     expect(await page.evaluate(() => window.__door.open)).toBe(false);
@@ -103,6 +103,10 @@ describe('front door', () => {
     // The settings sit behind Advanced settings, closed until it is clicked.
     expect(await page.locator('.kg-door [data-act="look"]').count()).toBe(0);
     await page.locator('.kg-door [data-act="advanced"]').click();
+    // PT37: six settings show; the rest wait under Developer settings, opened here to reach them all.
+    expect(await page.locator('.kg-door .advanced .group').count()).toBe(6);
+    expect(await page.locator('.kg-door [data-act="marks"]').count()).toBe(0);
+    await page.locator('.kg-door [data-act="developer"]').click();
     // Each setting clicked, and what it changes by its option's door row (settings.ts doorChange): what is stored after.
     const changed: Partial<Settings> = {};
     const pick = async (act: string, arg = '') => {
@@ -110,7 +114,7 @@ describe('front door', () => {
       Object.assign(changed, doorChange(act, arg, { ...DEFAULT_SETTINGS, ...changed }));
     };
     await pick('look', 'real');
-    await pick('sound');
+    await pick('sound', 'off');
     await pick('sharp', '1');
     // Camera: still by default; Dynamic turns the follow and the shake on at once, over the URL's keystone.shake=0, which goes.
     expect(await page.locator('.kg-door [data-act="camera"].on').innerText()).toBe('Still');
@@ -158,8 +162,9 @@ describe('front door', () => {
     await page.goto(game.url('/?level=L1&engine=rapier&offscreen=1&door=1'));
     await page.waitForFunction(() => window.__game?.status === 'running', undefined, { timeout: MINUTES });
     await page.locator('.kg-door [data-act="advanced"]').click();
+    await page.locator('.kg-door [data-act="developer"]').click();
     expect(await page.locator('.kg-door [data-act="look"].on').innerText()).toBe('Photoreal');
-    expect(await page.locator('.kg-door [data-act="sound"]').innerText()).toBe('Off');
+    expect(await page.locator('.kg-door [data-act="sound"].on').innerText()).toBe('Off');
     expect(await page.locator('.kg-door [data-act="camera"].on').innerText()).toBe('Dynamic');
     expect(await page.evaluate(() => window.__game.feel)).toMatchObject({ follow: true, shake: true, rapid: false, turnView: false });
     expect(await page.locator('.kg-door [data-act="duelview"].on').innerText()).toBe('Leave it');
@@ -170,10 +175,14 @@ describe('front door', () => {
     const l1 = page.locator('.kg-door .card[aria-label^="L1 "]');
     expect(await l1.innerText()).toContain('1 play');
     expect(await l1.locator('li.got').count()).toBe(stars);
-    // Forget my progress takes two clicks.
+    // Forget my progress asks first (PT37): Keep backs out, Forget forgets.
+    await page.locator('.kg-door [data-act="reset"]').click();
+    await page.locator('.kg-door [data-act="reset-no"]').click();
+    expect(await l1.innerText()).toContain('1 play');
+    expect(await page.locator('.kg-door [data-act="reset-yes"]').count()).toBe(0);
     await page.locator('.kg-door [data-act="reset"]').click();
     expect(await l1.innerText()).toContain('1 play');
-    await page.locator('.kg-door [data-act="reset"]').click();
+    await page.locator('.kg-door [data-act="reset-yes"]').click();
     expect(await l1.innerText()).toContain('Not played yet');
     expect(errors).toEqual([]);
     await page.close();

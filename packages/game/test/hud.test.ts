@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { B1, B2, compileLevel, levelGoldLine, L1, L2, L3, L4, L5, levelScore, outcomeScore, RL1, type ShotOutcome, U3, W3, W5 } from '@tb/keystone';
+import { B1, B2, compileLevel, levelGoldLine, L1, L2, L3, L4, L5, levelScore, masonScore, MT4, outcomeScore, RL1, type ShotOutcome, U3, W3, W5, type ChorusJudgement, chorusScore } from '@tb/keystone';
 import { HOW_TO_PLAY } from '../src/door.ts';
-import { GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, TOUCH_HELP } from '../src/ui.ts';
-import { CUT_HINT, PULL_HINT, PUSH_HINT, BANK_BUTTON, BANK_QUIET, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs } from '../src/hud.ts';
+import { BUILD_HELP, GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, MASON_HELP, TOUCH_HELP } from '../src/ui.ts';
+import { CUT_HINT, PULL_HINT, PUSH_HINT, BANK_BUTTON, BANK_QUIET, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, leverageWords, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs, masonStarsHtml, masonSub, TEST_BUTTON, trialText, chorusObjectiveText } from '../src/hud.ts';
 
 describe('rack', () => {
   it('groups by kind in first-seen order with counts and keys', () => {
@@ -30,6 +30,12 @@ describe('formatting', () => {
   });
   it('the HUD hides the power bar for an anvil and flags an unreachable aim', () => {
     const base = { level: L2, strokes: 0, crownsDown: 1, crownsTotal: 6, heritageBroken: 0, heritageTotal: 36, power: 60, leverage: { round: 0, shot: 0 }, phase: 'aiming', reachable: null };
+    // A bell level (Rube Lab, PT26) says what it wants, and ticks it once rung; other par levels show no objective row.
+    const bell = hudHtml({ ...base, level: RL1, crownsDown: 0, crownsTotal: 1, heritageTotal: 0, chips: rackChips(RL1.rack, RL1.rack, 'plunger') });
+    expect(bell).toMatch(/<span>Objective<\/span><span class="fit"><span class="">ring the bell<\/span>/);
+    expect(bell).toMatch(/Bells rung<\/span><span class="fit"><span class="crowns">0 \/ 1/);
+    expect(hudHtml({ ...base, level: RL1, crownsDown: 1, crownsTotal: 1, heritageTotal: 0, chips: [] })).toMatch(/<span class="ok">ring the bell ✓<\/span>/);
+    expect(hudHtml({ ...base, chips: [] })).not.toMatch(/Objective/);
     const marble = hudHtml({ ...base, chips: rackChips(L2.rack, L2.rack, 'marble') });
     expect(marble).toMatch(/L2 · Lintel/);
     expect(marble).toMatch(/1 \/ 6/);
@@ -71,12 +77,14 @@ describe('formatting', () => {
     expect(html).not.toMatch(/Down </);
     expect(html).toMatch(/keep the crown up/);
   });
-  it('a pull chip is labelled Pull, has no power bar, and a refused pull says why instead of out of reach', () => {
+  it('a pull chip is labelled Pull, has no live power bar, and a refused pull says why instead of out of reach', () => {
     const base = { level: L2, strokes: 0, crownsDown: 0, crownsTotal: 6, heritageBroken: 0, heritageTotal: 36, power: 60, leverage: { round: 0, shot: 0 }, phase: 'aiming', reachable: null };
     const chips = rackChips(['pull', 'pull', 'marble'], ['pull', 'marble'], 'pull');
     const html = hudHtml({ ...base, chips });
     expect(html).toMatch(/Pull <b>1<\/b>\/2/);
-    expect(html).not.toMatch(/Power/);
+    // No power bar to use while the pull is selected; its place is held (hidden) because the rack's marble aims (PT30).
+    expect(html).toMatch(/<div class="row held"><span>Power/);
+    expect(hudHtml({ ...base, chips: rackChips(['pull'], ['pull'], 'pull') })).not.toMatch(/Power/);
     const refused = hudHtml({ ...base, chips, reachable: false, pullRefused: true });
     expect(refused).toMatch(/Crowns, heritage and fixed beams stay/);
     expect(refused).not.toMatch(/Out of reach/);
@@ -181,7 +189,7 @@ describe('formatting', () => {
     const def = { ...L1, scoring: 'outcome' as const };
     const score = outcomeScore({ met: true, collapse: 0.62, leverage: 1, comboMax: 4, hasCrowns: true, rackLeft: 3, heritageBroken: 0, outOfLot: 0, crownsDown: 4, skylineRatio: 0.3, pulled: 0 }, undefined);
     const html = resultHtml(def, score, 1, false);
-    expect(html).toMatch(/1 shot · 62% down · leverage/);
+    expect(html).toMatch(/<div class="sub" title="[^"]*">1 shot · 62% down · leverage/);
     expect(html).not.toMatch(/par/);
     expect(html).toMatch(/>62% DOWN</);
     expect(html).toMatch(/Rack left/);
@@ -234,7 +242,7 @@ describe('playtest polish (U5, U6)', () => {
   it('the result card offers Undo shot (key U) after a shot, before Retry', () => {
     const score = levelScore(L1, [{ ke: 1000, yield: 0, dPE_mJ: 2_000_000, leverage: 2, crownsDown: 4, crownsTotal: 4, heritageNew: 0, displaced: 30, outOfLot: 0, pe_mJ: 0, spawnStep: 0, settleStep: 100 }], true, 40);
     const html = resultHtml(L1, score, 1, true, false, '', true);
-    expect([...html.matchAll(/data-act="(\w+)"/g)].map((m) => m[1])).toEqual(['undo', 'retry', 'next']);
+    expect([...html.matchAll(/data-act="(\w+)"/g)].map((m) => m[1])).toEqual(['card', 'undo', 'retry', 'next']);
     expect(resultHtml(L1, score, 1, true)).not.toMatch(/undo/);
   });
   it('the hint line fits its budget and names undo, restart and where the rest are; ? shows every key', () => {
@@ -242,7 +250,13 @@ describe('playtest polish (U5, U6)', () => {
     expect(text(GAME_HELP).length).toBeLessThanOrEqual(HELP_BUDGET);
     // Desktop and touch hints are separate spans; CSS shows one of them.
     const span = (h: string, cls: string) => text(h.match(new RegExp(`<span class="${cls}">(.*?)</span>(?=<span|$)`))?.[1] ?? '');
-    expect(span(helpHtml(false), 'kg-desk')).toBe(text(GAME_HELP));
+    expect(span(helpHtml(false), 'kg-desk h-play')).toBe(text(GAME_HELP));
+    // Building and on a Mason level the line says what the pointer and keys do there (CSS picks by body class).
+    expect(span(helpHtml(false), 'kg-desk h-build')).toBe(text(BUILD_HELP));
+    expect(span(helpHtml(false), 'kg-desk h-mason')).toBe(text(MASON_HELP));
+    for (const h of [BUILD_HELP, MASON_HELP]) expect(text(h).length).toBeLessThanOrEqual(HELP_BUDGET);
+    expect(text(MASON_HELP)).not.toMatch(/fire/);
+    expect(GAME_KEYS).toContain('<kbd>[</kbd>/<kbd>]</kbd> slide');
     expect(span(helpHtml(false), 'kg-tch')).toBe(TOUCH_HELP);
     expect(span(helpHtml(true), 'kg-tch')).toBe(TOUCH_HELP);
     for (const k of ['U', 'R', '?']) expect(GAME_HELP).toContain(`<kbd>${k}</kbd>`);
@@ -266,8 +280,10 @@ describe('scores and leverage add up (PT9, PT16)', () => {
     for (const d of [L1, L2, L3, L4, L5]) for (const k of [0.3, 0.99, 1, 2, 4, 9]) for (let s = 1; s <= d.par + 1; s++) {
       const score = levelScore(d, Array.from({ length: s }, () => shot({ dPE_mJ: 1e6 * k * levelGoldLine(d)! })), true, 40);
       const html = resultHtml(d, score, s, false);
-      if (html.includes('class="gold got"')) expect(html).not.toContain('(Brute)');
-      expect(html).toMatch(/\((Brute|Clean|Elegant|Keystone)\)/);
+      // PT31: no card says Brute at all now; under the gold line it says how far the line is.
+      expect(html).not.toContain('(Brute)');
+      expect(html).toMatch(/\((Clean|Elegant|Keystone)\)<\/div>| · gold at ×/);
+      if (html.includes('class="gold got"')) expect(html).not.toContain('gold at');
     }
   });
   it('an outcome level without a gold line names no tier', () => {
@@ -275,6 +291,29 @@ describe('scores and leverage add up (PT9, PT16)', () => {
     const html = resultHtml(B1, score, 2, false);
     expect(html).toContain('leverage ×0.13</div>');
     expect(html).not.toMatch(/Brute|Clean/);
+  });
+  it('a hold level\'s card shows one metric, the share pulled: no "% down" beside the PULLED stamp (PT35)', () => {
+    // Agent playtest 2, U3: "4 shots · 4% down" sat beside "13% PULLED".
+    const facts = { met: true, collapse: 0.04, leverage: 0.2, comboMax: 0, hasCrowns: true, rackLeft: 20, heritageBroken: 0, outOfLot: 0, crownsDown: 0, skylineRatio: 1, pulled: 0.13, hold: true };
+    const held = resultHtml(U3, outcomeScore(facts, undefined), 4, false);
+    expect(held).toContain('13% PULLED');
+    expect(held).not.toMatch(/% down/i);
+    expect(held).toMatch(/<div class="sub"[^>]*>4 shots · leverage /);
+    // A collapse level keeps its share down on the sub line.
+    expect(resultHtml(B1, outcomeScore({ ...facts, hold: false, collapse: 0.5 }, undefined), 2, false)).toContain('2 shots · 50% down');
+  });
+  it('a Chorus card shows the worlds cleared, with no tier and no gold badge (M9, chorus.ts chorusScore)', () => {
+    const def = { ...L1, rack: ['cannonball' as const], chorus: { worlds: 64 } }; // a par level: the badge would show but for the worlds
+    const j: ChorusJudgement = { step: 600, worlds: 64, cleared: Array.from({ length: 64 }, (_, k) => k < 49), heritage: Array(64).fill(0), crownsDown: Array(64).fill(3), moved: Array(64).fill(0.5), crowns: 3, need: 3, clears: 49, leaks: 0 };
+    const score = chorusScore(compileLevel(def), j, { leverage: 2.4 });
+    expect(score.stars).toBe(2);
+    const html = resultHtml(def, score, 1, false);
+    expect(html).toContain('49 of 64 worlds cleared');
+    expect(html).not.toMatch(/Brute|Clean|Elegant|Keystone|class="gold/);
+    expect(goldHtml(def, score)).toBe('');
+    expect(chorusObjectiveText(def)).toBe('fell every crown in each of 64 worlds');
+    expect(chorusObjectiveText({ ...def, chorus: { worlds: 16, need: 1 } })).toBe('fell 1 crown in each of 16 worlds');
+    expect(chorusObjectiveText(L1)).toBeNull();
   });
   it('heritage is its own red line with the stars it cost, and the total never shows negative', () => {
     const score = levelScore(L3, [shot({ dPE_mJ: 1e5, heritageNew: 9 }), shot({ dPE_mJ: 1e5 })], true, 40);
@@ -293,20 +332,74 @@ describe('scores and leverage add up (PT9, PT16)', () => {
     expect([at(9).stars, at(2, 1).stars, at(2, 1).heritageStarsLost, at(9, 1).stars]).toEqual([1, 2, 1, 1]);
     expect(levelScore(RL1, [shot({})], false, 40, 2)).toMatchObject({ stars: 0, stamp: 'INCOMPLETE' });
     const html = resultHtml(RL1, par, 1, false);
-    expect(html).toContain('<div class="sub">parts 2 / par 2 · leverage');
+    expect(html).toMatch(/<div class="sub" title="[^"]*">parts 2 \/ par 2 · leverage/);
     expect(html).not.toContain('stroke');
     // Other par levels keep their strokes line and gold.
     expect(levelScore(L5, [shot({ dPE_mJ: 1e9 })], true, 40, 7).parts).toBeUndefined();
   });
   it('a Bullet Time card shows the freezes used', () => {
     const score = levelScore({ ...L5, freeze: 2 }, [shot({ cut: true }), shot({ dPE_mJ: 1e7 })], true, 40);
-    expect(resultHtml(L5, score, 2, false)).toContain('2 strokes · par 1 · leverage ×5.00 (Clean) · freezes used 1/2');
+    // The explanation is the sub line's tooltip (PT31), on any card whose line names leverage.
+    expect(resultHtml(L5, score, 2, false)).toContain(`<div class="sub" title="${esc(LEVERAGE_MEANS)}">2 strokes · par 1 · leverage ×5.00 (Clean) · freezes used 1/2</div>`);
     expect(score.stamp).toBe('PAR');
   });
-  it('How to play says what leverage is and that a score never goes below 0', () => {
-    const text = HOW_TO_PLAY.join(' ');
-    expect(text).toContain(LEVERAGE_MEANS);
-    expect(text).toMatch(/never goes below 0/);
+  it('How to play says what leverage is (Chamber), and the card says a total never goes below 0', () => {
+    expect(HOW_TO_PLAY.find((h) => h.id === 'chamber')!.lines).toContain(LEVERAGE_MEANS);
+    expect(resultHtml(L1, levelScore(L1, [shot({ dPE_mJ: 1e6 })], true, 40), 1, false)).toContain('title="The lines\' sum, never below 0"');
+  });
+  it('PT31: the card never names a tier for a round that brought nothing down, and says the gold line under it', () => {
+    expect(leverageWords(0, L1)).toBe('nothing fell');
+    expect(leverageWords(Number.NaN, L1)).toBe('nothing fell');
+    const line = levelGoldLine(L1)!;
+    expect(leverageWords(0.99 * line, L1)).toBe(`leverage ${fmtLeverage(0.99 * line)} · gold at ${fmtLeverage(line)}`);
+    expect(leverageWords(line, L1)).toBe(`leverage ${fmtLeverage(line)} (Clean)`);
+    expect(leverageWords(8 * line, L1)).toBe(`leverage ${fmtLeverage(8 * line)} (Keystone)`);
+    // A dud round on L2 (nothing moved): no "×0.00 (Brute)".
+    const dud = resultHtml(L2, levelScore(L2, [shot({ dPE_mJ: 0 }), shot({ dPE_mJ: 0 })], false, 139), 2, false);
+    expect(dud).toContain('nothing fell');
+    expect(dud).not.toMatch(/Brute|×0\.00/);
+    // LEVERAGE_MEANS is the agreed one line (scoring thread, 2026-11-07).
+    expect(LEVERAGE_MEANS).toMatch(/^Leverage ×N means the structure's fall gave back N times the energy you fired\./);
+  });
+});
+
+describe("Mason's Trial on the HUD and the card", () => {
+  it('the status row follows the test: what it will do, world 1 running, the judge, then both verdicts', () => {
+    expect(trialText(null, 64)).toBe('build, then test it in 64 worlds');
+    expect(trialText({ state: 'running', hero: null, passes: null, of: 64 }, 64)).toBe('testing: you watch world 1 of 64');
+    expect(trialText({ state: 'judging', hero: true, passes: null, of: 64 }, 64)).toBe('judging the other 63 worlds…');
+    expect(trialText({ state: 'done', hero: false, passes: 46, of: 64 }, 64)).toBe('failed here · stood in 46 of 64');
+    expect(trialText({ state: 'error', hero: null, passes: null, of: 64 }, 64)).toBe('the judge could not run');
+  });
+
+  it("the slot is Test on a Mason level (never Fire or Go), and only while a test can start", () => {
+    const base = { level: MT4, canBank: false, canSkip: false, skipping: false } as const;
+    expect(slotAction({ ...base, opener: true })).toBe('test');
+    expect(slotAction({ ...base, opener: false })).toBeNull();
+    expect(TEST_BUTTON).toMatch(/data-act="opener"/);
+    expect(TEST_BUTTON).toMatch(/Test the build/);
+  });
+
+  it('the card says how many worlds the build stood in and what it spent, and what the next star needs', () => {
+    // MT4's 3-star author build: every world, 5 of 10 spent: three stars, nothing left to reach for.
+    const best = masonScore(MT4, 64, 64, 5);
+    expect(best.stars).toBe(3);
+    expect(masonSub(best)).toBe('stood in 64 of 64 worlds · spent 5 of 10');
+    expect(masonStarsHtml(best)).toBe('');
+    // The knife-edge build (46 of 64, 4 spent): one star; two need 51 worlds at this cost.
+    const knife = masonScore(MT4, 46, 64, 4);
+    expect([knife.total, knife.stars, knife.stamp]).toEqual([575, 1, 'STANDS']);
+    expect(knife.worlds!.thresholds).toEqual([32, 51, 54]);
+    expect(masonStarsHtml(knife)).toContain('★2 at 51 of 64 worlds');
+    // The whole budget spent: 500 points at most, under the 2-star line whatever the worlds.
+    expect(masonStarsHtml(masonScore(MT4, 64, 64, 10))).toContain('★2 needs a cheaper build');
+    // Under half the worlds: no star, WOBBLY.
+    expect([masonScore(MT4, 31, 64, 5).stars, masonScore(MT4, 31, 64, 5).stamp]).toEqual([0, 'WOBBLY']);
+    // The card: the Mason line in place of strokes and par, no leverage, the next-star hint under the stars.
+    const html = resultHtml(MT4, knife, 0, null);
+    expect(html).toContain('stood in 46 of 64 worlds · spent 4 of 10');
+    expect(html).not.toMatch(/par \d|leverage/i);
+    expect(html).toContain('★2 at 51 of 64 worlds');
   });
 });
 

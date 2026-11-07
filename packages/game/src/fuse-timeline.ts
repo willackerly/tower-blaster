@@ -4,7 +4,7 @@
 // spacing between rows along it), and the player tunes from there. Pure state: fuse-panel.ts draws it,
 // and the markers on the charges' hosts are an overlay coloured by delay; the lot is chalked on the ground and
 // the panel's compass needle turns with the camera, so the compass buttons read in the scene.
-import type { CompiledLevel, PlungerShot } from '@tb/keystone';
+import { type CompiledLevel, isFuseLevel, type PlungerShot } from '@tb/keystone';
 import { rgbe } from './scene.ts';
 
 /** Engine steps per snap (0.1 s at 60 Hz) and the most snaps a delay can be (2 s). */
@@ -76,10 +76,11 @@ export const RELAY_CSS = 'rgb(90, 190, 255)';
 
 /**
  * The timeline the Fuse & Fold panel shows for a level: one when its rack has a plunger and the plunger arms a
- * charge, none on a Rube Lab contraption (its plunger is the Go button's release, not a timed demolition).
+ * charge; none on a Rube Lab contraption (its plunger is the Go button's release, not a timed demolition) or on a
+ * domino-fuse level (M5b: the dominoes the player lays are the delays; Light the fuses fires every charge at 0).
  */
 export function panelTimeline(c: CompiledLevel): Timeline | null {
-  if (!c.def.rack.includes('plunger') || c.def.rube) return null;
+  if (!c.def.rack.includes('plunger') || c.def.rube || isFuseLevel(c.def)) return null;
   const t = new Timeline(c);
   return t.empty ? null : t;
 }
@@ -203,4 +204,93 @@ export function lotBeads(c: CompiledLevel): { xyzr: Float32Array<ArrayBuffer>; c
  */
 export function northOnScreen(yaw: number, pitch = Math.PI / 2): number {
   return Math.atan2(Math.sin(yaw), Math.cos(yaw) * Math.sin(pitch));
+}
+
+// ---- The plan in the world (agent playtest round 2, PT24): which way the yard lies, and which way is north ----
+
+/** A ground arrow, (x, z) m: from its tail to its tip. */
+export interface GroundArrow { tail: [number, number]; tip: [number, number] }
+
+/** The building's middle on the ground: the plunger charges' hosts' centroid (a fold level's charges are its building's columns). */
+function buildingCentre(c: CompiledLevel): [number, number] {
+  const ch = timelineCharges(c), n = Math.max(1, ch.length);
+  return [ch.reduce((a, t) => a + t.at[0], 0) / n, ch.reduce((a, t) => a + t.at[2], 0) / n];
+}
+
+/**
+ * The building-to-yard arrow of a fold level: from just outside the building (its outermost charge host along the way,
+ * plus a cell) to just inside the lot's far edge, along the line from the building's middle to the lot's. Null when
+ * the lot is centred on the building (no yard to point at) or the level is not a fold.
+ */
+export function yardArrow(c: CompiledLevel): GroundArrow | null {
+  if (c.def.objective.kind !== 'fold') return null;
+  const [bx, bz] = buildingCentre(c), cell = c.frame.unit * c.frame.pitch;
+  const lx = (c.lot.min[0] + c.lot.max[0]) / 2, lz = (c.lot.min[1] + c.lot.max[1]) / 2;
+  const len = Math.hypot(lx - bx, lz - bz);
+  if (len < 2 * cell) return null;
+  const dx = (lx - bx) / len, dz = (lz - bz) / len;
+  const start = Math.max(...timelineCharges(c).map((t) => dx * (t.at[0] - bx) + dz * (t.at[2] - bz))) + 1.5 * cell;
+  // Where the ray from the building's middle leaves the lot (its box), less half a cell.
+  const exit = (lo: number, hi: number, p: number, d: number) => (Math.abs(d) < 1e-9 ? Infinity : ((d > 0 ? hi : lo) - p) / d);
+  const end = Math.min(exit(c.lot.min[0], c.lot.max[0], bx, dx), exit(c.lot.min[1], c.lot.max[1], bz, dz)) - 0.5 * cell;
+  if (!(end > start + cell)) return null;
+  return { tail: [bx + dx * start, bz + dz * start], tip: [bx + dx * end, bz + dz * end] };
+}
+
+/** The ground compass's length, in cells (unit times pitch): about a storey's height on the cast levels. */
+export const COMPASS_CELLS = 4;
+
+/**
+ * The ground compass of a fold level: an arrow pointing north (-z) on open ground just outside a corner of the lot
+ * (north-east, else north-west, south-east, south-west: the first whose arrow misses every body's footprint, so it
+ * is not under a neighbour), never in the yard or under the fall. Its tip carries the N tag, as the panel's needle does.
+ */
+export function compassArrow(c: CompiledLevel): GroundArrow {
+  const cell = c.frame.unit * c.frame.pitch, len = COMPASS_CELLS * cell, m = c.meta, [x0, z0] = c.lot.min, [x1, z1] = c.lot.max;
+  const at = (x: number, north: boolean): GroundArrow => {
+    const tail = north ? z0 - 0.5 * cell : z1 + 0.5 * cell + len;
+    return { tail: [x, tail], tip: [x, tail - len] };
+  };
+  const options = [at(x1 + 1.5 * cell, true), at(x0 - 1.5 * cell, true), at(x1 + 1.5 * cell, false), at(x0 - 1.5 * cell, false)];
+  const clear = (a: GroundArrow) => {
+    for (let i = 0; i < m.n; i++) {
+      const hx = m.half[3 * i]! + 0.5 * cell, hz = m.half[3 * i + 2]! + 0.5 * cell, bx = m.home[3 * i]!, bz = m.home[3 * i + 2]!;
+      const zlo = Math.min(a.tail[1], a.tip[1]), zhi = Math.max(a.tail[1], a.tip[1]);
+      if (Math.abs(a.tail[0] - bx) < hx && zhi > bz - hz && zlo < bz + hz) return false;
+    }
+    return true;
+  };
+  return options.find(clear) ?? options[0]!;
+}
+
+/** Plan beads: this far apart and this big (cube edges), the yard arrow's colour (the HUD's "ok" green) and the compass's (the needle's orange). */
+export const PLAN_SPACING = 0.6;
+export const PLAN_RADIUS = 0.16;
+export const YARD_COLOUR = rgbe(143, 211, 182, 0.5);
+export const COMPASS_COLOUR = rgbe(240, 138, 93, 0.55);
+
+/** Beads along a ground arrow: the shaft about PLAN_SPACING cube edges apart, and a head of two barbs at 30 degrees back from the tip. */
+export function arrowBeads(a: GroundArrow, unit: number): number[] {
+  const r = PLAN_RADIUS * unit, step = PLAN_SPACING * unit, pts: number[] = [];
+  const [tx, tz] = a.tail, [hx, hz] = a.tip, len = Math.hypot(hx - tx, hz - tz), dx = (hx - tx) / len, dz = (hz - tz) / len;
+  const n = Math.max(1, Math.round(len / step));
+  for (let i = 0; i <= n; i++) pts.push(tx + ((hx - tx) * i) / n, r, tz + ((hz - tz) * i) / n, r);
+  const barb = Math.min(0.3 * len, 4 * step), k = Math.max(1, Math.round(barb / step));
+  for (const s of [1, -1]) {
+    // The shaft's direction turned 150 degrees each way: back from the tip and out to the side.
+    const c = Math.cos((s * 5 * Math.PI) / 6), sn = Math.sin((s * 5 * Math.PI) / 6), bx = dx * c - dz * sn, bz = dx * sn + dz * c;
+    for (let i = 1; i <= k; i++) pts.push(hx + (bx * barb * i) / k, r, hz + (bz * barb * i) / k, r);
+  }
+  return pts;
+}
+
+/** The plan's overlay on a fold level: the yard arrow (when there is a yard) and the ground compass, as beads on the ground. */
+export function planBeads(c: CompiledLevel): { xyzr: Float32Array<ArrayBuffer>; colours: Uint32Array<ArrayBuffer> } | null {
+  if (c.def.objective.kind !== 'fold') return null;
+  const yard = yardArrow(c), u = c.frame.unit;
+  const y = yard ? arrowBeads(yard, u) : [], n = arrowBeads(compassArrow(c), u);
+  const xyzr = Float32Array.from([...y, ...n]), colours = new Uint32Array(xyzr.length / 4);
+  colours.fill(YARD_COLOUR, 0, y.length / 4);
+  colours.fill(COMPASS_COLOUR, y.length / 4);
+  return { xyzr, colours };
 }

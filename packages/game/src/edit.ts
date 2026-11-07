@@ -4,7 +4,7 @@
 // and key events into rays and names, and draws bodies() with fx() over its
 // renderer. Time is stopped throughout; play() is the level to compile and run.
 import type { BodyDesc, Vec3 } from '@tb/engine-api';
-import { BuildSession, CATALOG_NAMES, type CatalogName, type Ghost, type Hold, type LevelDef, type Obb, type P2, type Ray, smoothStroke, type StrokeGhost, turn } from '@tb/keystone';
+import { BuildSession, CATALOG_NAMES, type CatalogName, fuseLanes, fuseSteps, type Ghost, type Hold, isFuseLevel, type LaneInfo, type LevelDef, type Obb, type P2, type Ray, runCentres, DOMINO_PITCH, smoothStroke, snapFuse, type StrokeGhost, turn } from '@tb/keystone';
 import type { FxOptions } from '@tb/render';
 
 export const EDIT_TOOLS = ['place', 'brush', 'erase'] as const;
@@ -27,6 +27,12 @@ export interface Mods { alt?: boolean; shift?: boolean }
 
 const box = (b: Obb, sphere = false): BodyDesc => ({ shape: sphere ? { kind: 'sphere', radius: b.half[0] } : { kind: 'box', half: [...b.half] as Vec3 }, pos: [...b.c] as Vec3, rot: [...b.q] as BodyDesc['rot'], linVel: [0, 0, 0], angVel: [0, 0, 0], density: 250, friction: 0.6, restitution: 0, tag: 0 });
 
+/**
+ * One lane of a domino-fuse level as built (M5b): the dominoes of the fuse laid from its head, whether its last domino
+ * stands close enough to tip the socket, and when it fires, in seconds from the plunger (fuseSteps: an estimate).
+ */
+export interface LaneReport { lane: number; dominoes: number; reaches: boolean; seconds: number | null }
+
 export class EditController {
   readonly session: BuildSession;
   tool: EditTool;
@@ -41,13 +47,16 @@ export class EditController {
   version = 0;
   /** The last thing that did not work, for the panel ('' when the last action did). */
   message = '';
+  /** A domino-fuse level's lanes (fuseLanes): a stroke snaps to their heads and ends. Empty elsewhere. */
+  readonly lanes: LaneInfo[];
   private stroke: P2[] | null = null;
   private lastRay: Ray | null = null;
   private lastMods: Mods = {};
 
   constructor(def: LevelDef, opts: EditOptions = {}) {
     this.session = new BuildSession(def, { author: opts.author });
-    this.tool = opts.tool ?? 'place';
+    this.lanes = isFuseLevel(def) ? fuseLanes(this.session.compiled()) : [];
+    this.tool = opts.tool ?? (this.lanes.length && this.session.brush ? 'brush' : 'place');
     const item = opts.item && this.session.items.some((i) => i.name === opts.item) ? opts.item : (this.session.items[0]?.name as CatalogName | undefined) ?? 'cube';
     this.hold = { item, yaw: 0, tip: 0 };
     if (this.tool === 'brush' && !this.session.brush) this.tool = 'place';
@@ -67,7 +76,8 @@ export class EditController {
       if (this.stroke && hit) {
         const h = this.session.h, p: P2 = [hit.point[0] / h, hit.point[2] / h];
         this.stroke.push(p);
-        this.strokeGhost = this.session.stroke(smoothStroke(this.stroke));
+        const path = smoothStroke(this.stroke);
+        this.strokeGhost = this.session.stroke(this.snap && !mods.alt ? snapFuse(this.lanes, path) : path);
       }
       return;
     }
@@ -123,18 +133,32 @@ export class EditController {
     return changed;
   }
 
-  /** A key in edit mode; returns whether it was one (Q / E turn 90 deg, 15 with Shift; T tip; 1 to 8 items; B brush; X erase; P place; Z undo). */
+  /** A key in edit mode; returns whether it was one (Q / E turn 90 deg, 15 with Shift; T tip; [ / ] slide; 1 to 8 items; B brush; X erase; P place; Z undo). */
   key(k: string, mods: Mods = {}): boolean {
     const step = mods.shift ? 15 : 90;
     const lower = k.toLowerCase();
     if (lower === 'q') this.hold = turn(this.hold, -step);
     else if (lower === 'e') this.hold = turn(this.hold, step);
     else if (lower === 't') this.hold = { ...this.hold, tip: ((this.hold.tip + 1) % 3) as 0 | 1 | 2 };
+    else if (k === '[' || k === ']') return this.slide(k === '[' ? -1 : 1);
     else if (/^[1-9]$/.test(k)) { const it = this.session.items[Number(k) - 1]; if (!it) return false; this.select(it.name as CatalogName); }
     else if (lower === 'b') this.setTool(this.tool === 'brush' ? 'place' : 'brush');
     else if (lower === 'x') this.setTool(this.tool === 'erase' ? 'place' : 'erase');
     else if (lower === 'z') { this.undo(); return true; }
     else return false;
+    if (this.lastRay) this.move(this.lastRay, this.lastMods);
+    return true;
+  }
+
+  /**
+   * Slide what is held a half-cell along its own x (build.ts Hold.slide), within what keeps the pointer's point under
+   * it; returns whether it moved (false at the end of its reach, or for a piece that cannot slide).
+   */
+  slide(d: -1 | 1): boolean {
+    const s = this.session.slideOf(this.hold), m = this.session.slideMax(this.hold), next = Math.max(-m, Math.min(m, s + d));
+    if (next === s) { this.message = m === 0 ? 'this piece does not slide' : 'slid as far as it goes'; return false; }
+    this.hold = { ...this.hold, slide: next };
+    this.message = '';
     if (this.lastRay) this.move(this.lastRay, this.lastMods);
     return true;
   }
@@ -174,10 +198,26 @@ export class EditController {
     return out;
   }
 
+  /**
+   * Each lane's fuse as built (empty on other levels): the placed run that starts at the lane's head (snapFuse puts a
+   * snapped stroke's first point there exactly), its dominoes, whether its last domino stands within 1.9 h of the socket,
+   * and its burn time. A lane with no such run reports 0 dominoes and no time: its row will not be cut.
+   */
+  laneReport(): LaneReport[] {
+    const runs = this.session.def().parts.flatMap((p) => (p.kind === 'run' && p.placed && p.path.length > 1 ? [p] : []));
+    return this.lanes.map((l, lane) => {
+      const run = runs.find((r) => Math.hypot(r.path[0]![0] - l.head[0], r.path[0]![1] - l.head[1]) < 0.01);
+      if (!run) return { lane, dominoes: 0, reaches: false, seconds: null };
+      const c = runCentres(run.path, DOMINO_PITCH), last = c.at(-1)!;
+      const reaches = Math.hypot(last[0] - l.socketAt[0], last[1] - l.socketAt[1]) <= 1.9;
+      return { lane, dominoes: c.length - (run.omit?.length ?? 0), reaches, seconds: reaches && !run.omit?.length ? fuseSteps(run.path) / 60 : null };
+    });
+  }
+
   /** One line for the panel: what is held, how it is turned, what is left, and why the ghost does not fit. */
   status(): string {
     const s = this.session, left = s.left();
-    const what = this.tool === 'brush' ? 'domino brush' : this.tool === 'erase' ? 'erase' : `${s.items.find((i) => i.name === this.hold.item)?.label ?? this.hold.item}, ${this.hold.yaw}°${this.hold.tip ? `, tipped ${this.hold.tip === 1 ? 'on x' : 'on z'}` : ''}`;
+    const what = this.tool === 'brush' ? 'domino brush' : this.tool === 'erase' ? 'erase' : `${s.items.find((i) => i.name === this.hold.item)?.label ?? this.hold.item}, ${this.hold.yaw}°${this.hold.tip ? `, tipped ${this.hold.tip === 1 ? 'on x' : 'on z'}` : ''}${s.slideOf(this.hold) ? `, slid ${s.slideOf(this.hold) > 0 ? '+' : ''}${s.slideOf(this.hold)}` : ''}`;
     const budget = left === null ? `${s.spent()} placed` : `${left} of ${s.budget} left`;
     const why = this.strokeGhost ? (this.strokeGhost.why || `${this.strokeGhost.cost} dominoes${this.strokeGhost.clash.some(Boolean) ? `, ${this.strokeGhost.clash.filter(Boolean).length} left out` : ''}`) : this.ghost && !this.ghost.ok ? this.ghost.why : this.message;
     return [what, budget, why].filter(Boolean).join(' · ');

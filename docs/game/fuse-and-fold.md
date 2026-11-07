@@ -64,6 +64,37 @@ Alternatives considered:
 
 All seven cases fail on the old layout.
 
+### The plan in the scene (agent playtest round 2, PT24)
+
+Round 2's judges found that the panel's rows (A1 to D3) had no counterpart in the scene. The charges were unlabelled 8 to 10 px dots, north was a 20 px icon in the panel, and nothing tied "W" to the yard. "W" was also lit at load while every delay was 0.0 s. On F2, whose yard is to the north, it pointed the wrong way. The novice runs ended INCOMPLETE on all five levels. Now:
+
+- **No direction is lit until a Sweep is applied.** All at 0 clears the lit direction too. Before any Sweep, the spacing buttons set only the spacing that the next Sweep uses. A hint under the head reads "Sweep toward the yard, then Plunger".
+- **A yard arrow on the ground** (`fuse-timeline.ts yardArrow`): green beads from just outside the building (its outermost charge host, plus 1.5 cells) to just inside the lot's far edge. It runs along the line from the building's middle to the lot's middle: F1 west, F2 north, F3 north-west (the corner lot), F4 and F5 west. A "Yard" tag sits at its tip.
+- **A ground compass** (`compassArrow`): an orange arrow pointing north, 4 cells long. It stands just outside a corner of the lot, never in the yard. The corners are tried NE, NW, SE, SW, and the first whose arrow misses every body's footprint is used, so it is never under a neighbour. An "N" tag sits at its tip, in the needle's colour.
+- **Charge tags**: each charge's grid label and delay ("B2 0.6") sits over its marker, in its delay's colour. Where tags would overlap (F4's twelve on a phone), they claim their places in a fixed order (`tagOrder`): N and Yard, the selected charge, then one charge of each delay (earliest first, so every row of a Sweep is named), then the rest. A tag that would overlap one already placed hides (`placeTags`). Its marker still shows.
+- The arrows and tags show only while the plunger can go. They are gone once it fires and at the result. The tags sit over the scene and under every panel.
+- **The opening view frames the yard** (`view.ts framedBox`): on a fold level, the framed box is the structure's box, plus the lot and the compass. On a wide screen the view also keeps clear of the panel's column (`openingInsets(aspect, true, screenW)`: 320 px of the screen, as the part of the framed middle square it covers). Upright, the panel's band is measured (PT21). Everything is set at load: the camera does not move.
+
+Alternatives considered:
+
+- **Text in the 3D scene** (a glyph atlas in the renderer) instead of HTML tags. Rejected for now: a new render pass and font pipeline for a dozen labels, which HTML draws crisply at any DPI for the cost of one projection per tag per frame. Tags do not hide behind the building, which also helps here: the charges' tags name columns inside it.
+- **A tag on every charge, always.** Rejected: on F4 the twelve tags piled into an unreadable block at phone size. The overlap rule keeps one tag per delay row in sight wherever there is room.
+- **A tag per sweep row** ("row A 0.0") instead of per charge. Rejected: it stops being true once the player tunes a single row, and the rows' names then mean nothing in the scene.
+- **The compass inside the lot.** Rejected: the lot is the building and its yard, so a compass there sits under the fall or across the yard arrow (F1's lot is a 3 m wide strip).
+- **Frame only the structure, as before.** Rejected: F1's yard reaches 12.75 m west of a building whose structure box ends 2 m from it, so the yard opened off screen or under the panel.
+
+Tests:
+
+- `game/test/view.test.ts`, "a fold level's opening view frames its yard clear of the panels" (unit). For F1 to F5 at 1280 x 800, the lot's projected box is inside the screen and off both the Timeline column and the HUD's box. Upright, it is inside the free band. F1, F2 and F5 fail with the old framing; F3's and F4's neighbours already spanned their lots.
+- `game/test/fuse-timeline.test.ts`, "the plan in the world": the arrows' headings, ends and footprint clearance, and the beads' colours.
+- `game/test/fuse-tags.test.ts`: the projection, the overlap rule and the order.
+- `game/test/fuse-layout-e2e.test.ts`, F2 at 1280 x 800 and 390 x 844:
+  - No direction is lit at load, and the hint shows.
+  - The N and Yard tags are on screen and off the panel.
+  - A Sweep lights its direction, and All at 0 clears it.
+  - Spacing before a Sweep leaves every delay at 0.
+  - The tags are gone at the result.
+
 ## Every charge fires
 
 A fold level's plunger must name every plunger charge (`Session.plungerRefusal`). Alternatives weighed:
@@ -76,7 +107,7 @@ A fold level's plunger must name every plunger charge (`Session.plungerRefusal`)
 
 ## Levels
 
-Five levels ship, each a candidate that passed the gate (`packages/keystone/src/fuse-levels.ts`; numbers in [mode-probes.md](mode-probes.md), X2 "On levels"). All five are plaster frames of rod columns under one-cell slabs. Each has cutters on every ground column and the same objective: fold at least 60%, spill at most 5%, no neighbour broken. Everything at once drops each one a storey (fold 0.19 to 0.29) on every build.
+Five timeline levels ship (F6 to F8, the domino-fuse levels, are under "Domino fuses" below), each a candidate that passed the gate (`packages/keystone/src/fuse-levels.ts`; numbers in [mode-probes.md](mode-probes.md), X2 "On levels"). All five are plaster frames of rod columns under one-cell slabs. Each has cutters on every ground column and the same objective: fold at least 60%, spill at most 5%, no neighbour broken. Everything at once drops each one a storey (fold 0.19 to 0.29) on every build.
 
 | level | site | the decision | best line (reference, 8 builds) |
 |---|---|---|---|
@@ -173,6 +204,59 @@ Do the relays matter? The same tower and yard without them (FC-5c), over 8 build
 
 Without relays the felled tower always lands whole, with about 19% of its mass beyond the yard. With them it folds short enough on most builds of the right line. The cost is spread: F5's sd is 0.03 to 0.06, against 0.001 to 0.02 on F1 to F4. The relays fire on a jolt, and a jolt's timing varies with the build. F5 passes the gate with the least room of any level (7 of 8 against 80%; 20 SE), so it is the last level and the first to recheck on Metal. With a 10-cell yard (FC-5) the same design met on 3 of 8 and failed.
 
+## Domino fuses (M5b)
+
+The second kind of Fuse & Fold level: the delays are not set on a timeline, the player lays them. A fuse level is a fold site with a firing board beside it, one lane per row of columns to cut (`packages/keystone/src/fuse-boards.ts`):
+
+```
+[stop] lead  o o o o o  >  the player's fuse  >  socket  ~~cord~~>  the row's columns
+```
+
+- **The lead**: a domino cocked 25 degrees toward its lane, resting on the top edge of a pinned stone stop. The plunger fires a release (Rube Lab's) that takes the stop out, and the lead falls on gravity alone.
+- **The lead run**: five dominoes the level lays. A wave started from rest needs about five dominoes to reach its steady speed (on the reference, hops of 23, 20, 17, 15 and 14 steps, then 13), so the wave enters the player's fuse at the speed it keeps.
+- **The player's fuse**: a domino run laid with C9's brush from the lane's head to the socket. The brush snaps a stroke that starts within 2.5 h of a head, or ends within 2.5 h of a socket, to it, with a straight pitch at each end (`snapFuse`; Alt turns it off).
+- **The socket**: a domino at the lane's end. Every column of the lane's row carries a **detonator** that watches it (`ChargeDef.watch`, weapons `Live.watch`): a moved trigger (5 cm or 0.5 m/s) read off the socket, then a cutter's blast and its own column out. With no wave by `DETONATOR_WAIT` (15 s from the plunger) it stands down.
+
+So a fuse's length is its row's delay. The plunger (the HUD's **Light the fuses**, key F) fires every charge at 0; there is no timeline (`panelTimeline` is null on a fuse level). In the build panel each lane shows its dominoes, its burn in seconds and its place in the firing order (`EditController.laneReport`, `fuseSteps`).
+
+### The burn
+
+Measured on the reference (`keystone-lab/test/fuse-delay.test.ts`):
+
+- Straight fuses: **12.9 steps a domino**. FD-1's 12-domino fuses cut at step 264 after the plunger and FD-2's 20-domino ones at 367, so the front runs 0.6 m in 12.9 / 60 s, 2.79 m/s, **0.89 sqrt(g H)** for the game's 1 m domino. X1 measured 0.90 to 0.96. The lead and the lead run take 96 steps before the head domino is struck.
+- **Bends burn faster per domino.** On a bend the dominoes' inner edges stand closer than their centres, so each hop is shorter. FD-1's sweeps fit `hop = 12.9 (1 - 0.3 a / pitch)` steps for a hop that turns by angle a, within 2% (`FUSE_BEND`). The east lane's +5 fuse (17 dominoes, 5 of them a detour) fires 49 steps after the straight west one, not 65.
+- The estimate the game shows is within 10% of the reference on straight fuses and on bends (the test checks both), which is the node's verify rule.
+
+A bump is an S of arcs, left t, right 2t, left t, of radius 2 to 3 h and up to 90 degrees (`keystone-lab fuse-gate.ts bumpPath`). It leaves the lane by up to 2r + 0.5 h and returns to it, and it adds 4r (t - sin t) of path. Tighter bumps (a sin-squared wiggle 1 h wide) lost the wave: dominoes of the next swing were struck side-on.
+
+### The gate on builds
+
+M5's order gate (`fuse-search.ts orderGate`), with a line now being a build: one fuse per lane (`fuse-gate.ts`). The naive build lays every lane straight, so the lanes burn together and the frame drops a storey, M5's "all at once". The structured builds are sweeps: lanes ranked along the rows' axis, each `step` dominoes longer than the one before, for step 1 to 6, in both directions. Every lane bumps to the same side, away from the middle of the lane that fires last, so two bumps never face each other across the 7 h between lanes. A build is screened on one nudged build, and the naive build and the best three are confirmed on 8 (1 mm, 0.2 degrees).
+
+Results on the reference (8 builds each confirm; the order is lane indices, first to fire first):
+
+| level | site | lanes | the decision | straight (all at once) | best build | wrong way |
+|---|---|---|---|---|---|---|
+| F6 Slow Match | FD-1: F1's 2 x 2 tower, its board to the south | 2, 12 dominoes straight, 3 h apart | the east fuse 4 or more dominoes longer (0.67 s later) folds it west; +1 to +3 still drop it a storey | 0.247, met 0/8 | east +5: 0.891, met 8/8 (+4: 0.890) | west +4: 0.542, 0/8 |
+| F7 Three Lines | FD-2: F2's 3 x 3 tower, yard north, board to the east | 3, 20 straight, 7 h apart | north first, each lane 3 or 4 more to the south; +2 or less stands | 0.248, 0/8 | +3: 0.857, 8/8 (+4: 0.851) | south first +2: 0.407, 0/8 |
+| F8 Short Fuse | FD-3: F4's 4 x 3 block, 14-cell yard to a heritage wall, board to the south | 4, 22 straight, 7 h apart | west first, 2 or 3 more a lane; +1 stands | 0.290, 0/8 | +3: 0.743, 8/8 (+2: 0.734) | east first +2: 0.408, 0/8 |
+
+Every gate passed: the best build beats all at once by 0.61, 0.61 and 0.45 (64 SE or more) and meets the objective on every build. On the GPU solver (SwiftShader, f32, through the game's cast page) F6's straight build misses and its best build folds the tower (`fuse-gpu-F6.test.ts`, every PR); F7 and F8 run with `PHYSICS_GPU_SLOW=1` or on a real GPU (O5's CI rule). F8's sweeps stop at +3: two or three bumps of 90 degrees fill a 22-domino lane, so its upper edge (F4's overshoot) is not on the board. A longer board would show it; F4 already teaches it.
+
+### Choices, with the alternatives weighed
+
+| Decision | Chosen | Alternatives | Why |
+|---|---|---|---|
+| How the plunger starts a lane | a cocked lead on a pinned stop, taken out by a release; five dominoes of lead run | a kicker charge on the first domino (the seam M5 left); a capped igniter blast | an uncapped kicker, scaled to the frame's rods, threw the first dominoes across the board at 7 m/s, and the east socket fired from flying debris; a capped one (maxDv 1.5 to 5) started as slow a wave as gravity does, or slid the domino. Gravity alone is the same every time, and the lead run takes the start transient out of the player's fuse |
+| How a socket cuts its row | a detonator on each column that watches the socket (`watch`) | a relay on the socket that kicks the columns; a relay on each column jolted by a cord of dominoes to the building | `watch` is one field (hashed when given), keeps blasts on the column, and leaves the board free of the building. A cord would make the delay depend on the building's side of the board |
+| Armed when | by the plunger, like every fold charge | armed at start (as F5's relays) | the presettle and the lead's settle nudge the sockets; a start-armed detonator could fire before the plunger |
+| A lane left unlaid | **misfire**: a plunger charge whose column still stands fails the fold, with a Misfire line of -200 a column (`Session.misfires`) | let it stand (C5's any subset) | "W only" met the objective through the hinge the uncut row makes, the very loophole "Every charge fires" closed for timelines |
+| The board's bodies | props: out of collapse, spill, mass and the weapon scale (`rules.ts foldProp`, `asideOf`) | count them as building | the frame's numbers must not move when the player lays 60 dominoes, and dominoes outnumbering rods would flip `levelBlock` |
+| Where the lanes run | a board beside the lot, sockets 7 h or more from the frame | sockets at the columns | a fuse at the columns would be in the fall's path, and the frame's wind-up would knock it |
+| Delay readout | estimate from the laid path (`fuseSteps`) | count dominoes only | counts alone are wrong by up to a quarter on a bend; the estimate is within 10% |
+| Stars | uncast for now (one star for a clear) | T2/T3 from the gate's 8 builds | the cast tool models shots, not builds, and PT20's rule wants the best build's cloud on the GPU too; a follow-up (seams) |
+
+
 ## Alternatives considered for the mode
 
 | Option | For | Against | Verdict |
@@ -186,7 +270,7 @@ Without relays the felled tower always lands whole, with about 19% of its mass b
 
 ## Seams left for later
 
-- **Domino fuses** (C9's stroke brush, PR #231): a fuse is dominoes from a kicker charge (the plunger tips the first domino) to a relay charge on a column (C5's `moved` trigger, armed at start), so its length is the delay. Nothing in M5 needs to change for it: the timeline lists plunger charges only, and a fuse's relay is armed at start. M5 builds no brush of its own.
+- **Domino fuses**: built (M5b, above). Left: casting their stars (they need a build model in `cast.ts`, and the GPU cloud of the best build, PT20's rule), F8's upper edge on a longer board, and fuses that branch (one lane to two sockets).
 - **More sympathetic designs**: F5 is one. The variables are relays on more than one storey, and a threshold that waits for a larger jolt (C5's `moved` trigger takes both). A threshold that tightens F5's spread would make a fairer level.
 - **Neighbour contact**: heritage is judged by displacement, and a stone house of one slab per course barely moves when a plaster frame lands on it. A rule that fails a level when building mass touches a neighbour would match the objective's wording better. Today spill catches those lines first (5 of 648 screened lines broke a house).
 - **Player-placed charges**: with C9's placement tool, a budget of cutters the player places on columns of their choice.

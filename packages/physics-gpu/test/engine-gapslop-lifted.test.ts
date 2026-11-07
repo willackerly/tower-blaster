@@ -1,0 +1,80 @@
+// The loaded-gap slop on unloaded points and lifted bodies, split from engine-gapslop.test.ts so neither file passes CI's 300 s per file.
+// The GPU AVBD engine with the loaded-gap slop (AvbdParams.gapSlop, opt-in;
+// the header of physics-ref/src/avbd.ts says why), the cases of the
+// reference's own tests (physics-ref/test/avbd.test.ts): off it is the engine
+// as before, on it brings the sideways-kicked column back to rest, it leaves
+// rolling contacts and unloaded points alone (spheres without rollingContacts
+// get it), and a lifted stack or cube rests on the excused gap and comes down
+// as on the reference. The kicked column coming back to rest:
+// engine-gapslop-column.test.ts (its own file, for CI's shards). With manifold
+// records (AvbdParams.records):
+// engine-gapslop-records.test.ts and engine-gapslop-records-rest.test.ts. Its
+// checks and variant keys are in engine.test.ts.
+import { describe, expect, it } from 'vitest';
+import { type BodyDesc, type SceneDesc } from '@tb/engine-api';
+import { type AvbdParams, AvbdReferenceEngine } from '@tb/physics-ref';
+import { column, kicked, poked, sideways, state } from './gapslop-case.ts';
+import { cube, gpu, sceneOf } from './harness.ts';
+
+describe('GPU AVBD engine: the loaded-gap slop (AvbdParams.gapSlop)', () => {
+  it('it leaves unloaded points alone: a cube dropped flat lands with the same floats', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    // Fresh (speculative) contacts carry no force, so their gap counts in full and nothing is stopped short.
+    for (const bodies of [[cube([0, 0.51, 0])], [cube([0, 0.5, 0]), cube([0, 1.52, 0])]]) {
+      const scene = sceneOf(bodies);
+      expect(state((await poked(scene, 60, { gapSlop: 3e-5 }, { at: -1 })).final)).toEqual(state((await poked(scene, 60, {}, { at: -1 })).final));
+    }
+  });
+
+  // The settled scene's bodies `top` lifted by `by` after `settle` steps, then the largest lift left after each of
+  // `n` steps, with gapSlop 3e-5, on the GPU and on the reference.
+  const lifted = async (scene: SceneDesc, top: number[], by: number, settle: number, n: number) => {
+    const gpuRise = (await poked(scene, settle + n, { gapSlop: 3e-5 }, { at: settle, lift: top, by, riseSteps: n })).rise;
+    const e = new AvbdReferenceEngine({ gapSlop: 3e-5 });
+    await e.init(scene);
+    for (let i = 0; i < settle; i++) e.step();
+    const bodies = top.map((b) => e.world!.bodies[b]!), y0 = bodies.map((b) => b.pos[1]);
+    for (const b of bodies) b.pos[1] += by;
+    const refRise: number[] = [];
+    for (let i = 0; i < n; i++) { e.step(); refRise.push(Math.max(...bodies.map((b, k) => b.pos[1] - y0[k]!))); }
+    expect(gpuRise).toHaveLength(n);
+    return { gpu: gpuRise, ref: refRise };
+  };
+  // The reference test's hover probe: the settled column's top 4 cubes lifted by 25 um (and 100 um). Measured on
+  // SwiftShader (2026-10-27), 25 um: 24.8 um after 1 step, 12.9 after 10, 8.1 after 20 (the reference 25.0, 11.9,
+  // 6.4); then it stops closing, 6.2 um up from step 27 on, where the reference's goes on (0.71 um after 60
+  // steps). That is f32, since it depends on where the scene is (3.5 um with it moved 6 m down, 2.6 um 4 m
+  // down); which f32 quantity sets it is not traced. Without the slop the same lift is down to 1.9 um within 2
+  // steps and stays there (0.95 um 6 m lower). Lifted 100 um: 48.6 um after 1 step (the reference 48.1; 100 if the
+  // whole gap were excused); without the slop 6.7 um and 26.2 um (the reference 6.5 and 25.8).
+  const top4 = [4, 5, 6, 7];
+  it('with gapSlop 3e-5 a lifted stack rests on the excused gap and comes down as on the reference, never rising', { timeout: 300_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const { gpu: on, ref } = await lifted(column(), top4, 25e-6, 400, 60);
+    expect(on[0]).toBeGreaterThan(20e-6); // it rests on the excused gap (6.7 um without the slop)
+    expect(Math.abs(on[0]! - ref[0]!)).toBeLessThan(1e-6);
+    // Never above where it was put, but for one f32 position step (the lift itself is rounded to one).
+    expect(Math.max(...on)).toBeLessThan(25e-6 + 0.5e-6);
+    expect(Math.abs(on[9]! - ref[9]!)).toBeLessThan(2e-6);
+    expect(on[19]).toBeLessThan(10e-6);
+    expect(on[59]).toBeLessThan(8e-6); // stopped closing at 6.2 um (above)
+    const { gpu: far, ref: farRef } = await lifted(column(), top4, 100e-6, 400, 1);
+    // More than the slop: only gapSlop of the gap is excused.
+    expect(far[0]).toBeGreaterThan(35e-6);
+    expect(far[0]).toBeLessThan(75e-6);
+    expect(Math.abs(far[0]! - farRef[0]!)).toBeLessThan(1e-6);
+  });
+
+  // The same, well resolved: one cube resting on the ground (0.5 m up, where an f32 position step is 0.06 um),
+  // lifted 25 um. Measured on SwiftShader (2026-10-27): 13.14 um after 1 step, 6.88 after 2, 0.09 after 10 (the
+  // reference 13.10, 6.87, 0.04); without the slop 0.03 um after 1 step. It tells the primal's part apart: with
+  // the constant left out of the primal pipelines only (the dual still applying it) the cube stays 25.0 um up,
+  // 11.9 um off the reference's after 1 step, where the column above shows 1.2 um.
+  it('with gapSlop 3e-5 a cube on the ground lifted 25 um comes down as on the reference', { timeout: 120_000 }, async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const { gpu: on, ref } = await lifted(sceneOf([cube([0, 0.5, 0])]), [0], 25e-6, 100, 10);
+    expect(on[0]).toBeGreaterThan(10e-6); // it rests on the excused gap
+    expect(Math.abs(on[0]! - ref[0]!)).toBeLessThan(1e-6);
+    expect(Math.abs(on[9]! - ref[9]!)).toBeLessThan(0.5e-6);
+  });
+});

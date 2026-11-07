@@ -55,6 +55,7 @@ When the player changes a setting on the door, it is stored and its URL key is d
 
 - **A separate title page** (its own HTML entry) instead of an overlay. Rejected: the overlay lets B1 load and pre-settle behind the door, which is most of the first-minute budget on a 1k-block level.
 - **Locking levels until the previous one has a star.** Rejected for the playtest: testers have little time and B3 (10k blocks) is the spectacle to judge. The Play button already points at the next unstarred level.
+- **A pull as the opener.** Rejected (PT35): one pull brings nothing down alone, so it keeps no first-minute promise, and U1 (the first Undercut level) would have its par line's first pull played for the player, half the puzzle's answer; agent playtest 2 saw exactly that (the opener pulled a leg, and any adjacent leg then cleared it). `openerFor` never pre-aims a pull, under any `keystone.preaim`.
 - **The pre-aimed opener on every level.** Rejected: it hands out each level's best opening. It is offered once, on a first visit, as an option (`keystone.preaim=1` for all).
 - **Progress keyed by level id only.** Rejected: levels will be re-tuned between playtest deploys, and an old best would read as earned on the new level.
 
@@ -99,10 +100,29 @@ In play, from the same row:
 
 - **Bank** is an outline (orange text and edge, no fill) until the round meets its objective, then the solid primary button as before (hud.ts `BANK_QUIET`, `slotHtml`): banking before then ends the level with no star, and the playtest's novice was invited to at 17% of B1's 40%.
 - **The lot sheet** in the desktop HUD is its count line until the level's first clear ([lot-sheets.md](lot-sheets.md), `keystone.sheet`).
-- **Segmented controls** (the Advanced settings): the selected side filled in the accent with dark text, the others outlined on the panel; before, the selected side was the darker of two dark fills. Sound stays the one button the option registry draws (its markup is pinned by options-golden), reading On, filled, or Off; a two-segment Sound was tried and dropped at the O4 merge rather than move the golden.
+- **Segmented controls** (the Advanced settings): the selected side filled in the accent with dark text, the others outlined on the panel; before, the selected side was the darker of two dark fills. Sound was kept as one button (On, filled, or Off) at the O4 merge rather than move the golden; PT37 (below) made it an On/Off pair after the second playtest's judge read the single button as offering only On.
 
 What is an option and what is a fix: the lot sheet's collapse changes what the HUD shows, so it has a key (`keystone.sheet=open` restores it); the sideways door is a responsive layout for a screen that showed no whole card, the segmented fill and the quiet Bank correct controls that read the wrong way round, and the rest is copy, so those are plain fixes.
 
 Alternatives considered: **renaming the trials** in their definitions (clean names everywhere, but a name joins the level's hash, so every trial's progress and any saved session would orphan; the display layer costs one function); **hiding trial numbers** and showing names only (two cards could then read the same, "Long Wall" beside the rated Long Wall; the number tells them apart); **renaming the rack items** (`w-grenadel` to `w-biggrenade`: a hash change for every level that racks one, for a word only the chip shows); **a horizontally scrolling card rail** for the sideways door (the judge's idea: more cards per screen, but it adds a second scroll axis to a page that already scrolls down, and a rail per series hides most of each series; the one-row header gives two whole cards and Play with no new gesture); **Bank hidden** until the objective is met (simplest, but banking early is a real choice on a bad round: keep the rack's points rather than spend it; quiet keeps it on offer without inviting it).
 
 Tests: `game/test/copy-audit.test.ts` renders the door (every series, trials open, How to play, Advanced settings, the duels), the HUD, the tallying banner and the result card of every level the page lists, and both duels, to visible text and checks it for "engine", "probe", "grenadel", "1 pts", trial ids and the `W5-` prefix; `game/test/phone-door-build-e2e.test.ts` counts the whole cards on the sideways door's first screen (at least two).
+
+## The door and help for a newcomer (PT37, 2026-11-07)
+
+From the second agent playtest ([agent-playtest-2.md](agent-playtest-2.md), row PT37). Will was away and had delegated the calls.
+
+- **How to play, one page per mode.** The help box opens on tabs: Basics, the Chamber, Spectacle, Bullet Time, Undercut, Rube Lab, Fuse & Fold, Aftershock, Wavefront, Mason's Trial and the Siege Table (door.ts `HOW_TO_PLAY`). Each page is one or two lines. It opens on the page for the level or duel the door is on (`howModeOf`: a freeze budget is Bullet Time, otherwise the level's series, otherwise Basics), and a tab click (`data-act="howmode"`) switches the page. The Chamber page carries the leverage explanation (`LEVERAGE_MEANS`, PT31). `door.test.ts` checks that every page has one or two lines and at most 260 visible characters, and that every series maps to a page. `phone-door-build-e2e.test.ts` checks that each page's box fits an 844 × 390 screen.
+- **Advanced settings: six, then Developer.** Advanced opens on Sound, Look, Camera, Hand-over, Layout and Quality. Every other setting, and the progress reset, sits under a "Developer settings ▸" fold. Which rows a player sees is a field on each option's own door row (`DoorRow.player`, docs/design/options.md), so a new option lands under Developer unless it says otherwise.
+- **A confirmed reset.** "Forget my progress…" asks "Forget every best play and star on this device?" with Forget and Keep. Keep, or any other click, disarms it.
+- **Sound is an On/Off pair** (J1 #19: the single button read as offering only "On").
+- **No stars on unrated trials.** A trial's card shows "Goal" where a rated card shows its stars, and after a clear it shows "Goal met · Best …". Its result card and tally banner say "Unrated · goal met" or "Unrated · goal not met". The round-1 "★★ ?" placeholder was already gone after #246. The copy audit now guards both: no "?" in any card's star line, and no ★ or ☆ on a trial's card, result card or banner.
+
+Alternatives considered:
+
+- **One long How to play list**, the round-1 shape with more lines. Every mode in one scroll fails "fits one sideways screen" as modes are added. Tabs keep each page short and open on the one that matters now.
+- **A central list of the six player settings** in door.ts. This works, but it is a second place to edit when an option is added, which is what the O4 registry removed. A field on the row keeps the choice beside the option.
+- **Hiding the developer settings behind `?developer=1`.** A player who wants Bounce or the rapid-fire toggle could no longer find them. A fold costs one click.
+- **A modal confirm for the reset.** The inline question keeps the door one page and needs no focus trap.
+
+The options golden (`options-golden.test.ts`) pins the door's rows. The four Sound rows were edited by hand to the pair's markup (not re-recorded), and the Developer split is compared in registry order. Both changes are documented in the test's header.

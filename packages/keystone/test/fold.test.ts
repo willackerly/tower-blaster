@@ -96,6 +96,9 @@ describe('the fold objective, metric and tally', () => {
     expect(objectiveMet(c, { red: red(51), crownsTotal: 0, collapse: 0.9, heritage: 0 }, 'outcome', obj)).toBe(false);
     expect(objectiveMet(c, { red: red(0), crownsTotal: 0, collapse: 0.59, heritage: 0 }, 'outcome', obj)).toBe(false);
     expect(objectiveMet(c, { red: red(0), crownsTotal: 0, collapse: 0.9, heritage: 1 }, 'outcome', obj)).toBe(false);
+    // A domino fuse that never cut its row (M5b): a misfire fails it, however well the rest fell.
+    expect(objectiveMet(c, { red: red(0), crownsTotal: 0, collapse: 0.9, heritage: 0, misfires: 1 }, 'outcome', obj)).toBe(false);
+    expect(objectiveMet(c, { red: red(0), crownsTotal: 0, collapse: 0.9, heritage: 0, misfires: 0 }, 'outcome', obj)).toBe(true);
   });
   it('scores fold as collapse discounted by spill, with a Spill cost line only on fold levels', () => {
     expect(foldValue(0.8, 0.25)).toBeCloseTo(0.6, 15);
@@ -103,6 +106,9 @@ describe('the fold objective, metric and tally', () => {
     expect(outcomeTally({ ...f, spill: 0.25 }).find((l) => l.label === 'Spill')?.value).toBe(-750);
     expect(outcomeTally({ ...f, spill: 0 }).some((l) => l.label === 'Spill')).toBe(false);
     expect(outcomeTally(f).some((l) => l.label === 'Spill')).toBe(false);
+    // A Misfire line costs 200 a column a fuse never cut; none when every charge fired.
+    expect(outcomeTally({ ...f, met: false, misfires: 3 }).find((l) => l.label === 'Misfire')?.value).toBe(-600);
+    expect(outcomeTally({ ...f, misfires: 0 }).some((l) => l.label === 'Misfire')).toBe(false);
   });
   it('is refused on a par level and with out-of-range bounds', () => {
     const bad = (o: Partial<typeof lvl>) => validateLevel(compileLevel({ ...lvl, ...o })).filter((i) => i.code === 'objective').length;
@@ -131,8 +137,8 @@ describe('a fold level session', () => {
     const r = reduceCpu(atHome(), null, c, baselineOf(atHome(), c, 0), 1);
     // At home nothing has come down either way; the building's PE excludes the houses'.
     expect(s.collapse(s.peOf(r))).toBe(0);
-    expect(s.peOf(r)).toBe(r.pe_mJ - r.peHeritage_mJ);
-    expect(r.peHeritage_mJ).toBeGreaterThan(0);
+    expect(s.peOf(r)).toBe(r.pe_mJ - r.peAside_mJ);
+    expect(r.peAside_mJ).toBeGreaterThan(0);
   });
 });
 

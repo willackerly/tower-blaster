@@ -17,7 +17,10 @@ export interface RubeResult {
   /** Bells rung at the end, of `bells`. */
   rung: number;
   bells: number;
-  /** Steps from the plunger to the step every bell had rung (-1: never), and to the session's end. */
+  /**
+   * Steps from the plunger to the step every bell had rung (-1: never), and to the session's end: both
+   * observed steps (the session's levelEnd), so a pipelined driver's one step in flight past the end is not counted.
+   */
   rungAt: number;
   steps: number;
   /**
@@ -41,9 +44,11 @@ export async function rubePlay(engine: PhysicsEngine, c: CompiledLevel, opts: Dr
     maxSteps: start + (opts.maxSteps ?? Math.max(2400, c.def.runWindow ? runWindowSteps(c.def.runWindow, c.scene.dt) + 600 : 0)),
     perStep: () => { if (rungAt < 0 && d.session.crownLive.length && d.session.crownLive.every(Boolean)) rungAt = d.snapshotStep - start; return []; },
   });
+  // The observed step the session ended at (its levelEnd), not engine.stepIndex: a pipelined driver has stepped once more.
+  const end = r.feedback.find((f) => f.t === 'levelEnd')?.step ?? r.steps;
   return {
     cleared: r.session.phase === 'cleared', rung: r.session.crownLive.reduce((a, x) => a + x, 0), bells: c.meta.crowns.length,
-    rungAt, steps: r.steps - start, ...pins(pinnedWorst(c, r.snapshot, engine.info.backend.startsWith('webgpu'))), hash: snapshotHash(r.snapshot),
+    rungAt, steps: end - start, ...pins(pinnedWorst(c, r.snapshot, engine.info.backend.startsWith('webgpu'))), hash: snapshotHash(r.snapshot),
   };
 }
 

@@ -33,6 +33,11 @@ const MIN = 60_000;
 const STEP_HZ = 60;
 /** Sim steps after the first shot at which the sequence is captured (a third of a second, one second, two and a half). */
 export const SEQUENCE_STEPS = [20, 60, 150];
+/**
+ * Sim steps after a bell rings (Rube Lab, Wavefront's Lay; PT26) at which the first shot is also captured: the flash
+ * at its brightest, the ring waves out, and the bell as it comes to rest (a bell level ends 1.5 s, 90 steps, after it).
+ */
+export const RING_STEPS = [6, 30, 70];
 
 interface ShotRecord { k: number; shot: Shot | null; how: string; firedAt: number; settledAt: number | null; simS: number | null; collapse: number; strokes: number; phase: string }
 export interface RunRecord {
@@ -195,11 +200,14 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
       }
       rec.build = { built: line?.label ?? 'nothing', status: await page.evaluate(() => window.__game.edit.status()) };
       if (!play) return;
-      await page.evaluate(() => window.__game.edit.play());
+      // Play the build and stop before Go (Rube Lab's Run releases the ball at once): the harness fires the level's own verb next, as a player's first shot.
+      await page.evaluate(() => window.__game.edit.play(false));
       await page.waitForFunction(() => !window.__game.edit.on && (window.__game.ready || window.__game.status !== 'running'), undefined, { timeout: 5 * MIN, polling: 250 });
       await shoot('after Play', 300);
     };
 
+    /** The level in play rings a bell (Rube Lab, Wavefront's Lay): its first shot's sequence also captures the ring (RING_STEPS). */
+    let bellLevel = false;
     const playShot = async (k: number, fire: () => Promise<{ shot: Shot | null; how: string } | null>, sequence: boolean) => {
       const before = await gameState(page);
       const how = await fire();
@@ -207,10 +215,24 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
       await page.waitForFunction((s) => window.__game.strokes > s || window.__game.result !== null, before.strokes, { timeout: MIN, polling: 100 });
       const firedAt = (await gameState(page)).step;
       if (sequence) {
-        for (const ds of SEQUENCE_STEPS) {
-          await page.waitForFunction((t) => window.__game.stepIndex >= t || window.__game.phase !== 'running', firedAt + ds, { timeout: 10 * MIN, polling: 50 });
-          if ((await gameState(page)).phase !== 'running') break;
-          await shoot((step) => `shot ${k + 1} +${step - firedAt} steps`);
+        // The sequence's frames, and on a bell level the ring's too once it rings, in step order.
+        const due: Array<{ at: number; name: (step: number) => string }> = SEQUENCE_STEPS.map((ds) => ({ at: firedAt + ds, name: (step) => `shot ${k + 1} +${step - firedAt} steps` }));
+        let rung = !bellLevel;
+        while (due.length || !rung) {
+          due.sort((a, b) => a.at - b.at);
+          const next = due[0]?.at ?? Number.MAX_SAFE_INTEGER;
+          const st = await (await page.waitForFunction(([t, watch]) => {
+            const g = window.__game, bell = g.counts.bellStep ?? null;
+            return g.stepIndex >= t || g.phase !== 'running' || (watch && bell !== null) ? { phase: g.phase, bell } : false;
+          }, [next, !rung] as const, { timeout: 10 * MIN, polling: 'raf' })).jsonValue() as { phase: string; bell: number | null };
+          if (!rung && st.bell !== null) {
+            const rang = st.bell;
+            rung = true;
+            due.push(...RING_STEPS.map((ds) => ({ at: rang + ds, name: (step: number) => `bell rang +${step - rang} steps` })));
+            continue;
+          }
+          if (st.phase !== 'running') break;
+          await shoot(due.shift()!.name);
         }
       }
       await settled(page, before.strokes + 1, 15 * MIN);
@@ -252,6 +274,7 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
       await shoot('aim view');
       rec.hud = await textOf(page, '#hud');
       await buildPhase(def, s.policy, true);
+      bellLevel = def.objective.kind === 'bell';
       const moded = !!def.quake || def.rack[0] === 'plunger';
       const hud0 = v.touch ? await hudBoxes(page) : null;
       for (let k = 0; k < s.shots; k++) {

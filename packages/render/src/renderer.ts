@@ -8,9 +8,9 @@
 import { writeStruct } from '@tb/schema';
 import type { GpuProfiler } from '@tb/gpu';
 import { Culler, NO_LOD, SEG, type CullFrame } from './cull.ts';
-import { CLASSIC_SPARKS, CTL, DEFAULT_DEBRIS, DEFAULT_SPARKS, Sparks } from './sparks.ts';
+import { CLASSIC_SPARKS, CTL, DEFAULT_DEBRIS, DEFAULT_SPARKS, MATERIAL_ICE, Sparks } from './sparks.ts';
 import { BLAST_LIGHTS, CLASSIC_LIGHTS, DEFAULT_LIGHTS, Lights, MAX_BALLS, TRAIL } from './lights.ts';
-import { Blasts } from './blasts.ts';
+import { Blasts, RING_BLASTS, RING_ECHO_S } from './blasts.ts';
 import { Fuses } from './fuses.ts';
 import { BlastReach, IMPACT_STYLE } from './reach.ts';
 import { aoFrame, aoGrid, AoVolume } from './ao.ts';
@@ -865,7 +865,7 @@ export class Renderer {
     const drawImpact = !ids && this.impactMark.prepare({ eye: f.eye, viewProj: cf.viewProj, invViewProj: this.lastInv, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma });
     const drawBlasts = blasts.length > 0 && this.blasts.prepare(blasts, { eye: f.eye, viewProj: cf.viewProj, invViewProj: this.lastInv, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma });
     if (!ids && effects) {
-      if (this.toggles.sparks) this.sparks.encode(cp, this.source, { dt: dt * froude, groundY: f.groundY, dvScale: Math.sqrt(metres) });
+      if (this.toggles.sparks) this.sparks.encode(cp, this.source, { dt: dt * froude, groundY: f.groundY, dvScale: Math.sqrt(metres), surfaces: this.cullSurfaces ?? undefined });
       this.lights.encode(cp, this.source, culler.records, this.sparks, { eye: f.eye, time: f.time ?? 0, ball: this.look.ball.map(srgbToLinear) as V3 });
     } else if (!ids) {
       if (blastLit) this.lights.packOnly(cp, this.sparks);
@@ -873,7 +873,7 @@ export class Renderer {
       if (debris) {
         const d = this.look.debris;
         this.sparks.debris = { ...this.sparks.debris, dustPerDv: DEFAULT_DEBRIS.dustPerDv * (d?.dust ?? 1), chipPerDv: DEFAULT_DEBRIS.chipPerDv * (d?.chips ?? 1), dustDv: d?.threshold ?? DEFAULT_DEBRIS.dustDv, dustFace: d?.face ?? DEFAULT_DEBRIS.dustFace, dustSkirt: d?.skirt ?? DEFAULT_DEBRIS.dustSkirt };
-        this.sparks.encode(cp, this.source, { dt: dt * froude, groundY: f.groundY, mode: 'debris', dvScale: Math.sqrt(metres) });
+        this.sparks.encode(cp, this.source, { dt: dt * froude, groundY: f.groundY, mode: 'debris', dvScale: Math.sqrt(metres), surfaces: this.cullSurfaces ?? undefined });
       }
     }
     cp.end();
@@ -1109,6 +1109,15 @@ export class Renderer {
     this.blasts.add(centre, radius, time);
   }
 
+  /**
+   * A bell rung at `centre` (Rube Lab, PT26): two ring waves (blasts.ts RING_BLASTS: the shell alone, slow, with a
+   * short warm light) out to `radius`, the second a beat after the first and wider, as a struck bell rings on.
+   */
+  ring(centre: V3, radius: number, time = this.lastTime): void {
+    this.blasts.add(centre, radius, time, RING_BLASTS);
+    this.blasts.add(centre, 1.5 * radius, time + RING_ECHO_S, RING_BLASTS);
+  }
+
   /** Mark (or unmark) a body slot as a lit bomb: a flickering spark rides on top of it until it is removed (fuses.ts). */
   fuse(slot: number, on = true): void {
     this.fuses.set(slot, on);
@@ -1179,9 +1188,30 @@ export class Renderer {
     this.impactMark.set(point, radius, normal);
   }
 
-  /** Sparks from a game event at pos, flying out around dir; strength is a speed change in m/s. */
-  burst(pos: V3, dir: V3, strength: number): void {
-    this.sparks.inject(pos, dir, strength);
+  /**
+   * Sparks from a game event at pos, flying out around dir; strength is a speed change in m/s. ice: the
+   * burst is ice's (cold shards in the stylized looks, white and blue chips and frost in the real look).
+   */
+  burst(pos: V3, dir: V3, strength: number, opts: { ice?: boolean } = {}): void {
+    this.sparks.inject(pos, dir, strength, undefined, opts.ice ? MATERIAL_ICE : 0);
+  }
+
+  /** Whether the look throws dust (the real look's debris: sparks.ts debris mode), so `dust` puffs anything. */
+  get throwsDust(): boolean {
+    return this.look.atmosphere !== undefined && this.look.effects === false && this.toggles.sparks && (this.look.debris?.dust ?? 1) > 0;
+  }
+
+  /**
+   * Dust kicked up around a foot at pos (PT25: a tower's base on a quake's swing), eight events in a ring of `radius` metres:
+   * debris events no stronger than the chips' threshold, so they puff and throw no chips. Only in a look that throws
+   * dust (throwsDust: elsewhere they would be sparks); returns whether it did.
+   */
+  dust(pos: V3, radius: number, strength: number): boolean {
+    if (!this.throwsDust) return false;
+    const s = Math.min(strength, this.sparks.debris.chipDv);
+    // Eight events round the foot (about a dozen puffs at a swing's full strength; MAX_INJECT bounds a frame's).
+    for (let k = 0; k < 8; k++) { const a = (k * Math.PI) / 4, dx = Math.cos(a), dz = Math.sin(a); this.sparks.inject([pos[0] + dx * radius, pos[1], pos[2] + dz * radius], [dx, 0.6, dz], s); }
+    return true;
   }
 
   private viewport(): [number, number] {

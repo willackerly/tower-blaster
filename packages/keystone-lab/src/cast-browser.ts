@@ -10,7 +10,7 @@ import { createServer } from 'vite';
 import { CLOSE_TIMEOUT_MS, closeWithin, launchChromium, WEBGPU_ARGS } from '@tb/testkit';
 import { type CastPlay, type LevelDef, type MasonVerdict, type Player, readShots, type RubeResult, type Shot, type WaveOptions, type WaveResult, writeShots } from '@tb/keystone';
 import type { DuelOutcome } from '../../game/src/duel-bot.ts';
-import type { RestReport } from '../../game/src/cast-page.ts';
+import type { DuelProbe, DuelShot, RestReport } from '../../game/src/cast-page.ts';
 import type { CastPlayer } from './cast.ts';
 import { withPageRetry } from './page-retry.ts';
 
@@ -22,6 +22,8 @@ export interface BrowserCastOptions {
   engine?: 'gpu' | 'rapier';
   /** Engine step cap per play (castPlay's maxSteps). */
   maxSteps?: number;
+  /** A Chorus level: play world k alone (the cast page's chorusOnly). */
+  chorusOnly?: number;
   /** Lines per page.evaluate call: smaller batches report progress sooner (default 4). */
   batch?: number;
   /** Times a batch is replayed on a reopened page after the page is lost under it (default 2). */
@@ -45,6 +47,8 @@ async function injectFault(p: Page, f: PageFault): Promise<void> {
 export interface BrowserCastPlayer extends CastPlayer {
   /** True on a software adapter (SwiftShader): its plays are valid, its timings are not performance results. */
   software: boolean;
+  /** As play, with a Chorus level's world k played alone (chorusOnly for these lines only): the verify's solo arm. */
+  playOnly(level: LevelDef, lines: Shot[][], chorusOnly: number): Promise<CastPlay[]>;
   /** Wall time of each play in the page, ms, in play order. */
   readonly playMs: number[];
   /** One line per page lost mid-batch and reopened (when, what was running, the error): empty on a clean cast. */
@@ -58,7 +62,7 @@ export interface BrowserCastPlayer extends CastPlayer {
   /** A Rube Lab level played once with its plunger on the page's engine (cast-page.ts rube), at most maxSteps steps. */
   rube(level: LevelDef, maxSteps?: number): Promise<RubeResult & { ms: number }>;
   /** One novice Siege Table duel on the page's engine (cast-page.ts duel; game duel-bot.ts): PT5's balance on the GPU. */
-  duel(id: string, first: Player, seed: number, aspect?: number): Promise<DuelOutcome & { ms: number }>;
+  duel(id: string, first: Player, seed: number, aspect?: number, opts?: DuelProbe): Promise<DuelOutcome & { ms: number; mirror: number; shots: DuelShot[] }>;
   /** A Wavefront level played once with `shots` on the page's engine, the wave metered (cast-page.ts wave). */
   wave(level: LevelDef, shots: Shot[], opts?: Pick<WaveOptions, 'groups' | 'fell' | 'maxSteps'>): Promise<WaveResult & { ms: number }>;
   /** A Mason level as built, judged in `worlds` at once on the page's engine (cast-page.ts mason). */
@@ -135,25 +139,27 @@ export async function openBrowserCastPlayer(opts: BrowserCastOptions = {}): Prom
     adapter: info.adapter, software: info.software, engine: info.engine, playMs, reopens,
     // The game aims for the GPU engine's one substep per step; Rapier substeps once per iteration (4).
     substeps: info.engine === 'rapier' ? 4 : 1,
-    async play(level, lines, nudges) {
-      const out: CastPlay[] = [];
-      for (let k = 0; k < lines.length; k += batch) {
-        const text = lines.slice(k, k + batch).map((l) => writeShots(l)), nud = nudges ? nudges.slice(k, k + batch) : null;
-        // Shot text holds integers only (readShots checks each shot), so a line crosses to the page exactly; so do the nudge seeds.
-        for (const t of text) readShots(t);
-        // Each play starts from the level on a fresh engine, so a batch replayed on a reopened page returns the same plays.
-        const got = await onPage(`plays ${k + 1}-${k + text.length}`, (p) => p.evaluate(([lv, ls, max, nd]) => window.__cast.play(lv, ls, max ?? undefined, nd ?? undefined), [level, text, opts.maxSteps ?? null, nud] as const));
-        for (const { ms, ...p } of got) { playMs.push(ms); out.push(p); }
-      }
-      return out;
-    },
+    play: (level, lines, nudges) => playLines(level, lines, nudges ?? null, opts.chorusOnly ?? null),
+    playOnly: (level, lines, k) => playLines(level, lines, null, k),
     rest: (level, steps) => onPage('rest', (p) => p.evaluate(([lv, n]) => window.__cast.rest(lv, n), [level, steps] as const)),
     rube: (level, maxSteps) => onPage(`rube ${level.id}`, (p) => p.evaluate(([lv, m]) => window.__cast.rube(lv, m ?? undefined), [level, maxSteps ?? null] as const)),
-    duel: (id, first, seed, aspect) => onPage(`duel ${id} seed ${seed}`, (p) => p.evaluate(([i, f, s, a]) => window.__cast.duel(i, f, s, a), [id, first, seed, aspect] as const)),
+    duel: (id, first, seed, aspect, o = {}) => onPage(`duel ${id} seed ${seed}`, (p) => p.evaluate(([i, f, s, a, oo]) => window.__cast.duel(i, f, s, a, oo), [id, first, seed, aspect, o] as const)),
     wave: (level, shots, o = {}) => onPage(`wave ${level.id}`, (p) => p.evaluate(([lv, line, oo]) => window.__cast.wave(lv, line, oo), [level, writeShots(shots), o] as const)),
     mason: (level, worlds) => onPage(`mason ${level.id}`, (p) => p.evaluate(([lv, w]) => window.__cast.mason(lv, w), [level, worlds] as const)),
     injectFault(kind) { fault = kind; },
     setBatchTimeout(ms) { batchTimeoutMs = ms; },
     close,
   };
+  async function playLines(level: LevelDef, lines: Shot[][], nudges: readonly number[] | null, only: number | null): Promise<CastPlay[]> {
+    const out: CastPlay[] = [];
+    for (let k = 0; k < lines.length; k += batch) {
+      const text = lines.slice(k, k + batch).map((l) => writeShots(l)), nud = nudges ? nudges.slice(k, k + batch) : null;
+      // Shot text holds integers only (readShots checks each shot), so a line crosses to the page exactly; so do the nudge seeds.
+      for (const t of text) readShots(t);
+      // Each play starts from the level on a fresh engine, so a batch replayed on a reopened page returns the same plays.
+      const got = await onPage(`plays ${k + 1}-${k + text.length}`, (p) => p.evaluate(([lv, ls, max, nd, w]) => window.__cast.play(lv, ls, max ?? undefined, nd ?? undefined, w ?? undefined), [level, text, opts.maxSteps ?? null, nud, only] as const));
+      for (const { ms, ...p } of got) { playMs.push(ms); out.push(p); }
+    }
+    return out;
+  }
 }

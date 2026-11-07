@@ -526,7 +526,187 @@ Fixed: `sparseModes` hung on a body with no mode table (a 5 cm stone cube, whose
 Page for Will: https://claude.ai/artifact/Rx7wFWSp5tVpMhauwwYpQ4 (stone A-E, ice now and B-E, and
 real recordings of each). His picks become the real set's defaults.
 
-Next: Will's picks, then a tower. The free-text describer (CLAP) still needs huggingface.co.
+Defaults (2026-11-07). Will, away for a while, delegated the picks, so the recommended takes are the
+real set: stone E (`overlap: 1, jitter: 0.15, gritDb: 50, gritRate: 10, face: 0.6`) and ice E
+(`jitter: 0.08, gritDb: 50, gritRate: 30, gritSpread: 0.08, face: 0.5`), with step 3's level trims and
+grit caps (below: stone `gritShare: 0.0015, levelDb: -10`, ice `gritShare: 0.01, levelDb: -7`). The real set before this is
+the set `real1` (viewer `snd.set=real1`, game `keystone.sound=real1`); `classic` stays G6's.
+
+A loud crack burst grows as rate dv^3 against the impact's dv^2: ice at 4 m/s would radiate 16% of the
+impact's kinetic energy as grit. Grit is now capped at GRIT_SHARE (5%) of it (fewer grains of the same
+size past that); soft hits and G6's grit are far under the cap, so they play as before. With step 3's
+trims L1-L5 keep their level: L1 limits 0.9 dB (real1: 1.1), L2 (13 stone hits) peaks at 0.39 (real1: 0.43;
+untrimmed 0.67).
+
+### Step 3: a tower (2026-11-07)
+
+The ladder's scripts stop at a hand-made pile (`tumble`); a tower is the first step the physics writes.
+`capture-cli.ts scene=tower` stands one building of the game's blocks (S5, F x F x H cubes of
+DEFAULT_UNIT, 0.5 m) on Rapier, knocks it down with the viewer's ball and taps it from the viewer's camera
+angle `dist` m away. Four towers: F3 H12 ball 15 units/s at 8 m (1148 impacts), F2 H10 10/s (645), F4 H8
+20/s (1581), F3 H16 12/s at 12 m (917). Each take is rendered level-free (peak 0.5) and judged
+(tools/sound-judge), and matched on octave spectra (dist.py) to the real rock-break, brick and stone drops
+(stone) or ice break and crack (ice). Means over the four:
+
+| take | real share | mineral | fireworks-like | crack-like | tonal | octave rms (dB) |
+|---|---|---|---|---|---|---|
+| stone real1 (step 2b) | 0.60 | 0.35 | 0.00 | 0.05 | 0.02 | 8.1 |
+| stone E, grit at GRIT_SHARE 5% | 0.98 | 0.49 | **0.69** | 0.27 | 0.00 | 6.6 |
+| stone E, gritShare 0.0015 (default) | 0.95 | 0.50 | 0.08 | **0.39** | 0.00 | **4.9** |
+| stone E, no grit | 0.91 | 0.42 | 0.04 | 0.09 | 0.00 | 5.0 |
+| ice real1 | 0.47 | 0.05 | 0.00 | 0.00 | 0.88 | 10.9 |
+| ice E, grit at 5% | 0.97 | 0.44 | **0.69** | 0.20 | 0.00 | 2.0 |
+| ice E, gritShare 0.01 (default) | 0.92 | 0.50 | 0.19 | 0.33 | 0.01 | 2.7 |
+| ice E, no grit | 0.42 | 0.10 | 0.00 | 0.00 | 0.50 | 3.4 |
+
+(fireworks-like: Explosion, Fireworks, Firecracker, Cap gun, Gunshot, Burst in the judge's top six;
+crack-like: Crack, Breaking, Crackle, Crumpling, Scrape, Shatter, Smash, Rumble, Thud, Clatter, Rattle.
+The real rock-break and ice-break clips read Crack, Breaking, Crackle, Crumpling; none reads fireworks.)
+
+What the tower found, and what changed:
+
+- **Grit at a tower's speeds read as fireworks.** Knocks and clatters (0.5-3 m/s) shed little grit; a ball
+  at 10 m/s and the blocks it throws shed it at the 5% cap, a dense string of loud dry pops. New key
+  `gritShare` (0 to 1, absent GRIT_SHARE): the material's own cap. Stone takes 0.0015 and ice 0.01
+  (ice needs its crackle: with no grit it reads glass and tonal again). Below the cap nothing changes,
+  so the knock and clatter takes are as judged (their loudness moves 0.0 dB for stone, 0.3 dB for ice).
+- **The takes were 5-17 dB louder than the sounds they replaced.** Step 2c judged them peak-normalised,
+  so their level was never heard: the face contact alone adds ~10 dB for stone and ~6 dB for ice (a
+  shorter contact puts more force into the radiating modes), and grit at the 5% cap added up to 7 dB
+  more on a tower. In the game a stone tower would have limited by 13 dB. New key `levelDb` (-60 to 20,
+  absent 0): one gain on everything the material sounds (top voices, background, dense field, grit;
+  it scales A = dv / distance, which all of them are linear in), so timbre is untouched. Stone takes
+  -10 dB and ice -7 dB, the medians of real-minus-real1 loudness over knock, clatter, tumble and the four
+  towers (spread +-1.4 dB). A level trim, not physics: the game was mixed on real1, and the tower now
+  plays stone within 1.0 dB and ice within 0.3 dB of it (test: knock, clatter and tumble within 3 dB).
+
+`levels-cli.ts` takes `set=`.
+
+### Step 4: a level (2026-11-07)
+
+The game's own path: `sound-cli.ts` plays a level on the AVBD reference, taps it from the game's opening
+camera and renders it through the level's sound slots at the game's level, limiter and all. It now takes
+any built-in level (its par line, else its showcase line, else `shots=`), and maps every body by its
+description as the page does (a spawned ice piece was an index past the shots). The ice trials have no
+recorded line, so each takes a cannonball at the centre then a grenade from 20 degrees round
+(`cannonball.0.16.0.20.100_w-grenade.40.12.0.30.100`).
+
+| level (impacts) | set | judge: real share, top classes | limiter: worst, time under -3 dB |
+|---|---|---|---|
+| T-I1 ice tower (526 block, 6449 piece) | real1 | 0.79: Glass, Chink, Music, Ding | -6.9 dB, 80 ms |
+| | **real** | **0.93**: Explosion, Chainsaw, Breaking (mineral .42) | -12.3 dB, 370 ms |
+| T-I2 ice wall (1083, 1185) | real1 | 0.62: Glass, Chink, Ding, Music | none |
+| | **real** | **0.89**: Glass, Explosion, Chink, Fireworks | none |
+| T-I3 stone keep, ice top (476 stone, 299 ice, 1429 piece) | real1 | 0.64: Glass, Music, Chink, Breaking | -7.6 dB, 100 ms |
+| | **real** | **0.86**: Sound effect, Camera, Fire (mineral .39) | -9.9 dB, 340 ms |
+
+What the level found:
+
+- **A shattered ice block's pieces sounded as whole blocks.** Keystone splits a block 2 x 2 x 2 (ice.ts);
+  every piece played ice at the block's edge, so a grenade's 6000 piece hits rang like 6000 blocks. New
+  slot `PIECE_SLOT` (sound-map.ts, after the ammo): ice at half the edge, an octave up with an eighth of
+  a block's energy. The pieces now sit 12-18 LU under the blocks.
+- **A grenade among ice blocks drives the limiter in either set**: the whole blocks it throws peak
+  7-9 dB over full scale at the game's level (real1 too). The real set holds it 3-4 times as long (its
+  grit is crackle: peak-to-loudness 2-6 dB over real1's). Left as is: it lasts a third of a second inside
+  an explosion, which is what the limiter is there for; a listening item for Will.
+- The real set reads as breaking where real1 read as glass and music on every ice level.
+
+## Launch (A10, 2026-11-07)
+
+The launch cue was a sine gliding down an octave (70 Hz for a cannonball, 110 for the rest): the judge
+heard it as Beep, Music and Sound effect (real share 0.11-0.17). It is now a gas launcher's whump, made
+from the fired body's own size and speed (launch-sound.ts; the launcher stands behind the camera, so it
+is heard close):
+
+- **Barrel**: closed at the breech, open at the muzzle, `BARREL_CALIBRES` (6) shot diameters long. It
+  rings at its odd quarter-wave partials f_k = (2k - 1) c / (4 (L + 0.61 r)) with Q 3 (a wide open end
+  radiates them away in a few cycles), struck as the gas behind the shot vents. A cannonball's barrel
+  (3 m) sits at 27/82/136/190 Hz, a marble's (1.2 m) at 68/204/340/476 Hz.
+- **Muzzle blast**: one Friedlander pulse, its positive phase the cube root of the gas's energy
+  (Hopkinson-Cranz scaling; the gas holds ke (1/0.3 - 1) once the shot takes its 30%): 2.0 ms for a
+  cannonball at 15 m/s, 1.0 ms for a marble at 20.
+- **Chuff**: the gas leaves the bore choked (at the speed of sound), so its turbulence peaks at Strouhal
+  0.2, f = 0.2 c / d (137 Hz for a cannonball, 343 Hz for a marble), broadband (Q 0.7: a narrow band read
+  as a struck bell), venting over four barrel transits (35 ms and 14 ms).
+- Mixed 0.3 / 0.3 / 0.4 by energy; peak 0.35 at 100 kJ, rising as ke^0.1 within 0.2-0.5.
+
+Judged (tools/sound-judge): the marble's whump reads Plop, Door, Whack (real share 0.68-0.69); the
+cannonball's reads 0.79-0.80 real but as Ding, Chink and Clang. YAMNet hears nothing under 125 Hz,
+where the barrel and the blast are (either alone it calls silence), so for a cannonball it judges only
+the chuff's upper half; every mix and band width tried (Q 0.3-1.5) kept that label. So the judge can
+rank the whump against the glide but cannot tune a cannonball's. Real launch recordings (mortar, air
+cannon, potato cannon) are the next reference (A10b). A drop (released, not launched) and the cue (pushed)
+keep the glide. `keystone.launchsound=glide` brings the old cue back.
+
+## Blasts (A6, 2026-11-07)
+
+A weapon going off (a grenade, a bomb, a plunger's charges) made no sound of its own: only the blocks it
+threw were heard. It now booms (blast-sound.ts), from the blast's reach (the radius it pushes out to) and
+the camera's distance from it:
+
+- **Shock**: a Friedlander pulse, its positive phase 0.4 ms per metre of reach (Hopkinson-Cranz: every
+  time and length of a blast grows as the cube root of its charge, and the reach is such a length).
+  A charge's 1.5 m is a 0.6 ms crack; the grenade's 5 m a 2 ms thump.
+- **Rumble**: the same pulse echoing off the ground and the scene, a velvet-noise train of 2000 echoes a
+  second under e^(-t/tau), tau = 0.4 s x sqrt(reach) (0.49 s for a charge, 0.89 s for the grenade),
+  darkened by two poles at 400 Hz for the echoes' longer paths. The Friedlander pulse is the impulse
+  response of a two-pole filter, so both parts are that filter run over their taps (exact, O(n)).
+- Mixed 0.35 / 0.65 by energy, DC-blocked at 20 Hz, then a tanh-like soft clip at drive 8: the overload
+  of an ear or microphone near a blast. Peak 0.6 for the grenade at 15 m, scaling as reach / distance
+  within 0.05-0.8, and it plays distance / c after the flash (at most 150 ms).
+
+Judged (tools/sound-judge), four takes each at reach 1.5, 2, 3 and 5 m: all 16 top-1 Explosion
+(0.50 / 0.55 / 0.63 / 0.62 by reach; real share 0.92-0.94). One step off at a time, one take each:
+
+| ablation | judge's top label | Explosion |
+|---|---|---|
+| rumble not darkened (no 400 Hz poles) | Ocean, Waves (all 4 reaches) | 0.00 |
+| no overload (drive 0: the 1-sample peak sets the level, the rumble 25 dB under) | Silence (3 of 4) | 0.27-0.38 |
+| rumble half as long | Timpani, Sound effect | 0.00-0.17 |
+
+Tried and dropped: clustered echoes (a slow random swell over the taps, for a rolling rumble) read as
+Wind (Explosion 0.08-0.20). As with the launch, the judge hears nothing under 125 Hz, so the grenade's
+low thump is judged by its upper half; real explosion recordings would be the next reference.
+
+Each wave is built once per reach (to the centimetre) and take (four, so blasts going off together do
+not add up coherently) and cached by the Synth: building one is a few ms on a CI box. The feedback
+carries only the reach, not the blast's impulse, so two weapons of one reach sound alike.
+`keystone.blastsound=none` brings the old silence back.
+
+## Everything spawned sounds (A6, 2026-11-07)
+
+Before this, a body spawned during a level was heard only if it was Keystone's own steel or iron ammo
+or an ice piece. The rack's real-world presets, every weapon's shell (B1-B3's bomb, B2's ram, the
+firework, the default w-grenade: their densities are scaled to the level's blocks, so they are neither
+steel nor iron) and Mason's Trial probes were silent. sound-map.ts soundSlotOf now goes, for a spawned body:
+ice piece; rack preset (a sphere at a preset's real diameter and its density x MODEL_DENSITY, presetOf);
+Keystone ammo; a structure material's density (a probe) as that material; anything else as the steel
+ammo of its shape, a metal casing. Nothing spawned is silent.
+
+Each preset has its own slot (PRESET_SLOT + k, at its real diameter; 6 slots, ~5 ms to build next to
+the other 11's ~120 ms):
+
+| preset | body model | judge, knock (clatter) |
+|---|---|---|
+| beach ball | vinyl shell, 0.25 kg wall, inflated contact 25 ms | Door, Knock, Tap (wood .78) |
+| basketball | rubber shell, 0.62 kg wall, inflated contact 12 ms | Knock .54, Whack, Door, Thump (wood .91) |
+| bowling ball | solid polyester resin, E 3.5 GPa, loss 0.02 | Sound effect, Tick (no class over .2) |
+| cannonball (24-pounder) | solid cast iron | Tick, Sound effect |
+| wrecking ball | solid steel, 0.9 m | Chink .70, Glass, Ding (metal .80 on clatter): it rings, as the steel ammo does |
+| boulder | the level's stone at 6.7 m, grit and all | Music, Door (clatter: Plop, Crack; mineral .41) |
+
+An inflated ball's stiffness is its air's, not its wall's: Hertz on the rubber gives a 3 ms contact,
+where high-speed video puts a basketball's at 10-15 ms; ecForContact solves the contact modulus for
+INFLATED_CONTACT. A shell this thin and soft put its plate modes under 20 Hz, where the synth's
+resonators barely decay and drifted toward full scale (the beach ball's knock peaked at 0.9, 97% of its
+energy under 20 Hz, at the end of the clip). modes.ts now drops every mode under MIN_MODE_HZ (20 Hz) for
+every model; no Keystone material or ammo had one. The inflated balls' wall modes are off as well
+(ringDb -Infinity): a pressurised membrane is not a clamped plate, and the basketball's plates (now
+20-60 Hz) read as a murmur where without them it reads Knock. What is not modelled: a ball's air cavity (a basketball's
+"ping") and a preset's own size for a weapon shell (a shell takes the nearest ammo slot's size: B2's
+ram, 1 m across, sounds as the 0.5 m cannonball). The judge separates these less than it did stone
+from ice; the baseline here is silence.
 
 ## Plan (each step lands with its test)
 

@@ -4,7 +4,7 @@
 // bodies), however the edits got there.
 import { describe, expect, it } from 'vitest';
 import type { Vec3 } from '@tb/engine-api';
-import { BuildSession, catalog, compileLevel, DOMINO_PITCH, type Hit, L1, type LevelDef, type P2, stampHalf, tipped, validateLevel } from '@tb/keystone';
+import { BuildSession, catalog, compileLevel, DOMINO_PITCH, type Hit, type Hold, L1, type LevelDef, type P2, stampHalf, tipped, validateLevel } from '@tb/keystone';
 
 const h = 0.5;
 /** A level with one 2-course block to build on and a build budget. */
@@ -77,6 +77,36 @@ describe('build session', () => {
     expect(stampHalf(tipped(plank, 2))).toEqual([2.5, 0.5, 1 / 6]);
     const edge = s.ghost(ground(-6, 0), { item: 'plank', yaw: 0, tip: 2 });
     expect(edge.boxes[0]!.c[1]).toBeCloseTo(0.5 * h, 12);
+  });
+
+  it('a slide moves the piece along its own x in half-cells, off the point it is placed at, and no further than keeps the point under it', () => {
+    const s = new BuildSession(level({ budget: 20 })), step = (1.02 * h) / 2;
+    const at = (hold: Partial<Hold>, hit = ground(-6, 0)) => s.ghost(hit, { item: 'plank', yaw: 0, tip: 0, ...hold }).boxes[0]!.c;
+    const c0 = at({});
+    // Along x, both ways, on the same half-cell grid as the unslid piece.
+    expect(at({ slide: 2 })[0] - c0[0]).toBeCloseTo(2 * step, 9);
+    expect(at({ slide: -3 })[0] - c0[0]).toBeCloseTo(-3 * step, 9);
+    expect(at({ slide: 2 })[2]).toBeCloseTo(c0[2], 12);
+    // Turned 90 deg it slides along the plank's own x, which now runs along -z.
+    const t0 = at({ yaw: 90 }), t2 = at({ yaw: 90, slide: 2 });
+    expect(Math.hypot(t2[0] - t0[0], t2[2] - t0[2])).toBeCloseTo(2 * step, 9);
+    expect(t2[0]).toBeCloseTo(t0[0], 9);
+    // A plank (half 2.5 h) may slide 4 half-cells; tipped up on x it is 1/6 h along x, and a cube 0.5 h: neither slides.
+    expect(s.slideMax({ item: 'plank', yaw: 0, tip: 0 })).toBe(4);
+    expect(s.slideMax({ item: 'plank', yaw: 0, tip: 1 })).toBe(0);
+    expect(s.slideMax({ item: 'cube', yaw: 0, tip: 0 })).toBe(0);
+    expect(at({ slide: 9 })[0] - c0[0]).toBeCloseTo(4 * step, 9);
+    expect(s.ghost(ground(3, 3), { item: 'cube', yaw: 0, tip: 0, slide: 2 }).boxes[0]!.c).toEqual(s.ghost(ground(3, 3), { item: 'cube', yaw: 0, tip: 0 }).boxes[0]!.c);
+    // Off a ledge: pointing on the block's top near its edge, a slid plank reaches out past it, still resting on it.
+    const blockEdge = Math.max(...s.compiled().scene.bodies.slice(0, 4).map((b) => b.pos[0] + 0.5 * h)); // the block ends here (x)
+    const edge = down(s, blockEdge - 0.05, 0.26), out = s.ghost(edge, { item: 'plank', yaw: 0, tip: 0, slide: 4 });
+    expect(edge.body).toBeGreaterThanOrEqual(0);
+    expect(out.ok).toBe(true);
+    // It rests on the block (its back end over it) and reaches out more than half its length past the edge.
+    expect(out.boxes[0]!.c[0] - 2.5 * h).toBeLessThan(blockEdge);
+    expect(out.boxes[0]!.c[0] + 2.5 * h - blockEdge).toBeGreaterThan(2.5 * h);
+    expect(s.place(out)).toBe(true);
+    expect(play(s).hash).toBe(s.compiled().hash);
   });
 
   it('removes only what was placed, a run domino by domino; undo restores the level exactly', () => {

@@ -71,8 +71,9 @@ export function urlSettings(q: URLSearchParams): Partial<Settings> {
 }
 
 /** The door's Advanced settings rows, in order (door.ts). */
-export function settingRows(settings: Settings, ctx: DoorContext): string[] {
-  return SETTING_OPTIONS.map((s) => {
+export function settingRows(settings: Settings, ctx: DoorContext, part: 'player' | 'developer' | 'all' = 'all'): string[] {
+  // PT37: the rows a player sees first (DoorRow.player), or the rest (the Developer settings disclosure), or all, in the list's order.
+  return SETTING_OPTIONS.filter((s) => part === 'all' || (part === 'player') === (s.door.player === true)).map((s) => {
     const v = (settings as Record<string, unknown>)[s.field], r = s.door;
     const buttons = 'choices' in r
       ? r.choices.map((c) => `<button data-act="${r.act}" data-arg="${c.arg}" class="${c.value === v ? 'on' : ''}"${c.title === undefined ? '' : ` title="${c.title}"`}>${c.text}</button>`).join('')

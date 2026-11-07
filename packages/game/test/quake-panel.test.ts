@@ -2,7 +2,7 @@
 // level's range, the seismogram is the field events the engine gets, the compass turns with the camera, and the
 // panel shows the energy against the budget and refuses Start over it.
 import { describe, expect, it } from 'vitest';
-import { BuildSession, compileLevel, type LevelDef, quakeCandidate, quakeEnergy, retrofitCandidate } from '@tb/keystone';
+import { A2, A3, BuildSession, compileLevel, type LevelDef, quakeCandidate, quakeEnergy, retrofitCandidate } from '@tb/keystone';
 import { axisOnScreen, dialShot, dialStart, dialStep, dialStops, dialText, quakePanelHtml, seismogram } from '../src/quake-panel.ts';
 import { hudHtml, type HudState } from '../src/hud.ts';
 
@@ -14,6 +14,11 @@ describe('quake dial', () => {
     expect(dialStart(shock)).toEqual({ peak: 30, hz: 10, sec: 30, axis: 0 });
     expect(dialStart(capped({ peakMax: 20, hz: [3, 8], sec: [5, 20] }))).toEqual({ peak: 20, hz: 8, sec: 20, axis: 0 });
     expect(dialText(dialStart(shock))).toEqual({ peak: '0.30 g', hz: '1.0 Hz', sec: '3.0 s', axis: '0°' });
+  });
+
+  it('opens on the level\'s seed where it has one (PT25: QuakeRules.start), on the old start where not', () => {
+    expect(dialStart(compileLevel(A2))).toEqual({ peak: 35, hz: 8, sec: 20, axis: 0 });
+    expect(dialStart(compileLevel(A3))).toEqual({ peak: 30, hz: 10, sec: 30, axis: 0 });
   });
 
   it('steps along the stops inside the range, holds at its ends, and wraps the axis', () => {

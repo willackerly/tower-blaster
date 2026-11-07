@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
 import { type BodyDesc, type InputEvent, type PhysicsEngine, type SceneDesc, type Snapshot, TIER_FREE, type Vec3 } from '@tb/engine-api';
 import { AvbdReferenceEngine } from '@tb/physics-ref';
-import { type GrenadeWorld, type WeaponSpec, WeaponRuntime, WeaponSpecError } from '../src/index.ts';
+import { DETONATOR, type GrenadeWorld, type WeaponSpec, WeaponRuntime, WeaponSpecError } from '../src/index.ts';
 
 const DT = 1 / 60;
 const WORLD: GrenadeWorld = { dt: DT, substeps: 1, gravity: [0, -9.81, 0], groundY: 0 };
@@ -124,6 +124,35 @@ for (const [name, make] of ENGINES) {
       expect(sym.map((g) => [g.at, g.e.step])).toEqual([[first, first + 1]]);
       expect(snaps.at(-1)!.tier![C]).toBe(TIER_FREE);
       expect(runtime.pending).toBe(0);
+    });
+
+    it('watch: a charge reads another body (Fuse & Fold fuses): D goes when C, which it watches, moves; C stays', async () => {
+      const { got, snaps, runtime } = await play(make, (r, s, step) => [
+        ...r.attach(D, step, SYMPATHETIC, [0, 0, 0], { s, step, floor: step }, C),
+        ...r.attach(A, step + 20, cutter(0), [0.5, 0, 0], { s, step, floor: step }),
+      ], 90);
+      // The watched body's reference: C in the state it was armed in; D's own motion plays no part (it has none).
+      const ref = posOf(snaps[30]!, C);
+      let first = -1;
+      for (let k = 31; k < snaps.length; k++) if (dist(posOf(snaps[k]!, C), ref) >= 0.05) { first = k; break; }
+      expect(first).toBeGreaterThan(50);
+      expect(dist(posOf(snaps[first]!, D), posOf(snaps[30]!, D))).toBeLessThan(1e-3);
+      expect(got.filter((g) => g.e.kind === 'remove' && g.e.id === D).map((g) => [g.at, g.e.step])).toEqual([[first, first + 1]]);
+      expect(got.some((g) => g.e.kind === 'remove' && g.e.id === C)).toBe(false);
+      expect(snaps.at(-1)!.tier![D]).toBe(TIER_FREE);
+      expect(snaps.at(-1)!.tier![C]).not.toBe(TIER_FREE);
+      expect(runtime.pending).toBe(0);
+    });
+
+    it('a detonator (moved, or stand down after its wait) holds a shot while its timer runs, and a dead fuse sends nothing', async () => {
+      // DETONATOR's rules with a 0.5 s wait: nothing near D moves, so it never fires and stands down at 30 + 30.
+      const det: WeaponSpec = { ...DETONATOR, shell: SHELL, rules: [DETONATOR.rules[0]!, { when: { after: 0.5 }, do: [{ remove: true }] }] };
+      let waiting = -1;
+      const { got, runtime } = await play(make, (r, s, step) => { const out = r.attach(B, step, det, [0, 0, 0], { s, step, floor: step }, D); waiting = r.waiting; return out; }, 60);
+      expect(waiting).toBe(1);
+      expect(got).toEqual([]);
+      expect(runtime.pending).toBe(0);
+      expect(runtime.waiting).toBe(0);
     });
 
     it('speed: a charge watching speed fires on the first state moving that fast, before it has moved far', async () => {

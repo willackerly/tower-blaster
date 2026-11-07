@@ -66,6 +66,12 @@ export interface RubeSpec {
 export const TRAPDOOR_HALF: Vec3 = [0.6, 0.1, 0.6];
 
 /**
+ * Seconds a Rube Lab run goes on after the bell rings (LevelDef.end, agent playtest PT32): long enough to see the ring,
+ * where runs used to sit to the 10 s cap while the ball and the parts rolled on. The ring decides the outcome (a bell stays rung).
+ */
+export const RUBE_END_AFTER = 1.5;
+
+/**
  * A Rube Lab level from its spec: part 0 the pinned trapdoor (charge 0's host, a release), part 1 the runner
  * on it, then the spec's parts. Par scoring, one plunger, crowns are bells, nothing presettles but the bells.
  */
@@ -81,6 +87,7 @@ export function rubeLevel(s: RubeSpec): LevelDef {
     build: { ...s.build, par: s.partsPar },
     charges: [{ host: 0, weapon: 'release' }],
     rube: true,
+    end: { on: 'rung', after: RUBE_END_AFTER },
   };
 }
 

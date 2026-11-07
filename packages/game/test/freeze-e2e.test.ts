@@ -10,8 +10,12 @@ import { driverOptions } from '../src/engines.ts';
 import { gamePage, ready } from './page.ts';
 
 const game = gamePage();
-/** A marble well wide of the tower (it runs a while), then the par cannonball while it is frozen. */
-const miss: Shot = { ammo: 'marble', az: 0, y: 4, yaw: 900, pitch: 0, power: 30 };
+/**
+ * A marble well wide of the tower, lobbed high so it runs a while, then the par cannonball while it is frozen. Fired
+ * flat (pitch 0) it left the lot and the run ended about 20 steps in, so the second freeze, asked for some 15 steps
+ * in, raced the end of the run and lost on a slow CI runner; lobbed at 70 deg the run lasts about 95 steps.
+ */
+const miss: Shot = { ammo: 'marble', az: 0, y: 4, yaw: 900, pitch: 700, power: 30 };
 const par = L1.solutions!.par![0] as Shot;
 const URL = '/?level=L1&engine=rapier&look=candy&offscreen=1&keystone.rapid=0&keystone.freeze=1';
 
@@ -38,8 +42,9 @@ describe('Bullet Time on the game page', () => {
     expect(await page.evaluate(() => ({ frozen: window.__game.frozen, phase: window.__game.phase }))).toEqual({ frozen: true, phase: 'running' });
     // Resume without firing: free, and the shot runs on.
     expect(await fz(false)).toBe(true);
-    await page.waitForFunction((n) => window.__game.stepIndex >= n, held + 5, { timeout: 60_000, polling: 20 });
-    expect(await fz(true)).toBe(true);
+    // Freeze again from inside the page as soon as the shot has run on: the miss leaves the lot about 20 steps after
+    // it is fired, and a freeze polled from the test could land after that on a slow runner (CI saw it refused).
+    expect(await page.evaluate((n) => new Promise<boolean>((done) => { const id = setInterval(() => { if (window.__game.stepIndex >= n) { clearInterval(id); done(window.__game.freeze(true)); } }, 1); }), held + 2)).toBe(true);
     const frozenAt = await at();
     expect(await page.evaluate((s) => window.__game.fire(s), par)).toBe(true);
     expect(await page.evaluate(() => ({ frozen: window.__game.frozen, strokes: window.__game.strokes }))).toEqual({ frozen: false, strokes: 2 });

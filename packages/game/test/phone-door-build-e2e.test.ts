@@ -123,3 +123,63 @@ describe('the Build panel in the docked phone HUD (PT18, C9)', () => {
     await page.close();
   }, 4 * MINUTES);
 });
+
+// PT37 (docs/game/agent-playtest-2.md): How to play a page per mode, each on one sideways screen; Advanced settings six
+// rows; the phone rack's overflow cue and the Power and Height labels at 390 px.
+describe('the door and rack for a newcomer on a phone (PT37)', () => {
+  it('sideways: every How to play page fits one screen, and Advanced settings shows six settings', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const o = await game.open('/?engine=rapier&offscreen=1&progress=off', 2 * MINUTES, SIDEWAYS);
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await page.waitForFunction(() => window.__door?.open === true, undefined, { timeout: MINUTES, polling: 100 });
+    await page.locator('.kg-door [data-act="how"]').click();
+    const tabs = await page.locator('.kg-door [data-act="howmode"]').evaluateAll((bs) => bs.map((b) => (b as HTMLElement).dataset.arg!));
+    expect(tabs.length).toBeGreaterThanOrEqual(10);
+    for (const t of tabs) {
+      await page.locator(`.kg-door [data-act="howmode"][data-arg="${t}"]`).click();
+      // The panel (its tabs and the page's lines) is on screen whole once shown.
+      const fit = await page.evaluate(() => { const r = document.querySelector('.kg-door .how')!.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, h: r.height, vh: innerHeight }; });
+      expect(fit.h, `${t}: ${JSON.stringify(fit)}`).toBeLessThanOrEqual(fit.vh);
+      expect(fit.top >= -0.5 && fit.bottom <= fit.vh + 0.5, `${t}: ${JSON.stringify(fit)}`).toBe(true);
+      expect(await page.locator(`.kg-door .how ul[data-mode="${t}"]`).count()).toBe(1);
+    }
+    console.log(`sideways How to play: ${tabs.join(', ')}`);
+    await page.locator('.kg-door [data-act="advanced"]').click();
+    expect(await page.locator('.kg-door .advanced .group').count()).toBeLessThanOrEqual(6);
+    expect(await page.locator('.kg-door [data-act="reset"]').count()).toBe(0);
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 3 * MINUTES);
+
+  it('upright: the rack shows every label or an overflow cue, and Power and Height are named', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const o = await game.open('/?level=T-S3&engine=rapier&offscreen=1&progress=off&door=0', 2 * MINUTES, UPRIGHT);
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await page.waitForFunction(() => window.__game.ready && document.querySelector('.kg-hud .tray .chips') !== null, undefined, { timeout: 2 * MINUTES, polling: 100 });
+    const rack = () => page.evaluate(() => {
+      const c = document.querySelector<HTMLElement>('.kg-hud .tray .chips')!, cr = c.getBoundingClientRect();
+      const chips = [...c.querySelectorAll<HTMLElement>('.chip')].map((x) => { const r = x.getBoundingClientRect(); return { text: x.innerText.trim(), whole: r.left >= cr.left - 0.5 && r.right <= cr.right + 0.5 }; });
+      const cue = getComputedStyle(c.closest('.tray')!, '::after');
+      return { chips, more: c.classList.contains('more'), cue: cue.content, cueShown: cue.display !== 'none' && cue.content !== 'none', overflow: c.scrollWidth > c.clientWidth + 1 };
+    });
+    const r0 = await rack();
+    console.log(`T-S3 upright rack: ${JSON.stringify(r0)}`);
+    // Every label whole, or the cue drawn while some chip is cut.
+    if (r0.chips.some((x) => !x.whole)) { expect(r0.more).toBe(true); expect(r0.cueShown).toBe(true); expect(r0.cue).toContain('›'); }
+    expect(r0.more).toBe(r0.overflow);
+    if (r0.overflow) {
+      // Scrolled to its end, the cue goes and the last chip is whole.
+      await page.evaluate(() => { const c = document.querySelector<HTMLElement>('.kg-hud .tray .chips')!; c.scrollLeft = c.scrollWidth; c.dispatchEvent(new Event('scroll')); });
+      const r1 = await rack();
+      expect(r1.more).toBe(false);
+      expect(r1.chips.at(-1)!.whole).toBe(true);
+    }
+    // Power and Height read as words beside their −/+ pairs (J2 #16).
+    const labels = await page.locator('.kg-hud .tray .ctl > .row > span:first-child').evaluateAll((ls) => ls.filter((l) => (l as HTMLElement).offsetWidth > 0).map((l) => (l as HTMLElement).innerText.trim().toLowerCase()));
+    expect(labels).toEqual(['power', 'height']);
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 3 * MINUTES);
+});

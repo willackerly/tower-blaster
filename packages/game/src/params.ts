@@ -4,7 +4,7 @@
 // (docs/design/viewer-superset.md, step F). A key's bad value is refused with
 // a message naming it; keys a page doesn't know are left to it (the look's
 // real.* knobs, the viewer's own).
-import { AFTERSHOCK_LEVELS, BIG_LEVELS, checkPhysics, FUSE_LEVELS, LEVELS, RUBE_LEVELS, TRIAL_LEVELS, UNDERCUT_LEVELS, WAVE_LEVELS, checkSettle, DUELS, duelLevel, type DuelDef, findDuel, freezeProblem, isRackItem, itemRef, levelById, type LevelDef, MAX_PULLS, MAX_RACK, type PhysicsBlock, RACK_ITEM_NAMES, type RackItem, rackSizeProblem, readShots, SCORINGS, starsHoldOn, type Scoring, type SettleRule, type Shot, weaponOf } from '@tb/keystone';
+import { AFTERSHOCK_LEVELS, BIG_LEVELS, checkPhysics, FOLD_SERIES, LEVELS, RUBE_LEVELS, TRIAL_LEVELS, UNDERCUT_LEVELS, WAVE_LEVELS, MASON_LEVELS, CHORUS_LEVELS, checkLevPoints, checkSettle, DUELS, duelLevel, type DuelDef, findDuel, freezeProblem, isRackItem, itemRef, levelById, type LevelDef, type LevPoints, MAX_PULLS, MAX_RACK, type PhysicsBlock, RACK_ITEM_NAMES, type RackItem, rackSizeProblem, readShots, SCORINGS, starsHoldOn, type Scoring, type SettleRule, type Shot, weaponOf } from '@tb/keystone';
 import { LOOKS } from '@tb/render';
 import { isWeaponTier, WEAPON_TIERS, type WeaponTier } from '@tb/weapons';
 import { type EngineKind, engineKind } from './engines.ts';
@@ -23,14 +23,15 @@ export { GAME_LOOK } from './options/look.ts';
  * ?keystone.pairsPerBody (the GPU pair room per body, in place of every pair) and ?keystone.sleep=1|0 (GPU
  * per-body sleep, PhysicsBlock.sleep) change its physics block,
  * and ?keystone.freeze=N gives the player N freezes (Bullet Time: at most N shots fired while another
- * runs, LevelDef.freeze; 0 none). Each is part of the level it makes (its hash), and the level is marked custom: stars cast for the
+ * runs, LevelDef.freeze; 0 none), and ?keystone.levpoints=log|share picks how leverage pays points (LevelDef.levPoints,
+ * PT31; default log). Each is part of the level it makes (its hash), and the level is marked custom: stars cast for the
  * authored level do not apply to it.
  */
-export interface LevelRules { scoring?: Scoring; autobank?: boolean; settle?: SettleRule; freeze?: number; physics?: PhysicsBlock }
+export interface LevelRules { scoring?: Scoring; autobank?: boolean; settle?: SettleRule; freeze?: number; levPoints?: LevPoints; physics?: PhysicsBlock }
 
 const PHYSICS_KEYS = { 'keystone.iterations': 'iterations', 'keystone.gapSlop': 'gapSlop', 'keystone.bounce': 'bounce', 'keystone.presettle': 'presettle', 'keystone.pairsPerBody': 'pairsPerBody', 'keystone.sleep': 'sleep' } as const;
 /** Every URL key levelRules reads. */
-export const LEVEL_RULE_KEYS = ['keystone.scoring', 'keystone.autobank', 'keystone.settle', 'keystone.freeze', ...Object.keys(PHYSICS_KEYS)] as readonly string[];
+export const LEVEL_RULE_KEYS = ['keystone.scoring', 'keystone.autobank', 'keystone.settle', 'keystone.freeze', 'keystone.levpoints', ...Object.keys(PHYSICS_KEYS)] as readonly string[];
 
 /** The URL keys for r, as levelRules reads them back. */
 export function writeLevelRules(r: LevelRules, q: URLSearchParams): void {
@@ -38,6 +39,7 @@ export function writeLevelRules(r: LevelRules, q: URLSearchParams): void {
   if (r.autobank !== undefined) q.set('keystone.autobank', r.autobank ? '1' : '0');
   if (r.settle !== undefined) q.set('keystone.settle', r.settle);
   if (r.freeze !== undefined) q.set('keystone.freeze', String(r.freeze));
+  if (r.levPoints !== undefined) q.set('keystone.levpoints', r.levPoints);
   for (const [key, field] of Object.entries(PHYSICS_KEYS)) {
     const v = r.physics?.[field];
     if (v !== undefined) q.set(key, v === null ? 'off' : typeof v === 'boolean' ? (v ? '1' : '0') : String(v));
@@ -63,6 +65,8 @@ export function levelRules(q: URLSearchParams): LevelRules {
     if (why) throw new Error(`keystone.${why.replace(/: NaN$/, `: ${fz}`)}`);
     r.freeze = n;
   }
+  const lp = q.get('keystone.levpoints');
+  if (lp !== null) r.levPoints = checkLevPoints(lp, 'keystone.levpoints');
   for (const [key, field] of Object.entries(PHYSICS_KEYS)) {
     const v = q.get(key);
     if (v === null) continue;
@@ -77,11 +81,12 @@ export function levelRules(q: URLSearchParams): LevelRules {
 
 /** def with the URL's rule overrides (none: def itself). */
 export function withRules(def: LevelDef, r: LevelRules): LevelDef {
-  if (r.scoring === undefined && r.autobank === undefined && r.settle === undefined && r.freeze === undefined && r.physics === undefined) return def;
+  if (r.scoring === undefined && r.autobank === undefined && r.settle === undefined && r.freeze === undefined && r.levPoints === undefined && r.physics === undefined) return def;
   return {
     ...def, custom: true,
     ...(r.scoring !== undefined ? { scoring: r.scoring } : {}), ...(r.autobank !== undefined ? { autobank: r.autobank } : {}),
     ...(r.settle !== undefined ? { settle: r.settle } : {}), ...(r.freeze !== undefined ? { freeze: r.freeze } : {}),
+    ...(r.levPoints !== undefined ? { levPoints: r.levPoints } : {}),
     ...(r.physics !== undefined ? { physics: { ...def.physics, ...r.physics } } : {}),
   };
 }
@@ -110,7 +115,7 @@ export interface GameParams {
   offscreen: boolean;
   /** The offscreen frame's size in pixels: 640x400 for ?offscreen=1, or ?offscreen=WxH (agent playtests: a phone's or a desktop's shape). */
   offscreenSize: [number, number];
-  /** ?keystone.sound=classic: the collision sound with G6's materials; synth: impacts as the old pentatonic voices (collapse, the default). */
+  /** ?keystone.sound=classic: the collision sound with G6's materials; real1: the real set before step 2c's stone and ice; synth: impacts as the old pentatonic voices (collapse, the default). */
   sound: GameSoundMode;
   /** ?keystone.impacts=-6: the collision sound's level, dB over the game's own (-40 to 20). */
   impactsDb: number;
@@ -164,9 +169,9 @@ export const DEFAULT_LEVEL = BIG_LEVELS[0]!.id;
 
 /**
  * The built-in series in the game's order (the door's sections, top to bottom): the spectacle slice the bare URL
- * opens, the chamber levels, Undercut's, Rube Lab's contraptions, Fuse & Fold's, Aftershock's, Wavefront's, then the unrated trials. Every level of @tb/keystone's SERIES, once.
+ * opens, the chamber levels, Undercut's, Rube Lab's contraptions, Fuse & Fold's, Aftershock's, Wavefront's, Mason's Trial's builds, Chorus's, then the unrated trials. Every level of @tb/keystone's SERIES, once.
  */
-export const GAME_SERIES: readonly (readonly LevelDef[])[] = [BIG_LEVELS, LEVELS, UNDERCUT_LEVELS, RUBE_LEVELS, FUSE_LEVELS, AFTERSHOCK_LEVELS, WAVE_LEVELS, TRIAL_LEVELS];
+export const GAME_SERIES: readonly (readonly LevelDef[])[] = [BIG_LEVELS, LEVELS, UNDERCUT_LEVELS, RUBE_LEVELS, FOLD_SERIES, AFTERSHOCK_LEVELS, WAVE_LEVELS, MASON_LEVELS, CHORUS_LEVELS, TRIAL_LEVELS];
 
 /** A built-in level (chamber L1 to L5, big B1 on, Undercut U1 on or a trial T-...) by id, any case; throws naming the known ones. */
 export const gameLevel = (id: string): LevelDef => levelById(id);

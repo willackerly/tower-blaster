@@ -4,10 +4,14 @@
 // two branches that each add an option merge without a conflict (keep each entry on its own line).
 import { arcs } from './arcs.ts';
 import { balls } from './balls.ts';
+import { blastSound } from './blastsound.ts';
+import { chorusViewOption } from './chorusview.ts';
 import { budgetMs } from './budget.ts';
 import { camera } from './camera.ts';
 import { coats } from './coats.ts';
 import { fireside } from './fireside.ts';
+import { dudNote } from './dudnote.ts';
+import { duelLead } from './duellead.ts';
 import { follow } from './follow.ts';
 import { frames } from './frames.ts';
 import { frozenAim } from './frozenaim.ts';
@@ -17,12 +21,15 @@ import { handoff } from './handoff.ts';
 import { hitStop } from './hitstop.ts';
 import { impact } from './impact.ts';
 import { launch } from './launch.ts';
+import { launchSound } from './launchsound.ts';
 import { layout } from './layout.ts';
 import { look } from './look.ts';
 import { marks } from './marks.ts';
 import { openAim } from './openaim.ts';
+import { modeUi } from './modeui.ts';
 import { view } from './openview.ts';
 import { pullAnim } from './pullanim.ts';
+import { quakeGround } from './quakeground.ts';
 import { quality } from './quality.ts';
 import { rapid } from './rapid.ts';
 import { shake } from './shake.ts';
@@ -52,6 +59,7 @@ export const OPTIONS = [
   turnView,
   arcs,
   handoff,
+  duelLead,
   undoMB,
   launch,
   fireside,
@@ -70,6 +78,12 @@ export const OPTIONS = [
   spent,
   sleepTint,
   pullAnim,
+  quakeGround,
   frozenLook,
+  dudNote,
+  modeUi,
+  chorusViewOption,
   frozenAim,
+  launchSound,
+  blastSound,
 ] as const;

@@ -8,7 +8,7 @@ import { itemYield, levelCharges, plungerYield } from './arsenal.ts';
 import { castStars, type CompiledLevel, type Scoring, scoringOf, settleOf } from './level.ts';
 import type { IceCrack } from './ice.ts';
 import { buildingOnly, collapseFraction, floorPotential_mJ, homePotential_mJ, homeSkyline, objectiveMet, type OutcomeFacts, outcomeScore } from './outcome.ts';
-import { ammoInFlight, bellRung, crownDown, energyFired, heritageBroken, heritageFallen, leverage, levelScore, type LevelScore, levelTier, refereedScore, roundLeverage, type Observation, type Reductions, runWindowSteps, type SettleRule, type SettleState, settleCap, settleHeld, settleUpdate, type ShotOutcome, skyline, spillOf } from './rules.ts';
+import { ammoInFlight, bellRung, crownDown, energyFired, heritageBroken, heritageFallen, leverage, levelScore, type LevelScore, levelTier, refereedScore, roundLeverage, type Observation, type Reductions, runWindowSteps, type SettleRule, type SettleState, settleCap, settleHeld, settleUpdate, shareLine, type ShotOutcome, skyline, spillOf } from './rules.ts';
 import { PULL, type RackItem } from './rack.ts';
 import { placedCost } from './build.ts';
 import { ammoKE, type PlungerShot, pullEnergy, type QuakeShot, type Shot, shotEvent } from './shots.ts';
@@ -90,6 +90,10 @@ export class Session {
   readonly armed: number[] = [];
   /** Structure bodies taken out by charges (removeTarget), in order (Driver tells the session as it pushes them). */
   readonly cut: number[] = [];
+  /** Hosts of the level's plunger charges that remove them (fold levels: what `misfires` counts). */
+  private get mustCut(): number[] {
+    return levelCharges(this.level).filter((ch) => ch.arm === 'plunger' && ch.spec.rules.some((r) => r.do.some((x) => 'removeTarget' in x))).map((ch) => ch.host);
+  }
   /** Leverage of the shot in flight, or of the last shot once it closed (until the next goes in): the HUD's "this shot". */
   liveLeverage = 0;
   /** The shot in flight's release so far, mJ (0 between shots): what roundLeverageNow adds to the closed shots. */
@@ -107,6 +111,8 @@ export class Session {
   readonly settleRule: SettleRule;
   /** A wave level's run window in steps (LevelDef.runWindow, rules.ts runWindowSteps); undefined: the rule's cap. */
   readonly runWindow: number | undefined;
+  /** The level's end condition's wait in steps (LevelDef.end, rules.ts LevelEnd); undefined: none. */
+  readonly endSteps: number | undefined;
   /** Collapse fraction D now, for the HUD (while a shot runs), and whether the objective was met at the last settle. */
   liveCollapse = 0;
   objectiveDone = false;
@@ -140,6 +146,7 @@ export class Session {
     this.scoring = scoringOf(level.def);
     this.settleRule = settleOf(level.def);
     this.runWindow = level.def.runWindow === undefined ? undefined : runWindowSteps(level.def.runWindow, level.scene.dt);
+    this.endSteps = level.def.end === undefined ? undefined : Math.round(level.def.end.after / level.scene.dt);
     this.rackLeft = [...level.def.rack];
     this.crownDown = new Uint8Array(level.meta.crowns.length);
     this.crownLive = new Uint8Array(level.meta.crowns.length);
@@ -158,7 +165,7 @@ export class Session {
   /** Collapse fraction D with the structure at potential energy pe_mJ. */
   collapse(pe_mJ: number): number { return collapseFraction(this.startPe_mJ, pe_mJ, this.floorPe_mJ); }
   /** The PE a reduction holds of what collapse counts (startPe_mJ's: the building's alone on a fold level). */
-  peOf(red: Pick<Reductions, 'pe_mJ' | 'peHeritage_mJ'>): number { return this.building ? red.pe_mJ - red.peHeritage_mJ : red.pe_mJ; }
+  peOf(red: Pick<Reductions, 'pe_mJ' | 'peAside_mJ'>): number { return this.building ? red.pe_mJ - red.peAside_mJ : red.pe_mJ; }
 
   get strokes() { return this.outcomes.length + (this.live ? 1 : 0); }
 
@@ -254,6 +261,17 @@ export class Session {
 
   /** Whether heritage is judged at settles only (LevelDef.heritage 'standing', Aftershock), not every step. */
   get heritageAtSettle(): boolean { return this.level.def.heritage === 'standing'; }
+
+  /**
+   * Misfires on a fold level (M5b): plunger charges that cut their host (cutters, detonators) whose host is still in
+   * the world, a dead fuse's row standing. Every charge of a fold level must fire, as on F1 to F5 a plunger must name
+   * every charge (plungerRefusal): a row left uncut is a hinge that fells a frame with no timing at all (fuse-and-fold.md).
+   * Always 0 off fold levels, and on F1 to F5 once the plunger has fired (each cutter cuts at its own step).
+   */
+  get misfires(): number {
+    if (this.level.def.objective.kind !== 'fold') return 0;
+    return this.mustCut.filter((b) => !this.cut.includes(b)).length;
+  }
 
   /** A charge took structure body `body` out (Driver): it can no longer be pulled. */
   chargeCut(body: number): void {
@@ -388,7 +406,9 @@ export class Session {
     const total = o.red.impacts.reduce((a, x) => a + x, 0);
     if (total) out.push({ t: 'impacts', step, hist: o.red.impacts, total });
 
-    const s = settleUpdate(L.settle, o.red, L.spawnStep, this.settleRule, m.n, this.liveCollapse, settleHeld(this.settleRule, L.inFlight, hold), this.runWindow);
+    // The level's end condition (LevelDef.end): every bell rung, and nothing still to go off.
+    const done = this.endSteps === undefined ? undefined : { met: !hold && nc > 0 && this.crownLive.every(Boolean), steps: this.endSteps };
+    const s = settleUpdate(L.settle, o.red, L.spawnStep, this.settleRule, m.n, this.liveCollapse, settleHeld(this.settleRule, L.inFlight, hold), this.runWindow, done);
     L.settle = s.state;
     if (!s.settled || (hold && o.step - L.spawnStep < settleCap(this.settleRule, this.runWindow))) return out;
 
@@ -397,7 +417,7 @@ export class Session {
     out.push(...this.cracks.splice(0), settled);
     const crownsTotal = settled.outcome.crownsTotal;
 
-    const cleared = objectiveMet(c, { red: o.red, crownsTotal, collapse: this.collapse(this.peOf(o.red)), heritage: this.heritageBroken.reduce((a, x) => a + x, 0) }, this.scoring);
+    const cleared = objectiveMet(c, { red: o.red, crownsTotal, collapse: this.collapse(this.peOf(o.red)), heritage: this.heritageBroken.reduce((a, x) => a + x, 0), misfires: this.misfires }, this.scoring);
     this.objectiveDone = cleared;
     this.lastSettle = { red: o.red, crownsTotal };
     if (this.scoring === 'outcome') {
@@ -410,7 +430,7 @@ export class Session {
     if (cleared || this.rackSpent) {
       this.phase = cleared ? 'cleared' : 'failed';
       // Rube Lab: a binary clear, starred on the build's cost against the parts par (rules.ts partsStars).
-      this.score = levelScore(c.def, this.outcomes, cleared, m.n, c.def.build?.par !== undefined ? placedCost(c.def) : 0);
+      this.score = levelScore(c.def, this.outcomes, cleared, m.n, c.def.build?.par !== undefined ? placedCost(c.def) : 0, this.startPe_mJ - this.floorPe_mJ);
       out.push({ t: 'levelEnd', step, cleared, score: this.score });
     } else {
       this.phase = 'aiming';
@@ -473,7 +493,8 @@ export class Session {
       ...(c.def.objective.kind === 'hold' ? { hold: true } : {}),
       ...(c.def.objective.kind === 'quake' ? { quake: true } : {}),
       energy: energyFired(this.outcomes),
-      ...(c.def.objective.kind === 'fold' ? { spill: last ? spillOf(last.red) : 0 } : {}),
+      ...(c.def.objective.kind === 'fold' ? { spill: last ? spillOf(last.red) : 0, misfires: this.misfires } : {}),
+      ...(c.def.levPoints === 'share' ? { levShare: { shots: this.outcomes, line: shareLine(c.def), span_mJ: this.startPe_mJ - this.floorPe_mJ } } : {}),
       ...(c.def.build ? { built: { spent: placedCost(c.def), ...(c.def.build.budget !== undefined ? { budget: c.def.build.budget } : {}) } } : {}),
     };
   }

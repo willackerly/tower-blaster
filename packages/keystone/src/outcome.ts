@@ -5,14 +5,14 @@
 // order (and a later GPU reduction) gives the same number.
 import type { Vec3 } from '@tb/engine-api';
 import { type CompiledLevel, lowerIsBetter, type Objective, type Scoring, type StarMetric, type StarsDef } from './level.ts';
-import { aabbTop, floorTotal, HEIGHT_BINS, type LevelScore, peOf_mJ, type Reductions, type ScoreLine, skyline, spillOf } from './rules.ts';
+import { aabbTop, asideOf, floorTotal, HEIGHT_BINS, type LevelScore, leveragePoints, logLeveragePoints, peOf_mJ, type Reductions, type ScoreLine, type ShotOutcome, skyline, spillOf } from './rules.ts';
 
-const HERITAGE = 2;
 
 /**
  * A fold level's collapse is the building's (docs/game/fuse-and-fold.md): heritage neighbours stand outside
  * it, and their mass would otherwise cap the fraction (stone houses beside a plaster frame held a felled
- * tower to 0.45). Elsewhere the whole structure counts, as before. `building` below: skip heritage.
+ * tower to 0.45), and a domino fuse's dominoes are props (M5b). Elsewhere the whole structure counts, as before.
+ * `building` below: skip what rules.ts asideOf sets aside (heritage and props).
  */
 export const buildingOnly = (c: CompiledLevel): boolean => c.def.objective.kind === 'fold';
 
@@ -21,16 +21,17 @@ export const buildingOnly = (c: CompiledLevel): boolean => c.def.objective.kind 
  * centre at its smallest half-extent. Static per level; the bottom of the collapse fraction's range.
  */
 export function floorPotential_mJ(c: CompiledLevel, building = false): number {
-  const m = c.meta;
+  const m = c.meta, aside = asideOf(c);
   let pe = 0;
-  for (let i = 0; i < m.n; i++) if (!building || m.role[i] !== HERITAGE) pe += peOf_mJ(m.mass[i]!, Math.min(m.half[3 * i]!, m.half[3 * i + 1]!, m.half[3 * i + 2]!));
+  for (let i = 0; i < m.n; i++) if (!building || !aside[i]) pe += peOf_mJ(m.mass[i]!, Math.min(m.half[3 * i]!, m.half[3 * i + 1]!, m.half[3 * i + 2]!));
   return pe;
 }
 
 /** The structure's potential energy with its bodies at `home` (3 per body; default the authored poses): PE(B0) from the pre-settled home. */
 export function homePotential_mJ(c: CompiledLevel, home: ArrayLike<number> = c.meta.home, building = false): number {
   let pe = 0;
-  for (let i = 0; i < c.meta.n; i++) if (!building || c.meta.role[i] !== HERITAGE) pe += peOf_mJ(c.meta.mass[i]!, home[3 * i + 1]!);
+  const aside = asideOf(c);
+  for (let i = 0; i < c.meta.n; i++) if (!building || !aside[i]) pe += peOf_mJ(c.meta.mass[i]!, home[3 * i + 1]!);
   return pe;
 }
 
@@ -56,7 +57,7 @@ export function homeSkyline(c: CompiledLevel, home: ArrayLike<number> = c.meta.h
 }
 
 /** What an objective needs to know at a settle; heritage (bodies broken so far) only the fold and quake objectives read (absent: none). */
-export interface ObjectiveFacts { red: Reductions; crownsTotal: number; collapse: number; heritage?: number }
+export interface ObjectiveFacts { red: Reductions; crownsTotal: number; collapse: number; heritage?: number; /** Fold levels: plunger charges whose host still stands (Session.misfires; absent: none). */ misfires?: number }
 
 /**
  * Whether the objective is met. Par scoring keeps its rule (a skyline objective's footprintMax is part
@@ -70,7 +71,7 @@ export function objectiveMet(c: CompiledLevel, f: ObjectiveFacts, scoring: Scori
     case 'collapse': return f.collapse >= obj.min;
     case 'hold': return c.meta.crowns.length > 0 && f.crownsTotal === 0;
     case 'quake': return (c.meta.crowns.length > 0 || c.def.build !== undefined) && c.meta.heritage.length > 0 && f.crownsTotal === c.meta.crowns.length && (f.heritage ?? 0) === 0;
-    case 'fold': return f.collapse >= obj.min && spillOf(f.red) <= obj.spillMax + 1e-12 && (f.heritage ?? 0) === 0;
+    case 'fold': return f.collapse >= obj.min && spillOf(f.red) <= obj.spillMax + 1e-12 && (f.heritage ?? 0) === 0 && (f.misfires ?? 0) === 0;
     case 'bell': return c.meta.crowns.length > 0 && f.crownsTotal === c.meta.crowns.length;
     // Mason's Trial: the judge decides (mason-judge.ts), from its worlds, never a settle.
     case 'trial': return false;
@@ -96,6 +97,8 @@ export const OUTCOME_WEIGHTS = {
   footprint: -3000,
   /** Fuse & Fold: per share of the building's mass outside its lot (all of it: -3000, as the footprint line). */
   spill: -3000,
+  /** Fuse & Fold's domino fuses (M5b): per column a fuse never cut (its socket never fell): the round fails anyway. */
+  misfire: -200,
   /** Aftershock retrofits: per unit of the build budget not spent, once the heritage stood (200 left: 2000). */
   budgetLeft: 10,
 } as const;
@@ -129,6 +132,13 @@ export interface OutcomeFacts {
   energy?: number;
   /** Fold levels (Fuse & Fold): the building's spill at the end (rules.ts spillOf), 0 to 1; absent on other levels. */
   spill?: number;
+  /**
+   * Levels on the 'share' leverage points rule (LevelDef.levPoints, PT31): the shots, the line and what could fall
+   * (PE(B0) - PE_floor), for rules.ts leveragePoints. Absent: the 'log' rule on `leverage`.
+   */
+  levShare?: { shots: readonly Pick<ShotOutcome, 'ke' | 'yield' | 'dPE_mJ' | 'leverage'>[]; line: number; span_mJ: number };
+  /** Fold levels: charges that never cut their column (a dead domino fuse, M5b: Session.misfires); any fails the objective. */
+  misfires?: number;
   /** Build levels (a build block): what the player placed (build.ts placedCost) and the level's budget (absent: none). */
   built?: { spent: number; budget?: number };
 }
@@ -156,12 +166,14 @@ export function outcomeTally(f: OutcomeFacts, w = OUTCOME_WEIGHTS): ScoreLine[] 
     return lines;
   }
   lines.push({ label: 'Collapse', value: Math.floor(w.collapse * f.collapse) });
-  lines.push({ label: 'Leverage', value: Math.floor(w.leverage * Math.log2(1 + f.leverage)) });
+  const share = f.levShare;
+  lines.push({ label: 'Leverage', value: share ? leveragePoints(share.shots, share.line, share.span_mJ, 'share') : logLeveragePoints(f.leverage, w.leverage) });
   if (f.hasCrowns) lines.push({ label: 'Combo', value: w.combo * tri(Math.min(Math.max(0, f.comboMax), w.comboCap)) });
   if (f.met && f.rackLeft > 0) lines.push({ label: 'Rack left', value: w.rackLeft * f.rackLeft });
   if (f.heritageBroken) lines.push({ label: 'Heritage', value: w.heritage * f.heritageBroken });
   if (f.footprintMax !== undefined && f.outOfLot > f.footprintMax) lines.push({ label: 'Footprint', value: Math.floor(w.footprint * (f.outOfLot - f.footprintMax)) });
   if (f.spill !== undefined && f.spill > 0) lines.push({ label: 'Spill', value: Math.floor(w.spill * f.spill) });
+  if (f.misfires) lines.push({ label: 'Misfire', value: w.misfire * f.misfires });
   return lines;
 }
 

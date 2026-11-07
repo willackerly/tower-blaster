@@ -1,9 +1,10 @@
 // The front door's formatting (door.ts) and the settings it edits (settings.ts): pure.
 import { describe, expect, it } from 'vitest';
-import { AFTERSHOCK_LEVELS, B1, B2, B3, BIG_LEVELS, compileLevel, FUSE_LEVELS, L1, L3, type LevelDef, LEVELS, RUBE_LEVELS, SERIES, type Shot, TRIAL_LEVELS, U1, U2, UNDERCUT_LEVELS, WAVE_LEVELS } from '@tb/keystone';
-import { bestText, BULLET_TIME_HOW, doorHtml, doorLevels, doorMode, doorOnLoad, nextLevel, openerFor, preaimMode, rackText, seriesTitle, starTargets, thresholdText, TRIALS_BLURB } from '../src/door.ts';
+import { isTrial, AFTERSHOCK_LEVELS, B1, B2, B3, BIG_LEVELS, CHORUS_LEVELS, compileLevel, FOLD_SERIES, L1, L3, type LevelDef, LEVELS, MASON_LEVELS, MT4, RL1, RUBE_LEVELS, SERIES, type Shot, TRIAL_LEVELS, U1, U2, UNDERCUT_LEVELS, WAVE_LEVELS } from '@tb/keystone';
+import { bestText, BULLET_TIME_HOW, MASON_HOW, doorHtml, doorLevels, doorMode, doorOnLoad, nextLevel, openerFor, preaimMode, rackText, seriesTitle, starTargets, thresholdText, TRIALS_BLURB } from '../src/door.ts';
 // PT18's own names, on a line of their own so the line above merges as main's.
-import { DOOR_CSS, SIEGE_TABLE_HOW } from '../src/door.ts';
+import { DOOR_CSS, HOW_TO_PLAY, howModeOf, SIEGE_TABLE_HOW } from '../src/door.ts';
+import { SETTING_OPTIONS } from '../src/options/registry.ts';
 import { GAME_SERIES } from '../src/params.ts';
 import type { LevelRecord } from '../src/progress.ts';
 import { cameraFeel, DEFAULT_SETTINGS, launchFeel, marksFeel, parseSettings, rapidFeel, SETTINGS_KEY, SettingsStore, turnViewFeel, urlSettings } from '../src/settings.ts';
@@ -38,6 +39,9 @@ describe('door options', () => {
     expect(openerFor(UNCAST, 2, '1', false)).toBeNull(); // no recorded line
     expect(openerFor(B3, 2, '1', false)).toBe(B3.solutions!.ace![0]);
     expect(openerFor(B1, 0, '0', false)).toBeNull();
+    // A pull is never pre-aimed (PT35): U1 opens its series, and its par line's first pull would play half the puzzle.
+    expect(U1.solutions!.par![0]!.ammo).toBe('pull');
+    expect([openerFor(U1, 0, 'auto', false), openerFor(U1, 0, '1', false), openerFor(U2, 1, '1', false)]).toEqual([null, null, null]);
     expect(preaimMode(q(''))).toBe('auto');
     expect(() => preaimMode(q('keystone.preaim=on'))).toThrow(/keystone.preaim must be auto, 1 or 0/);
   });
@@ -56,6 +60,8 @@ describe('door text', () => {
   });
   it('star targets: objective, then the cast T2 and T3; uncast levels the objective alone; heritage named for three stars', () => {
     expect(starTargets(compileLevel(B1), B1.stars)).toEqual({ targets: ['Bring 40% down', '70% down', '94% down'], short: ['40%', '70%', '94%'], cast: true });
+    // Chorus (chorus.ts): fixed thresholds on the worlds cleared, so it counts as cast.
+    expect(starTargets(compileLevel(CHORUS_LEVELS[0]!), undefined)).toEqual({ targets: ['Clear 32 of 64 worlds (fell every crown in each)', '…48 of 64', '…60 of 64'], short: ['32/64', '48/64', '60/64'], cast: true });
     const b2 = starTargets(compileLevel(B2), B2.stars);
     expect(b2.targets).toEqual(['Fell every crown', '770 points', '3,000 points, heritage intact']);
     expect(b2.short).toEqual(['all crowns', '770', '3,000']);
@@ -66,6 +72,14 @@ describe('door text', () => {
     // Undercut's par puzzles count pulls.
     expect(starTargets(compileLevel(U1), undefined)).toEqual({ targets: ['Fell every crown', '…in 3 pulls', '…in par (2 pulls)'], short: ['all crowns', '3 pulls', 'par 2'], cast: true });
     expect(starTargets(compileLevel(U2), undefined).targets[2]).toBe('…in par (2 pulls), heritage intact');
+    // Mason's Trial: worlds and points, no shots; the card's meta is the budget, not a rack.
+    expect(starTargets(compileLevel(MT4), undefined)).toEqual({ targets: ['Stand in 32 of 64 worlds', '630 points (worlds stood, budget left)', '670 points'], short: ['32 of 64 worlds', '630', '670'], cast: true });
+    expect(doorLevels([MT4], () => null)[0]!.rack).toBe('budget 10');
+    expect(HOW_TO_PLAY.find((h) => h.id === 'mason')!.lines).toContain(MASON_HOW);
+    expect(howModeOf(MT4)).toBe('mason');
+    expect(howModeOf(CHORUS_LEVELS[0]!)).toBe('chorus');
+    // A parts-par level (Rube Lab): parts, not shots.
+    expect(starTargets(compileLevel(RL1), undefined).targets.slice(1)).toEqual([`…with ${Math.ceil(1.5 * RL1.build!.par!)} parts or fewer`, `…with ${RL1.build!.par} part${RL1.build!.par === 1 ? '' : 's'} or fewer (parts par)`]);
   });
   it('B3\'s stars show from stars.json the moment they land (simulated drop-in, then the landed stars)', () => {
     const cast = { ...UNCAST, stars: { metric: 'collapse' as const, t2: 0.5, t3: 0.62, hash: compileLevel(B3).hash } };
@@ -105,16 +119,16 @@ describe('door levels', () => {
   });
   it('every series shows under its title, in the game\'s order; the trials behind a toggle, closed and uncompiled until opened', () => {
     expect(GAME_SERIES.flat().map((d) => d.id).sort()).toEqual(SERIES.flat().map((d) => d.id).sort());
-    expect([seriesTitle('b2'), seriesTitle('L1'), seriesTitle('U3'), seriesTitle('F1'), seriesTitle('a2'), seriesTitle('w4'), seriesTitle('t-s4'), seriesTitle('S4')]).toEqual(['Spectacle', 'Chamber', 'Undercut', 'Fuse & Fold', 'Aftershock', 'Wavefront', 'Trials · unrated', '']);
+    expect([seriesTitle('b2'), seriesTitle('L1'), seriesTitle('U3'), seriesTitle('F1'), seriesTitle('a2'), seriesTitle('w4'), seriesTitle('mt3'), seriesTitle('t-s4'), seriesTitle('S4')]).toEqual(['Spectacle', 'Chamber', 'Undercut', 'Fuse & Fold', 'Aftershock', 'Wavefront', "Mason's Trial", 'Trials · unrated', '']);
     const all = GAME_SERIES.flat(), compiled: string[] = [];
     const compile = (d: (typeof all)[number]) => { compiled.push(d.id); return compileLevel(d); };
     const closed = doorLevels(all, () => null, compile, (d) => d.id.startsWith('T-'));
-    expect(compiled).toEqual([...BIG_LEVELS, ...LEVELS, ...UNDERCUT_LEVELS, ...RUBE_LEVELS, ...FUSE_LEVELS, ...AFTERSHOCK_LEVELS, ...WAVE_LEVELS].map((d) => d.id));
+    expect(compiled).toEqual([...BIG_LEVELS, ...LEVELS, ...UNDERCUT_LEVELS, ...RUBE_LEVELS, ...FOLD_SERIES, ...AFTERSHOCK_LEVELS, ...WAVE_LEVELS, ...MASON_LEVELS, ...CHORUS_LEVELS].map((d) => d.id));
     // A card's data-arg is its index in the page's whole list, skipped trials or not.
     expect(closed.map((l) => l.index)).toEqual(compiled.map((_, i) => i));
     const shut = doorHtml({ levels: closed, current: 3, settings: DEFAULT_SETTINGS, howTo: false, advanced: false, trials: { count: TRIAL_LEVELS.length, open: false } });
-    expect([...shut.matchAll(/<h2 class="series-head">([^<]*)</g)].map((x) => x[1])).toEqual(['Spectacle', 'Chamber', 'Undercut', 'Rube Lab', 'Fuse &#38; Fold', 'Aftershock', 'Wavefront']);
-    expect(shut.match(/class="card[ "]/g)).toHaveLength(11 + RUBE_LEVELS.length + FUSE_LEVELS.length + AFTERSHOCK_LEVELS.length + WAVE_LEVELS.length);
+    expect([...shut.matchAll(/<h2 class="series-head">([^<]*)</g)].map((x) => x[1])).toEqual(['Spectacle', 'Chamber', 'Undercut', 'Rube Lab', 'Fuse &#38; Fold', 'Aftershock', 'Wavefront', 'Mason&#39;s Trial', 'Chorus']);
+    expect(shut.match(/class="card[ "]/g)).toHaveLength(11 + RUBE_LEVELS.length + FOLD_SERIES.length + AFTERSHOCK_LEVELS.length + WAVE_LEVELS.length + MASON_LEVELS.length + CHORUS_LEVELS.length);
     expect(shut).toContain(`data-act="trials" class="series-head trials-head" aria-expanded="false">Trials · unrated (${TRIAL_LEVELS.length}) ▸</button>`);
     expect(shut).not.toContain(TRIALS_BLURB.slice(0, 20));
     expect(shut).toContain('class="card current" data-act="level" data-arg="3"');
@@ -135,7 +149,7 @@ describe('door levels', () => {
   });
   it('markup: a card per level marking earned stars, the next and the loaded one, every action wired', () => {
     const levels = doorLevels(LEVELS, (id) => (id === 'L1' ? rec(2) : null));
-    const html = doorHtml({ levels, current: 0, settings: DEFAULT_SETTINGS, howTo: true, advanced: true });
+    const html = doorHtml({ levels, current: 0, settings: DEFAULT_SETTINGS, howTo: true, howMode: 'bullet', advanced: true, developer: true });
     expect(html.match(/class="card[ "]/g)).toHaveLength(5);
     expect(html).toContain('class="card current" data-act="level" data-arg="0"');
     expect(html).toContain('class="card next" data-act="level" data-arg="1"');
@@ -143,18 +157,18 @@ describe('door levels', () => {
     expect(html).toContain(`Back to ${LEVELS[0]!.name}`);
     expect(html.match(/<li class="got/g)).toHaveLength(2);
     expect(html).toContain('<span class="earned">★★</span><span class="unearned">☆</span>');
-    for (const act of ['how', 'advanced', 'sound', 'look', 'sharp', 'camera', 'rapid', 'duelview', 'launch', 'marks', 'reset', 'close']) expect(html).toContain(`data-act="${act}"`);
+    for (const act of ['how', 'howmode', 'advanced', 'developer', 'sound', 'look', 'sharp', 'camera', 'rapid', 'duelview', 'launch', 'marks', 'reset', 'close']) expect(html).toContain(`data-act="${act}"`);
     expect(html).toContain('class="how"');
     // PT8: How to play names Bullet Time and its key (desktop T, touch the Freeze button), and says resuming keeps the freeze.
     expect(html).toContain(`<li>${BULLET_TIME_HOW}</li>`);
     expect(BULLET_TIME_HOW).toMatch(/Bullet Time.*<kbd>T<\/kbd>.*Freeze.*keeps the freeze/);
     expect(html).toContain('data-act="advanced" class="howlink advlink on" aria-expanded="true"');
-    // PT18: Sound reads its state, On (marked on, so filled in the accent by DOOR_CSS) or Off; How to play has the Siege Table.
-    // (Its markup is the option registry's, pinned by options-golden: one toggle button inside a segment.)
-    expect(html).toContain('<span class="seg"><button data-act="sound" class="on">On</button></span>');
-    expect(doorHtml({ levels, current: 0, settings: { ...DEFAULT_SETTINGS, sound: false }, howTo: false, advanced: true })).toContain('<button data-act="sound" class="">Off</button>');
+    // PT37: Sound is an On/Off pair, the selected side marked on (filled in the accent by DOOR_CSS).
+    expect(html).toContain('<button data-act="sound" data-arg="on" class="on" title="Impacts and collapses make a sound">On</button><button data-act="sound" data-arg="off" class=""');
+    expect(doorHtml({ levels, current: 0, settings: { ...DEFAULT_SETTINGS, sound: false }, howTo: false, advanced: true })).toContain('data-arg="on" class="" title="Impacts and collapses make a sound">On</button><button data-act="sound" data-arg="off" class="on"');
     expect(DOOR_CSS).toMatch(/\.seg button\.on \{ background: #9fc3ff; color: #11141c/);
-    expect(html).toContain(`<li>${SIEGE_TABLE_HOW}</li>`);
+    // How to play's Siege Table page holds its rule.
+    expect(doorHtml({ levels, current: 0, settings: DEFAULT_SETTINGS, howTo: true, howMode: 'siege', advanced: false })).toContain(`<li>${SIEGE_TABLE_HOW}</li>`);
     expect(doorHtml({ levels, current: -1, settings: DEFAULT_SETTINGS, howTo: false, advanced: false })).not.toContain('data-act="close"');
     // Back to the level is the Play button already when the next level is the loaded one.
     expect(doorHtml({ levels, current: 1, settings: DEFAULT_SETTINGS, howTo: false, advanced: false })).not.toContain('data-act="close"');
@@ -224,7 +238,7 @@ describe('settings', () => {
     expect(at('', false)).toEqual({ rapid: false });
     expect(at('keystone.rapid=0', true)).toEqual({ rapid: false });
     expect(at('keystone.rapid=1', false)).toEqual({ rapid: true });
-    const html = (rapid: boolean) => doorHtml({ levels: [], current: -1, settings: { ...DEFAULT_SETTINGS, rapid }, howTo: false, advanced: true });
+    const html = (rapid: boolean) => doorHtml({ levels: [], current: -1, settings: { ...DEFAULT_SETTINGS, rapid }, howTo: false, advanced: true, developer: true });
     expect(html(true)).toContain('data-act="rapid" data-arg="on" class="on"');
     expect(html(false)).toContain('data-act="rapid" data-arg="off" class="on"');
   });
@@ -239,7 +253,7 @@ describe('settings', () => {
     expect(at('', 'level')).toEqual({ launch: 'level' });
     expect(at('keystone.launch=level', 'high')).toEqual({ launch: 'level' });
     expect(at('keystone.launch=high', 'level')).toEqual({ launch: 'high' });
-    const html = (launch: 'high' | 'level') => doorHtml({ levels: [], current: -1, settings: { ...DEFAULT_SETTINGS, launch }, howTo: false, advanced: true });
+    const html = (launch: 'high' | 'level') => doorHtml({ levels: [], current: -1, settings: { ...DEFAULT_SETTINGS, launch }, howTo: false, advanced: true, developer: true });
     expect(html('high')).toContain('data-act="launch" data-arg="high" class="on"');
     expect(html('level')).toContain('data-act="launch" data-arg="level" class="on"');
   });
@@ -254,7 +268,7 @@ describe('settings', () => {
     expect(at('', false)).toEqual({ marks: false });
     expect(at('keystone.marks=0', true)).toEqual({ marks: false });
     expect(at('keystone.marks=1', false)).toEqual({ marks: true });
-    const html = (marks: boolean) => doorHtml({ levels: [], current: -1, settings: { ...DEFAULT_SETTINGS, marks }, howTo: false, advanced: true });
+    const html = (marks: boolean) => doorHtml({ levels: [], current: -1, settings: { ...DEFAULT_SETTINGS, marks }, howTo: false, advanced: true, developer: true });
     expect(html(true)).toContain('data-act="marks" data-arg="on" class="on"');
     expect(html(false)).toContain('data-act="marks" data-arg="off" class="on"');
   });
@@ -276,7 +290,7 @@ describe('settings', () => {
     expect(at('', false)).toEqual({ turnView: false });
     expect(at('keystone.turnview=0', true)).toEqual({ turnView: false });
     expect(at('keystone.turnview=1', false)).toEqual({ turnView: true });
-    const html = (duelView: boolean) => doorHtml({ levels: [], current: -1, settings: { ...DEFAULT_SETTINGS, duelView }, howTo: false, advanced: true });
+    const html = (duelView: boolean) => doorHtml({ levels: [], current: -1, settings: { ...DEFAULT_SETTINGS, duelView }, howTo: false, advanced: true, developer: true });
     expect(html(true)).toContain('data-act="duelview" data-arg="on" class="on"');
     expect(html(false)).toContain('data-act="duelview" data-arg="off" class="on"');
     expect(html(true)).toMatch(/Duel turns/);
@@ -298,5 +312,75 @@ describe('settings', () => {
     const bad = { getItem: () => { throw new Error('x'); }, setItem: () => { throw new Error('x'); }, removeItem: () => {} };
     const s = new SettingsStore(bad);
     expect(s.set({ sound: false }).sound).toBe(false);
+  });
+});
+
+describe('the door for a newcomer (PT37, agent playtest 2)', () => {
+  const visible = (html: string) => html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+  const all = doorLevels(GAME_SERIES.flat(), () => null);
+  const advanced = (developer: boolean, resetAsk = false) => doorHtml({ levels: [], current: -1, settings: DEFAULT_SETTINGS, howTo: false, advanced: true, developer, resetAsk });
+  const acts = (html: string) => [...new Set([...html.matchAll(/<button data-act="([a-z-]+)"/g)].map((m) => m[1]!))];
+
+  it('Advanced settings shows six settings; the rest, and Forget my progress, sit under Developer settings', () => {
+    const open = advanced(false);
+    const player = SETTING_OPTIONS.filter((o) => o.door.player).map((o) => o.door.act);
+    expect(player).toEqual(['sound', 'look', 'camera', 'handoff', 'layout', 'quality']);
+    expect(open.match(/<span class="group">/g)).toHaveLength(6);
+    expect(acts(open).filter((a) => SETTING_OPTIONS.some((o) => o.door.act === a))).toEqual(player);
+    expect(open).not.toContain('data-act="reset"');
+    expect(open).toContain('data-act="developer" class="howlink devlink" aria-expanded="false">Developer settings ▸');
+    const dev = advanced(true);
+    expect(dev.match(/<span class="group">/g)).toHaveLength(SETTING_OPTIONS.length);
+    // The Developer part holds every other row, in the registry's order, then Forget my progress.
+    const devPart = dev.slice(dev.indexOf('<div class="developer">'));
+    expect(acts(devPart).filter((a) => a !== 'reset')).toEqual(SETTING_OPTIONS.filter((o) => !o.door.player).map((o) => o.door.act));
+    expect(devPart).toContain('<button data-act="reset">Forget my progress…</button>');
+  });
+  it('Forget my progress asks first: Forget or Keep', () => {
+    const ask = advanced(true, true);
+    expect(ask).toContain('Forget every best play and star on this device?');
+    expect(ask).toContain('<button data-act="reset-yes" class="yes">Forget</button> <button data-act="reset-no" class="no">Keep</button>');
+    expect(ask).not.toContain('<button data-act="reset">');
+  });
+  it('How to play: a page per mode, one or two lines each, opening on the mode of the level behind the door', () => {
+    expect(HOW_TO_PLAY.map((h) => h.id)).toEqual(['basics', 'chamber', 'spectacle', 'bullet', 'undercut', 'rube', 'fuse', 'aftershock', 'wavefront', 'mason', 'chorus', 'siege']);
+    for (const h of HOW_TO_PLAY) {
+      expect(h.lines.length, h.id).toBeGreaterThanOrEqual(1);
+      expect(h.lines.length, h.id).toBeLessThanOrEqual(2);
+      // Short: the visible text (the desktop half of a line; door-e2e checks each page fits one sideways screen) is two short lines.
+      const text = visible(h.lines.join(' ').replace(/<span class="kg-tch">.*?<\/span>/g, ''));
+      expect(text.length, `${h.id}: ${text}`).toBeLessThanOrEqual(260);
+      // The jargon the judges named is gone: Brute, Clean, rack, unexplained "gold line" outside the leverage line.
+      expect(text, h.id).not.toMatch(/\bBrute\b|\bClean\b|\brack\b/);
+    }
+    // Every series the game lists, but the trials, has its page; a level with freezes opens Bullet Time.
+    for (const series of GAME_SERIES) for (const d of series) {
+      const page = howModeOf(d);
+      if (isTrial(d.id)) expect(page, d.id).toBe('basics');
+      else expect(page, d.id).not.toBe('basics');
+    }
+    expect(howModeOf({ id: 'L1' })).toBe('chamber');
+    expect(howModeOf({ id: 'L5', freeze: 2 })).toBe('bullet');
+    expect(howModeOf(undefined)).toBe('basics');
+    // The panel: a tab per page, the open one marked, and only its lines.
+    const html = doorHtml({ levels: [], current: -1, settings: DEFAULT_SETTINGS, howTo: true, howMode: 'rube', advanced: false });
+    expect(html.match(/data-act="howmode"/g)).toHaveLength(HOW_TO_PLAY.length);
+    expect(html).toContain('<button data-act="howmode" data-arg="rube" class="on">Rube Lab</button>');
+    expect(html).toContain('<ul data-mode="rube">');
+    expect(html).not.toContain(SIEGE_TABLE_HOW);
+    expect(doorHtml({ levels: [], current: -1, settings: DEFAULT_SETTINGS, howTo: true, advanced: false })).toContain('<ul data-mode="basics">');
+  });
+  it('no card shows a placeholder tier, and an unrated trial shows its goal with no stars', () => {
+    const html = doorHtml({ levels: doorLevels(GAME_SERIES.flat(), (id) => (id === 'T-X1' ? rec(1) : null)), current: -1, settings: DEFAULT_SETTINGS, howTo: false, advanced: false, trials: { count: TRIAL_LEVELS.length, open: true } });
+    const cards = html.split('<button class="card').slice(1).map((c) => visible(c.slice(0, c.indexOf('</button>'))));
+    expect(cards.length).toBe(all.length);
+    for (const c of cards) expect(c, c).not.toContain('?');
+    const trials = cards.filter((c) => /^ [^>]*trial/.test(c) || /Trial \d+/.test(c));
+    expect(trials.length).toBe(TRIAL_LEVELS.length);
+    for (const c of trials) { expect(c, c).not.toMatch(/[★☆]/); expect(c).toMatch(/Goal /); }
+    expect(trials.find((c) => c.includes('Domino Run'))).toMatch(/Goal met · Best/);
+    expect(TRIALS_BLURB).not.toMatch(/star,|only star/);
+    // Rated cards keep their star rows.
+    expect(cards.filter((c) => !/Trial \d+/.test(c)).every((c) => /★/.test(c))).toBe(true);
   });
 });

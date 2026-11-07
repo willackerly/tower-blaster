@@ -2,11 +2,11 @@
 // collapse rendered through it (on Rapier, which clears L1 too) at the game's level.
 import { describe, expect, it } from 'vitest';
 import { RapierEngine } from '@tb/adapter-rapier';
-import { CEILING, contactTime, loudness, parseSoundMaterial, ROUGH_T } from '@tb/audio';
-import { AMMO_KINDS, ammoBody, compileLevel, grenadeShell, KEYSTONE_GRENADE, L1, LEVELS, MATERIALS } from '@tb/keystone';
-import { PRESET_NAMES } from '@tb/weapons';
+import { CEILING, contactTime, loudness, mass, parseSoundMaterial, ROUGH_T } from '@tb/audio';
+import { AMMO_KINDS, ammoBody, compileLevel, grenadeShell, iceOf, KEYSTONE_GRENADE, L1, levelById, LEVELS, masonProbes, materialId, MATERIALS, shatterPieces } from '@tb/keystone';
+import { PRESET_NAMES, presetMass, PROJECTILE_PRESETS } from '@tb/weapons';
 import { capture, render } from '../src/sound-cli.ts';
-import { AMMO_SLOT, ammoKindOf, ammoOn, mainMaterial, pairEc, GAME_SOUND_DB, gameSoundDb, KEYSTONE_SOUNDS, keystoneSounds, slotSounds, SOUND_SLOTS, soundSetOf, soundSlotOf } from '../src/sound-map.ts';
+import { AMMO_SLOT, PIECE_SLOT, PRESET_SLOT, presetOf, presetSound, ammoKindOf, ammoOn, mainMaterial, pairEc, GAME_SOUND_DB, gameSoundDb, KEYSTONE_SOUNDS, keystoneSounds, slotSounds, SOUND_SLOTS, soundSetOf, soundSlotOf } from '../src/sound-map.ts';
 
 describe('game sound slots', () => {
   it('every Keystone material and ammo kind has a valid sound at its own size', () => {
@@ -23,18 +23,50 @@ describe('game sound slots', () => {
     expect(ammo('cue').material.dims!.map((x) => x / h)).toEqual([2.4, 0.2, 0.2].map((x) => expect.closeTo(x, 9)));
   });
 
-  it('knows each ammo kind from its body, at any cube size and either cue direction; real-world projectiles are silent for now', () => {
+  it('knows each ammo kind from its body, at any cube size and either cue direction', () => {
     for (const h of [0.5, 1, 0.25]) for (const k of AMMO_KINDS) for (const alongZ of [false, true]) expect(ammoKindOf(ammoBody(k, h, [0, 0, 0], [0, 0, 0], alongZ), h)).toBe(k);
     // A GrenadeSpec flies in the iron grenade shell, marble-sized, and sounds as a marble.
     const g = compileLevel({ ...L1, rack: ['w-g'], weapons: { g: KEYSTONE_GRENADE } });
     expect(g.frame.shells!['w-g']).toEqual(grenadeShell(0.5));
     expect(ammoKindOf(ammoBody('w-g', g.frame, [0, 0, 0], [0, 0, 0]), 0.5)).toBe('marble');
-    // The default w-grenade (w-grenadem) has a WeaponSpec shell, scaled to the blocks as B1-B3's bomb and the
-    // firework are: silent like theirs.
-    const m = compileLevel({ ...L1, rack: ['w-grenade'] });
-    expect(soundSlotOf(m, ammoBody('w-grenade', m.frame, [0, 0, 0], [0, 0, 0]), m.meta.n)).toBe(-1);
-    const c = compileLevel(L1);
-    for (const p of PRESET_NAMES) expect(soundSlotOf(c, ammoBody(`p-${p}`, c.frame.unit, [0, 0, 0], [0, 0, 0]), c.meta.n)).toBe(-1);
+  });
+
+  it('a weapon\'s shell (its density scaled to the blocks: B1-B3\'s bomb, the firework, w-grenade) sounds as the steel ammo of its shape', () => {
+    const onL1 = (item: `w-${string}`) => compileLevel({ ...L1, rack: [item] });
+    for (const [item, m, kind] of [['w-grenade', onL1('w-grenade'), 'marble'], ['w-firework', onL1('w-firework'), 'cannonball'], ['w-bomb', compileLevel(levelById('B1')), 'cannonball'], ['w-ram', compileLevel(levelById('B2')), 'cannonball']] as const) {
+      const b = ammoBody(item, m.frame, [0, 0, 0], [0, 0, 0]);
+      expect(ammoKindOf(b, m.frame.unit), item).toBeNull(); // not Keystone's own ammo
+      expect(soundSlotOf(m, b, m.meta.n), item).toBe(AMMO_SLOT + AMMO_KINDS.indexOf(kind));
+    }
+  });
+
+  it('a Mason\'s Trial probe sounds as its material', () => {
+    const c = compileLevel(levelById('MT1')), probes = masonProbes(c, 0);
+    expect(probes.length).toBeGreaterThan(0);
+    for (const e of probes) expect(soundSlotOf(c, e.body, c.meta.n + 5)).toBe(materialId('stone'));
+  });
+
+  it('each rack preset sounds as itself, at its real size, its mass near the real one', () => {
+    const c = compileLevel(L1), slots = slotSounds(c), classic = slotSounds(c, 'classic');
+    expect(SOUND_SLOTS).toBe(PRESET_SLOT + PRESET_NAMES.length);
+    PRESET_NAMES.forEach((p, k) => {
+      const b = ammoBody(`p-${p}`, c.frame.unit, [0, 0, 0], [0, 0, 0]), slot = slots[PRESET_SLOT + k]!;
+      expect(presetOf(b)).toBe(p);
+      expect(soundSlotOf(c, b, c.meta.n)).toBe(PRESET_SLOT + k);
+      expect(slot.edge).toBe(PROJECTILE_PRESETS[p].diameter);
+      expect(() => parseSoundMaterial(slot.material), p).not.toThrow();
+      expect(() => parseSoundMaterial(classic[PRESET_SLOT + k]!.material), p).not.toThrow();
+      // Within the cube's 6/pi of a sphere (a body model is a cube of the diameter) and the shells' walls.
+      const ratio = mass(slot.material, slot.edge) / presetMass(PROJECTILE_PRESETS[p]);
+      expect(ratio, p).toBeGreaterThan(0.9);
+      expect(ratio, p).toBeLessThan(2.5);
+    });
+    // The hard ones take the pair's contact with the level's main material, as the ammo does; the balls their own.
+    expect(slots[PRESET_SLOT + PRESET_NAMES.indexOf('wreckingball')]!.material.Ec).toBeCloseTo(ammoOn(presetSound('wreckingball'), KEYSTONE_SOUNDS.plaster).Ec!, -3);
+    expect(slots[PRESET_SLOT + PRESET_NAMES.indexOf('beachball')]!.material).toEqual(presetSound('beachball'));
+    // Not a preset: a sphere of a preset's size at another density, or a box.
+    expect(presetOf({ ...ammoBody('p-beachball', c.frame.unit, [0, 0, 0], [0, 0, 0]), density: 7800 })).toBeNull();
+    expect(presetOf(ammoBody('drop', c.frame.unit, [0, 0, 0], [0, 0, 0]))).toBeNull();
   });
 
   it('keystone.sound=classic plays G6\'s materials, collapse the real set; the cue keeps its bar in both', () => {
@@ -62,12 +94,23 @@ describe('game sound slots', () => {
     for (const l of LEVELS.filter((x) => /^L[1-5]$/.test(x.id))) {
       const c = compileLevel(l), real = slotSounds(c), classic = slotSounds(c, 'classic');
       expect(mainMaterial(c)).toBe('plaster');
-      for (let k = AMMO_SLOT; k < SOUND_SLOTS; k++) {
+      for (let k = AMMO_SLOT; k < PIECE_SLOT; k++) {
         expect(real[k]!.material.Ec).toBeCloseTo(on.Ec!, -3);
         expect(classic[k]!.material.Ec).toBeUndefined(); // G6's steel on steel
         expect(() => parseSoundMaterial(real[k]!.material)).not.toThrow();
       }
     }
+  });
+
+  it('a shattered ice block\'s pieces sound as ice at half the edge (an octave up, an eighth of the energy), not as whole blocks', () => {
+    const c = compileLevel(L1), h = c.frame.unit, slot = slotSounds(c)[PIECE_SLOT]!;
+    expect(PIECE_SLOT).toBe(PRESET_SLOT - 1);
+    expect(slot).toEqual({ material: KEYSTONE_SOUNDS.ice, edge: h / 2 });
+    const block = compileLevel(levelById('T-I1')).scene.bodies[0]!; // an ice block, as a level stands it
+    const pieces = shatterPieces(block, block.pos, block.rot, [0, 0, 0], [0, 0, 0], 6, iceOf(undefined), 0);
+    expect(pieces).toHaveLength(8);
+    for (const e of pieces) expect(soundSlotOf(c, e.body, c.meta.n + 1)).toBe(PIECE_SLOT);
+    expect(soundSlotOf(c, block, c.meta.n + 1)).toBe(materialId('ice')); // a whole ice block spawned later is ice, not a piece
   });
 
   it('structure bodies sound as their material, spawned ones as their ammo', () => {
