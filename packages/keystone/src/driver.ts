@@ -427,8 +427,13 @@ export class Driver {
     return this.session.bank(this.snapshotStep);
   }
 
+  /**
+   * One engine step, observed. Pipelined while a shot runs: the step after the one observed is already submitted.
+   * With no shot running and nothing read ahead (a Mason test, keystone mason-trial.ts, steps the world while the
+   * session aims) it steps serially, so each call observes exactly one step more, as on a serial driver.
+   */
   async step(): Promise<Feedback[]> {
-    if (!this.options.pipelined) {
+    if (!this.options.pipelined || (this.session.phase !== 'running' && !this.ahead)) {
       await this.engine.step();
       this.snapshot = await this.engine.snapshot();
       this.snapshotStep = this.engine.stepIndex;
