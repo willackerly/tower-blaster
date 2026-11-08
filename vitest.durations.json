@@ -71,6 +71,7 @@
   "packages/game/test/fuse-layout-e2e.test.ts": 43.9,
   "packages/game/test/fuse-tags.test.ts": 0.1,
   "packages/game/test/fuse-timeline.test.ts": 0.1,
+  "packages/game/test/fx-clock-e2e.test.ts": 60,
   "packages/game/test/heritage-lost-e2e.test.ts": 101.7,
   "packages/game/test/heritage-lost-looks-e2e.test.ts": 102.2,
   "packages/game/test/hud-e2e-gpu.test.ts": 208.1,

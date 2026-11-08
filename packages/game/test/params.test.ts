@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { B1, BIG_LEVELS, L1, L2, L3, seriesOf, type Shot, TRIAL_LEVELS, writeShots } from '@tb/keystone';
 import { compileLevel } from '@tb/keystone';
-import { buildOption, DEFAULT_LEVEL, GAME_LOOK, GAME_SERIES, levelRules, loadOptions, offscreenOf, onEngine, parseGameParams, weaponTierOf, withRules, writeLevelRules } from '../src/params.ts';
+import { buildOption, DEFAULT_LEVEL, fxClockOf, GAME_LOOK, GAME_SERIES, levelRules, loadOptions, offscreenOf, onEngine, parseGameParams, weaponTierOf, withRules, writeLevelRules } from '../src/params.ts';
 import { DEFAULT_FEEL } from '../src/pacing.ts';
 import { DEFAULT_ENGINE } from '../src/engines.ts';
 
@@ -12,7 +12,7 @@ const par = L1.solutions!.par as Shot[];
 
 describe('game URL keys', () => {
   it('a bare URL opens the slice\'s first level (B1) on the GPU solver in the maquette look, no juice and no line', () => {
-    expect(parse('')).toEqual({ level: B1, rack: null, rules: {}, engine: 'gpu', feel: DEFAULT_FEEL, look: GAME_LOOK, shots: null, duel: null, offscreen: false, offscreenSize: [640, 400], weaponTier: null, sound: 'collapse', impactsDb: 0 });
+    expect(parse('')).toEqual({ level: B1, rack: null, rules: {}, engine: 'gpu', feel: DEFAULT_FEEL, look: GAME_LOOK, shots: null, duel: null, offscreen: false, offscreenSize: [640, 400], fxClock: false, weaponTier: null, sound: 'collapse', impactsDb: 0 });
     expect(DEFAULT_LEVEL).toBe('B1');
     expect(seriesOf(DEFAULT_LEVEL)).toBe(BIG_LEVELS);
     // The chamber levels stay one key away, with par scoring.
@@ -23,7 +23,7 @@ describe('game URL keys', () => {
 
   it('reads every key, a level in any case and the viewer\'s name for the GPU solver, and leaves other keys alone', () => {
     expect(parse(`?level=l3&engine=rapier&keystone.hitstop=1&keystone.slowmo=0&look=real&real.sunElevation=6&offscreen=1&scenario=S4&cam=1,2,3,0,0,9`)).toEqual({
-      level: L3, rack: null, rules: {}, engine: 'rapier', feel: { ...DEFAULT_FEEL, hitStop: true }, look: 'real', shots: null, duel: null, offscreen: true, offscreenSize: [640, 400], weaponTier: null, sound: 'collapse', impactsDb: 0,
+      level: L3, rack: null, rules: {}, engine: 'rapier', feel: { ...DEFAULT_FEEL, hitStop: true }, look: 'real', shots: null, duel: null, offscreen: true, offscreenSize: [640, 400], fxClock: false, weaponTier: null, sound: 'collapse', impactsDb: 0,
     });
     expect(parse('?keystone.sound=synth&keystone.impacts=-6')).toMatchObject({ sound: 'synth', impactsDb: -6 });
     expect(parse('?keystone.sound=classic')).toMatchObject({ sound: 'classic' });
@@ -102,6 +102,17 @@ describe('offscreen key', () => {
   });
   it('refuses anything else, naming the key', () => {
     for (const bad of ['', '2', 'x', '1280', '1280x', '63x400', '640x5000', '640X400', '-1x400']) expect(() => offscreenOf(bad)).toThrow(/^offscreen must be/);
+  });
+});
+
+describe('fxclock key', () => {
+  it('1 runs offscreen effects on the simulation clock, absent or 0 only at captures; anything else is refused', () => {
+    expect(fxClockOf(null)).toBe(false);
+    expect(fxClockOf('1')).toBe(true);
+    expect(fxClockOf('0')).toBe(false);
+    expect(parse('?offscreen=1').fxClock).toBe(false);
+    expect(parse('?offscreen=1&fxclock=1').fxClock).toBe(true);
+    for (const bad of ['', '2', 'on', 'true']) expect(() => fxClockOf(bad)).toThrow(/^fxclock must be/);
   });
 });
 

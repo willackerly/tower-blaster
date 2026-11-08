@@ -87,6 +87,18 @@ describe('damage effects on the GPU', () => {
     expect(r.next).toEqual({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 });
   });
 
+  it('Renderer.advanceEffects runs the effects with no frame drawn; an ID pass leaves their clock alone', async (ctx) => {
+    if (!gpu) return ctx.skip();
+    const r = await call('effectsAdvance');
+    expect(r.error).toBeNull();
+    expect(r.hit.particles).toBeGreaterThan(50);
+    expect(r.hit.hot).toBe(1);
+    expect(r.hit.flashes).toBeGreaterThan(0);
+    // Stamped at the last advance's time (100 s), not at the ID pass's 0: live a frame later.
+    expect(r.blast.blasts).toBe(1);
+    expect({ ...r.later, spawned: 0 }).toEqual({ particles: 0, hot: 0, spawned: 0, flashes: 0, blasts: 0, fuses: 0 });
+  });
+
   it("a ball's own impact bids for a flash at ballFlash of its strength, a block's in full", async (ctx) => {
     if (!gpu) return ctx.skip();
     const r = await call('ballFlash');

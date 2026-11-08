@@ -3580,6 +3580,39 @@ export async function effectsReset() {
 }
 
 /**
+ * Renderer.advanceEffects (the offscreen effect clock): a hard hit spawns sparks, heats its body and lights a
+ * flash with no frame drawn; an ID pass leaves the effect clock where it was (a blast set after one is stamped
+ * at the last frame's time, not at the ID pass's); and 5 s more of the clock leaves nothing live.
+ */
+export async function effectsAdvance() {
+  const { device } = await sharedDevice({ timestamps: false });
+  device.pushErrorScope('validation');
+  const descs = [box([-1.5, 1, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1]), box([1.5, 1, 0], [0.5, 0.5, 0.5], [0, 0, 0, 1])];
+  const src = new SnapshotSource(device);
+  src.reset(descs);
+  const rend = new Renderer(device, { size: [W, H] }, { sparkPool: 4096 });
+  rend.setSource(src);
+  const snap = snapshotOf(descs);
+  src.update(snap, descs);
+  const T = 100;
+  const f = (time: number, dt: number): FrameParams => ({ ...camera([0, 2.5, 7], [0, 1, 0]), groundY: 0, time, dt });
+  rend.advanceEffects(f(T, 1 / 60));
+  snap.linVel[0] = 14; // body 0 hit hard: an impact, heat
+  src.update(snap, descs);
+  rend.advanceEffects(f(T + 1 / 60, 1 / 60));
+  const hit = await rend.effectStats();
+  await rend.renderIds({ ...camera([0, 2.5, 7], [0, 1, 0]), groundY: 0 }); // no time: before, the clock went back to 0
+  rend.blast([0, 1, 0], 3);
+  rend.advanceEffects(f(T + 2 / 60, 1 / 60));
+  const blast = await rend.effectStats();
+  rend.advanceEffects(f(T + 2 / 60 + 5, 5)); // body 0 keeps its speed: no new impact
+  const later = await rend.effectStats();
+  const err = await device.popErrorScope();
+  rend.destroy();
+  return { hit, blast, later, error: err?.message ?? null };
+}
+
+/**
  * A ball's own impact bids for a flash at LightParams.ballFlash of its strength, a block's in full: two
  * bodies in different flash cells change speed by the same 15 m/s, one a ball.
  */
