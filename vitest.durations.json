@@ -91,6 +91,7 @@
   "packages/game/test/marks-e2e.test.ts": 11,
   "packages/game/test/mason-e2e.test.ts": 20.5,
   "packages/game/test/mason-engine.test.ts": 0,
+  "packages/game/test/meter-ticks-e2e.test.ts": 0.7,
   "packages/game/test/mode-ui-e2e.test.ts": 18.7,
   "packages/game/test/mode-ui.test.ts": 0.3,
   "packages/game/test/modes-ui.test.ts": 0,

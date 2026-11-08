@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { B1, B2, compileLevel, levelGoldLine, L1, L2, L3, L4, L5, levelScore, masonScore, MT4, outcomeScore, RL1, type ShotOutcome, U3, W3, W5, type ChorusJudgement, chorusScore } from '@tb/keystone';
 import { HOW_TO_PLAY } from '../src/door.ts';
 import { BUILD_HELP, GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, MASON_HELP, TOUCH_HELP } from '../src/ui.ts';
-import { CUT_HINT, PULL_HINT, PUSH_HINT, BANK_BUTTON, BANK_QUIET, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, leverageWords, meterHtml, meterTicks, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs, masonStarsHtml, masonSub, TEST_BUTTON, trialText, chorusObjectiveText } from '../src/hud.ts';
+import { CUT_HINT, PULL_HINT, PUSH_HINT, BANK_BUTTON, BANK_QUIET, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, leverageWords, meterHtml, meterTicks, type MeterTick, METER_MIN_PX, LABEL_GAP_PX, STAR_PX, tickLabelShifts, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs, masonStarsHtml, masonSub, TEST_BUTTON, trialText, chorusObjectiveText } from '../src/hud.ts';
 
 describe('rack', () => {
   it('groups by kind in first-seen order with counts and keys', () => {
@@ -222,7 +222,7 @@ describe('playtest polish (U5, U6)', () => {
     expect(html).toMatch(/class="meter"/);
     expect(html).toMatch(/<i style="width:55\.0%">/);
     expect([...html.matchAll(/class="tick( obj)?( got)?"/g)].map((m) => [Boolean(m[1]), Boolean(m[2])])).toEqual([[true, true], [false, false], [false, false]]);
-    expect([...html.matchAll(/<b>(★+)<\/b>/g)].map((m) => m[1])).toEqual(['★', '★★', '★★★']);
+    expect([...html.matchAll(/<b(?: style="[^"]*")?>(★+)<\/b>/g)].map((m) => m[1])).toEqual(['★', '★★', '★★★']);
     expect(meterHtml(1.7, meterTicks(b1), 'down')).toMatch(/width:100\.0%/);
     expect(hudHtml({ ...base, strokes: 1, ticks: [] })).not.toMatch(/class="meter"/);
     expect(hudHtml({ ...base, strokes: 1 })).toMatch(/Down <b class="down">55%<\/b>/);
@@ -421,5 +421,38 @@ describe('Wavefront HUD', () => {
   it('says what to push until the first shot (PT39)', () => {
     expect(at(W3)).toContain(PUSH_HINT);
     expect(at(W3, { strokes: 1 })).not.toContain(PUSH_HINT);
+  });
+});
+
+describe('star labels on the Down bar (PT2 review)', () => {
+  const B3_TICKS: MeterTick[] = [{ at: 0.4, stars: 1 }, { at: 0.53, stars: 2 }, { at: 0.61, stars: 3 }];
+  /** Each label's box on the narrowest bar, from its tick's centre and its shift. */
+  const boxes = (ticks: MeterTick[]) => tickLabelShifts(ticks).map((dx, i) => {
+    const w = STAR_PX * ticks[i]!.stars, c = ticks[i]!.at * METER_MIN_PX + dx;
+    return { l: c - w / 2, r: c + w / 2 };
+  });
+  it('ticks far enough apart keep their labels centred (B1 within half a pixel: 2.6 px apart on the narrowest bar)', () => {
+    expect(tickLabelShifts([{ at: 0.4, stars: 1 }, { at: 0.6, stars: 2 }, { at: 0.94, stars: 3 }])).toEqual([0, 0, 0]);
+    for (const dx of tickLabelShifts([{ at: 0.4, stars: 1 }, { at: 0.7, stars: 2 }, { at: 0.94, stars: 3 }])) expect(Math.abs(dx)).toBeLessThanOrEqual(0.5);
+    expect(tickLabelShifts([])).toEqual([]);
+    expect(meterHtml(0.3, [{ at: 0.4, stars: 1 }, { at: 0.7, stars: 2 }], 'down')).not.toMatch(/--dx/);
+  });
+  it('close ticks are laid apart in order, at least the gap between them, on the narrowest bar', () => {
+    for (const ticks of <MeterTick[][]>[B3_TICKS, [{ at: 0.5, stars: 1 }, { at: 0.5, stars: 2 }, { at: 0.5, stars: 3 }], [{ at: 0.01, stars: 2 }, { at: 0.02, stars: 3 }]]) {
+      const b = boxes(ticks);
+      for (let i = 1; i < b.length; i++) expect(b[i]!.l - b[i - 1]!.r).toBeGreaterThanOrEqual(LABEL_GAP_PX - 0.11);
+    }
+    expect(meterHtml(0.3, B3_TICKS, 'down')).toMatch(/style="--dx:-?\d/);
+  });
+  it('a group is centred on its ticks: two equal labels move apart by the same amount', () => {
+    const [a, b] = tickLabelShifts([{ at: 0.5, stars: 2 }, { at: 0.52, stars: 2 }]);
+    expect(a).toBeLessThan(0);
+    expect(a! + b!).toBeCloseTo(0, 1);
+  });
+  it("B3's labels each still span or touch their tick on the narrowest bar", () => {
+    boxes(B3_TICKS).forEach((x, i) => {
+      const t = B3_TICKS[i]!.at * METER_MIN_PX;
+      expect(Math.max(0, x.l - t, t - x.r)).toBeLessThanOrEqual(4);
+    });
   });
 });
