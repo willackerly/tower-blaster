@@ -7,10 +7,10 @@
 //
 // PHYSICS_GPU_SLOW=1 runs the matrix here instead (restMatrix: 3 structures x
 // idle at 40 and 20 iterations, struck at 40, x gapSlop on, off; Kapla settled
-// and asleep, and struck Kapla must come down; struck runs at least 1,200
-// frames; #310 has why) at REST_SIZES bodies (commas for several) for
-// REST_FRAMES frames. On a physical GPU (TB_CHANNEL) they
-// default to 1000 and 3600 (a minute); on SwiftShader, the nightly, to 400 and
+// and asleep, and struck Kapla must come down; struck walls and cities run at
+// least 1,200 frames, and every struck structure must be hit; #310 has why)
+// at REST_SIZES bodies (commas for several) for REST_FRAMES frames. On a
+// physical GPU (TB_CHANNEL) they default to 1000 and 3600 (a minute); on SwiftShader, the nightly, to 400 and
 // 600, CI's own case: at 1,000 bodies and 3,600 frames the matrix is hours
 // there (2-4 steps a second), and the first nightly (run 42394058839) hit its
 // job limit inside this file. The full matrix is the Mac run (docs/ci/nightly.md):

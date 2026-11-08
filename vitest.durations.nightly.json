@@ -46,6 +46,6 @@
   "packages/physics-gpu/test/engine-restitution-cap.test.ts": 512.1,
   "packages/physics-gpu/test/lattice-impact-2.test.ts": 140.8,
   "packages/physics-gpu/test/rest-stability-struck.test.ts": 497.4,
-  "packages/physics-gpu/test/rest-stability.test.ts": 10151.2,
+  "packages/physics-gpu/test/rest-stability.test.ts": 3460,
   "packages/testkit/test/shard.test.ts": 0.1
 }
