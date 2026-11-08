@@ -98,6 +98,7 @@
   "packages/game/test/options-golden.test.ts": 0,
   "packages/game/test/options-sleeptint.test.ts": 0,
   "packages/game/test/options.test.ts": 0,
+  "packages/game/test/pace-hold-e2e.test.ts": 8.3,
   "packages/game/test/pacing-gpu.test.ts": 21,
   "packages/game/test/pacing.test.ts": 0,
   "packages/game/test/pair-room-gpu.test.ts": 66,

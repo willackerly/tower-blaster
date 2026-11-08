@@ -177,7 +177,8 @@ export class SpeedMeter {
   private t = NaN;
   private advance(now: number) {
     if (Number.isNaN(this.t)) { this.t = now; return; }
-    const d = Math.max(0, now - this.t) / 1000, keep = Math.exp(-d / SPEED_TAU);
+    // A gap longer than SPEED_STALL_MS between readings is the page not running (no frame drew), not slow motion.
+    const d = Math.min(Math.max(0, now - this.t), SPEED_STALL_MS) / 1000, keep = Math.exp(-d / SPEED_TAU);
     this.sim *= keep;
     this.real = keep * this.real + SPEED_TAU * (1 - keep);
     this.t = now;
@@ -186,9 +187,21 @@ export class SpeedMeter {
   step(now: number, dt: number) { this.advance(now); this.sim += dt; }
   /** Sim seconds per real second at now. */
   speed(now: number): number { this.advance(now); return this.sim / this.real; }
+  /**
+   * Time passes uncounted up to now: physics is held on purpose (Bullet Time's freeze, a test's or capture's hold),
+   * which is not slow motion. Without it a held shot read "0% speed" (PT2 Metal review, 2026-11-08: the agent
+   * playtest captures frames while holding the shot), and the frame pacer took the page to be behind.
+   */
+  idle(now: number) { this.t = now; }
   /** As if the sim had always run at real time (a new shot). */
   reset() { this.sim = SPEED_TAU; this.real = SPEED_TAU; this.t = NaN; }
 }
+
+/**
+ * The longest gap between two readings the meter counts, ms: longer is a stall (a hidden tab, a long GC, a page
+ * capture), counted as this long. Frames read the meter each frame, so a slow sim that still draws is never clamped.
+ */
+export const SPEED_STALL_MS = 250;
 
 /** Shown as slow motion below this sim speed (the "80% speed" HUD tag); above, real time. */
 export const SLOW_TAG_BELOW = 0.95;

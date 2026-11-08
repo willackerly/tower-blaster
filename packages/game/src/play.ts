@@ -1833,12 +1833,22 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     Object.assign(handle, { phase: stepping ? 'running' : s.phase, frozen, ready: !loading && !stepping && !editing && s.phase === 'aiming' && regrowT === null, stepIndex: driver.engine.stepIndex, strokes: s.strokes, bodies: driver.snapshot.count, collapse: s.liveCollapse });
   }
 
+  /**
+   * The sim speed the HUD's tag and the frame pacer read: real time (1) while physics is held on purpose (frozen, or
+   * the handle's hold), whose wall time the meter does not count (SpeedMeter.idle), so the shot is not slow motion
+   * during the hold nor after it.
+   */
+  function paceNow(now: number): number {
+    if (frozen || handle.hold) { speed.idle(now); return 1; }
+    return speed.speed(now);
+  }
+
   /** Mirror state, pace and view onto the handle; called each frame and right after anything that changes it.
    * Pace and view are what the frame drew (the HUD tag, the camera), so only a frame mirrors them. */
   function sync() {
     syncState();
     const s = driver.session;
-    const running = s.phase === 'running', v = running ? speed.speed(performance.now()) : 1, costs = handle.timing.costMs;
+    const running = s.phase === 'running', v = running ? paceNow(performance.now()) : 1, costs = handle.timing.costMs;
     handle.pace = { timeScale: running ? pacer.timeScale : 1, speed: v, tag: running && !fastHeld && !handle.fast && !ending && !tail.on && !skipping ? slowTag(v) : '', tailSkip: tail.on, costMs: running && !Number.isNaN(pacer.costMs) ? pacer.costMs : median(costs.slice(-60)) };
     handle.view = { target: [...orbit.target], distance: orbit.distance, yaw: orbit.yaw, pitch: orbit.pitch, following: follow.active, jolt, turning: swing.active, cue: cueNow(), arcBeads: arcBeadsDrawn, impact: impactDrawn, xray: renderer.xray };
   }
@@ -2426,7 +2436,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
     // (slow-motion juice, fast-forward); it has headroom when steps cost under CLEAR_SHARE of a step.
     const fast = fastHeld || handle.fast || ending || tail.on || turnUp(), costMs = median(handle.timing.costMs.slice(-COST_WINDOW));
     frames.mode = feel.frames; // read live: the quality tier sets it when the URL does not
-    const draw = frames.frame(now, { idle: !running, behind: running && !fast && !pacer.slowing && speed.speed(now) < SLOW_TAG_BELOW, clear: costMs < CLEAR_SHARE * 1000 * c.scene.dt }, !!want);
+    const draw = frames.frame(now, { idle: !running, behind: running && !fast && !pacer.slowing && paceNow(now) < SLOW_TAG_BELOW, clear: costMs < CLEAR_SHARE * 1000 * c.scene.dt }, !!want);
     handle.draws = { drawn: frames.drawn, skipped: frames.skipped, decimating: frames.decimating };
     if (draw) {
       if (running && !Number.isNaN(lastDrawn)) handle.timing.frameMs.push(now - lastDrawn);
