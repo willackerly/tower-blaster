@@ -25,10 +25,12 @@ export async function probeQuality(device: GPUDevice, adapter: GPUAdapter, cssWi
   const t0 = performance.now();
   const info = adapter.info as GPUAdapterInfo & { isFallbackAdapter?: boolean };
   const software = isSoftwareAdapter({ vendor: info.vendor, architecture: info.architecture, description: info.description, device: info.device, isFallbackAdapter: info.isFallbackAdapter ?? (adapter as GPUAdapter & { isFallbackAdapter?: boolean }).isFallbackAdapter });
-  const p: ProbeResult = { software: software && !o.measureSoftware, calibrated: software, dispatchMs: NaN, highFrameMs: NaN, midFrameMs: NaN, ms: 0 };
+  const p: ProbeResult = { software: software && !o.measureSoftware, calibrated: software, dispatchMs: NaN, highFrameMs: NaN, midFrameMs: NaN, ms: 0, warmupMs: 0 };
   const done = () => { p.ms = performance.now() - t0; return { ...p, ...pickTier(p) }; };
   if (p.software) return done();
-  p.dispatchMs = (await probeDispatch(device)).msPerDispatch;
+  const d = await probeDispatch(device);
+  p.dispatchMs = d.msPerDispatch;
+  p.warmupMs += d.warmupMs;
   const budget = budgetFor(p.calibrated, predictedStepMs(p.dispatchMs));
   if (p.calibrated && !(budget >= MIN_BUDGET_MS)) return done();
   const look = LOOKS[GAME_LOOK];
@@ -36,6 +38,7 @@ export async function probeQuality(device: GPUDevice, adapter: GPUAdapter, cssWi
     const k = TIER_KNOBS[tier], [width, height] = canvasSize(cssWidth, cssHeight, devicePixelRatio, k.maxDpr);
     const f = await probeFrames(device, { width, height, toggles: toggles(k), ...(look ? { look } : {}), frames: PROBE_FRAMES, budgetMs: PROBE_SIZE_MS, stopAboveMs: STOP_FACTOR * budget });
     const ms = medianOf(f.frameMs);
+    p.warmupMs += f.warmupMs;
     if (tier === 'high') p.highFrameMs = ms; else p.midFrameMs = ms;
     if (ms <= budget) break;
   }

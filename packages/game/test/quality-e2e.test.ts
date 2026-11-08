@@ -21,6 +21,7 @@ describe('quality tiers', () => {
     console.log(`probe on load: ${JSON.stringify(s.quality?.probe)} (software: not a performance result)`);
     expect(s.quality).toMatchObject({ setting: 'auto', tier: 'low', reason: 'software', probed: 'low', knobs: { maxDpr: 0.5, shadow: true, ao: false, sparks: false, frames: 'auto' } });
     expect(s.quality!.probe!.ms).toBeLessThan(1000);
+    expect(s.quality!.probe!.warmupMs).toBe(0);
     expect(s.maxDpr).toBe(0.5);
     expect(s.frames).toBe('auto');
     expect(errors).toEqual([]);
@@ -42,6 +43,9 @@ describe('quality tiers', () => {
     console.log(`measured probe: ${JSON.stringify(p)} (software: not a performance result)`);
     expect(p).toMatchObject({ software: false, calibrated: true, tier: 'low', reason: 'physics' });
     expect(p.dispatchMs).toBeGreaterThan(0);
+    // The chain's warmup round ran (no frames: physics ruled the frames out), and is part of the total.
+    expect(p.warmupMs).toBeGreaterThan(0);
+    expect(p.warmupMs).toBeLessThanOrEqual(p.ms);
     expect(p.stepMs).toBeGreaterThan(1000 / 60);
     expect(p.ms).toBeLessThan(1000);
     await page.close();
@@ -129,10 +133,8 @@ describe('quality tiers', () => {
     if (!o) return ctx.skip();
     const { page, errors } = o;
     const q = (await page.evaluate(() => window.__game.quality))!;
-    console.log(`M5 probe: ${JSON.stringify(q.probe)}`);
-    expect(q.tier).toBe('high');
-    expect(q.probe!.calibrated).toBe(false);
-    expect(q.probe!.ms).toBeLessThan(1000);
+    console.log(`M5 probe: ${JSON.stringify(q.probe)} (of ${q.probe!.ms.toFixed(0)} ms, ${q.probe!.warmupMs.toFixed(0)} ms warmup: compiles and bakes)`);
+    // The data first, the checks after, so a failed check still prints the calibration lines.
     await page.waitForFunction(() => window.__game.ready, undefined, { timeout: 5 * MINUTES, polling: 250 });
     await page.evaluate(() => { window.__game.fireOpener(); });
     await page.waitForTimeout(5000);
@@ -140,6 +142,9 @@ describe('quality tiers', () => {
     console.log(`B1 step on the GPU solver: median ${cost.toFixed(2)} ms measured, ${q.probe!.stepMs.toFixed(2)} ms predicted (ratio ${(q.probe!.stepMs / cost).toFixed(2)})`);
     // The proxy's STEP_DISPATCHES on this GPU would be this many times SwiftShader's (no assertion: data).
     console.log(`GPU STEP_DISPATCHES from this run: ${Math.round(cost / q.probe!.dispatchMs)}`);
+    expect(q.tier).toBe('high');
+    expect(q.probe!.calibrated).toBe(false);
+    expect(q.probe!.ms).toBeLessThan(1000);
     expect(errors).toEqual([]);
     await page.close();
   }, 10 * MINUTES);
