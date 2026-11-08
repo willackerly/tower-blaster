@@ -6,7 +6,7 @@
 // The reference's check is level-stability.test.ts and Rapier's level-stability-rapier.test.ts; the big levels'
 // longer rest (600 steps, top drop) is big-levels-gpu.test.ts.
 import { expect, it } from 'vitest';
-import { ALL, gpuStabilitySuite, LEVELS_ALL, LOAD_MAX, PARTS, levelsPart } from './level-stability-gpu.ts';
+import { ALL, gpuStabilitySuite, LEVELS_ALL, LOAD_MAX, loadBodies, PARTS, levelsPart } from './level-stability-gpu.ts';
 
 /** The levels CI runs on SwiftShader, one to a file. */
 const CI_LEVELS = ['T-X4', 'T-X3B'];
@@ -14,11 +14,16 @@ const CI_LEVELS = ['T-X4', 'T-X3B'];
 gpuStabilitySuite(ALL ? null : ['T-X4'], () => {
   it('names the levels left to a real GPU here', () => {
     const run = ALL ? Array.from({ length: PARTS }, (_, i) => levelsPart(i + 1)).flat().map((l) => l.def.id) : CI_LEVELS;
-    const left = LEVELS_ALL.filter((l) => !run.includes(l.def.id)).map((l) => `${l.def.id} (${l.c.meta.n})`);
+    const left = LEVELS_ALL.filter((l) => !run.includes(l.def.id)).map((l) => `${l.def.id} (${loadBodies(l)})`);
     if (left.length) console.log(`at load on the GPU solver ${ALL ? 'with TB_CHANNEL=chrome' : 'with TB_CHANNEL=chrome or PHYSICS_GPU_SLOW=1'} only: ${left.join(', ')}`);
     // Every level is run here (some part) or named: none dealt twice, none over the adapter's budget.
     expect(new Set(run).size).toBe(run.length);
-    expect(LEVELS_ALL.length - left.length).toBe(ALL ? LEVELS_ALL.filter((l) => l.c.meta.n <= LOAD_MAX).length : CI_LEVELS.length);
+    expect(LEVELS_ALL.length - left.length).toBe(ALL ? LEVELS_ALL.filter((l) => loadBodies(l) <= LOAD_MAX).length : CI_LEVELS.length);
     expect(LEVELS_ALL.filter((l) => CI_LEVELS.includes(l.def.id))).toHaveLength(CI_LEVELS.length);
+  });
+  it('counts a Chorus level by the bodies its worlds load, not its lot', () => {
+    const ch2 = LEVELS_ALL.find((l) => l.def.id === 'CH2')!;
+    expect(loadBodies(ch2)).toBe(ch2.c.meta.n * 64);
+    expect(loadBodies(LEVELS_ALL.find((l) => l.def.id === 'B1')!)).toBe(1000);
   });
 });

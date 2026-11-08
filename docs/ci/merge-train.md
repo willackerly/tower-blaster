@@ -60,7 +60,8 @@ nothing, because whichever run does start finds every label. The triggers are:
 
 A label can't stay on with nothing testing it. When a run is cancelled or its CI times out, land still runs
 (`always()`) and takes the label off. If even land never ran (the runner was lost, or pick crashed), the label is
-still on, so the next scheduled run picks the PR up within 30 min.
+still on, so the next scheduled run picks it up. GitHub drops scheduled runs under load (twice in about 12 h on the
+night of 2026-11-07), so that can take hours; any new label on any PR also starts a run that finds it.
 
 ## Not chosen
 
