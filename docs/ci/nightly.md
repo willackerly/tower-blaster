@@ -24,7 +24,7 @@ The first nightly run (42394058839) showed why bigger levels can't run there:
 The second (42469639500, 2026-11-08) ran every shard to the end, in 37 min to 2 h 50 min:
 - CH2, counted then by its 139-body lot, passed 30 min without a result. The page it left busy failed the 15 levels after it in its file. Now a Chorus level counts its worlds, and a level that times out gets the next level a fresh page.
 - The 10k viewer level's full case passed 60 min while loading. It now runs only on a real GPU (`TB_CHANNEL`), which takes `e2e-keystone-10k.test.ts` out of the nightly tier.
-- rest-stability's matrix at 400 bodies took 2 h 49 min, the longest file now.
+- rest-stability's matrix at 400 bodies took 2 h 49 min and failed 10 cases (#310): it asserted holds that F3's record shows fail, mostly the Kapla tower run awake. #325 runs what the game claims holds, in 17 cases (about 41 min locally, so about an hour on a runner).
 
 The rest of the slow tier:
 - **Level sweep.** The sweep of every level is dealt over `level-stability-gpu.test.ts` and `-2`, `-3`, largest first, about 40 min each.
@@ -45,7 +45,7 @@ TB_CHANNEL=chrome PHYSICS_GPU_SLOW=1 pnpm vitest run \
 
 With `TB_CHANNEL` set, every level runs, the big ones included. Each file's "names the levels left" case lists anything this adapter didn't run.
 
-The rest-stability matrix at full size is a Mac run too. On SwiftShader the nightly runs its 24 cases at 400 bodies for 600 frames (CI's own case). At 1,000 bodies for 3,600 frames it would take some 8 h there, and the first nightly hit its job limit inside it:
+The rest-stability matrix at full size is a Mac run too. On SwiftShader the nightly runs its 17 cases at 400 bodies for 600 frames (CI's own case; struck walls and cities run 1,200). At 1,000 bodies for 3,600 frames it would take hours there, and the first nightly hit its job limit inside it:
 
 ```
 TB_CHANNEL=chrome PHYSICS_GPU_SLOW=1 REST_SIZES=1000,10000 REQUIRE_WEBGPU=1 \
@@ -60,7 +60,7 @@ TB_CHANNEL=chrome PHYSICS_GPU_SLOW=1 REST_SIZES=1000,10000 REQUIRE_WEBGPU=1 \
 pnpm durations --file vitest.durations.nightly.json --from-log <slow shard log>
 ```
 
-The longest file, rest-stability (~170 min), sets the longest shard.
+The longest file, chorus-gpu (~60 min), sets the longest shard; rest-stability's 3,460 s is an estimate from a local run (x 1.4) until a nightly measures it.
 
 ## GitHub may skip the schedule
 

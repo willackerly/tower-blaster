@@ -63,12 +63,12 @@ export const BELL_NOTE = degree(10);
  * `impacts` and `contact` make no voices here; the cues (launch, crowns, heritage, tier, level end) stay.
  * opts.bell: the level's crowns are bells (objective 'bell'), and a crown down rings as one (BELL_PARTIALS).
  * opts.launch: the fired body's size and speed, so a launched shot whumps (launch-sound.ts, PaceFeel.launchSound
- * 'whump'); without it, or with opts.launchSound 'glide', the old sine glide. A drop (released, not launched) and
- * a cue (pushed) keep the glide either way.
+ * 'whump', with its report; 'dry' without); without it, or with opts.launchSound 'glide', the old sine glide. A drop
+ * (released, not launched) and a cue (pushed) keep the glide either way.
  * opts.blastDist: the camera's distance from a blast (m; absent: REF_DIST), so a weapon going off booms
- * (blast-sound.ts, PaceFeel.blastSound 'boom'), quieter and later from further; opts.blastSound 'none': silent.
+ * (blast-sound.ts, PaceFeel.blastSound 'boom'; 'short' A6's shorter pulse), quieter and later from further; 'none': silent.
  */
-export function voicesFor(fb: Feedback, opts: { impacts?: boolean; bell?: boolean; launch?: LaunchShape | null; launchSound?: 'whump' | 'glide'; blastDist?: number | null; blastSound?: 'boom' | 'none' } = {}): Voice[] {
+export function voicesFor(fb: Feedback, opts: { impacts?: boolean; bell?: boolean; launch?: LaunchShape | null; launchSound?: 'whump' | 'dry' | 'glide'; blastDist?: number | null; blastSound?: 'boom' | 'short' | 'none' } = {}): Voice[] {
   if (opts.impacts === false && (fb.t === 'impacts' || fb.t === 'contact')) return [];
   switch (fb.t) {
     case 'fired':
@@ -80,14 +80,14 @@ export function voicesFor(fb: Feedback, opts: { impacts?: boolean; bell?: boolea
       if (fb.ammo === 'quake') return [{ kind: 'noise', freq: 120, gain: 0.3, decay: 1.2, delay: 0 }, { kind: 'tone', wave: 'sine', freq: 38, gain: 0.3, decay: 1.5, delay: 0, glide: 0.8 }];
       // A launched shot: the launcher's whump, from the shot.
       if (opts.launch && opts.launchSound !== 'glide' && fb.ammo !== 'drop' && fb.ammo !== 'cue') {
-        const p = launchParams(opts.launch);
+        const p = launchParams(opts.launch, undefined, opts.launchSound === 'dry' ? 0 : undefined);
         return [{ kind: 'launch', freq: 0, gain: p.gain, decay: LAUNCH_SECONDS, delay: 0, launch: p }];
       }
       // The old cue: a sine gliding down, heavier for heavier shots.
       return [{ kind: 'tone', wave: 'sine', freq: fb.ammo === 'cannonball' ? 70 : fb.ammo === 'drop' ? 55 : 110, gain: 0.35, decay: 0.22, delay: 0, glide: 0.5 }];
     case 'blast': {
       if (opts.blastSound === 'none' || !(fb.radius > 0)) return [];
-      const p = blastParams(fb.radius, opts.blastDist ?? REF_DIST);
+      const p = blastParams(fb.radius, opts.blastDist ?? REF_DIST, opts.blastSound === 'short');
       return [{ kind: 'blast', freq: 0, gain: p.gain, decay: p.seconds, delay: p.delay, blast: p, take: (((fb.step * 7 + fb.body) % BLAST_TAKES) + BLAST_TAKES) % BLAST_TAKES }];
     }
     case 'contact': {
@@ -152,11 +152,11 @@ export class Synth {
   readonly master: AudioNode;
   private readonly noise: AudioBuffer;
   muted = false;
-  /** Blast waves at unit gain by reach (cm) and take: building one is ~1 ms of a frame, so each reach is built once. */
+  /** Blast waves at unit gain by reach (cm), take and style (pulse in us, rumbleHz): building one is ~1 ms of a frame, so each is built once. */
   private readonly blasts = new Map<string, AudioBuffer>();
 
   private blastBuffer(p: BlastParams, take: number): AudioBuffer {
-    const key = `${Math.round(p.reach * 100)}:${take}`;
+    const key = `${Math.round(p.reach * 100)}:${take}:${Math.round(p.T * 1e6)}:${p.rumbleHz ?? ''}`;
     let buf = this.blasts.get(key);
     if (!buf) {
       const x = blastWave({ ...p, gain: 1 }, this.ctx.sampleRate, take + 1);

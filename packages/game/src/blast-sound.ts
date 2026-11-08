@@ -22,8 +22,13 @@
 
 /** Speed of sound, m/s. */
 export const C_AIR = 343;
-/** The Friedlander pulse's positive phase per metre of blast reach, s (a grenade's 5 m: 2 ms, ~1 kg of TNT at its edge). */
-export const BLAST_T_PER_M = 0.0004;
+/**
+ * The Friedlander pulse's positive phase per metre of blast reach, s (a grenade's 5 m: 6 ms). A6 took 0.4 ms (~1 kg
+ * of TNT at its edge in free air); against real explosion recordings (A6b) that left too little under 125 Hz and a
+ * crest factor of 15 dB where they have 9-12. Recordings are heard over the ground and through a microphone, both
+ * of which lengthen the pulse. keystone.blastsound=short keeps A6's (BLAST_T_PER_M_SHORT, RUMBLE_HZ_SHORT).
+ */
+export const BLAST_T_PER_M = 0.0012, BLAST_T_PER_M_SHORT = 0.0004;
 /** The Friedlander decay constant B. */
 export const BLAST_B = 1.5;
 /** Echoes per second in the rumble (velvet noise reads as smooth above ~1000 per second). */
@@ -32,8 +37,8 @@ export const ECHO_DENSITY = 2000;
 export const ECHO_START = 0.004;
 /** The rumble's decay for a 1 m reach, s; it grows as the square root of the reach, within the range. */
 export const RUMBLE_TAU_1M = 0.4, RUMBLE_TAU_MIN = 0.3, RUMBLE_TAU_MAX = 1.2;
-/** The two poles that darken the rumble, Hz. */
-export const RUMBLE_HZ = 400;
+/** The two poles that darken the rumble, Hz (A6: 400, which left 2-8 kHz 5-10 dB under the recordings). */
+export const RUMBLE_HZ = 1600, RUMBLE_HZ_SHORT = 400;
 /** Energy shares of the shock and the rumble (before the drive). */
 export const BLAST_MIX = { shock: 0.35, rumble: 0.65 } as const;
 /** The overload: softClip(DRIVE x / peak) / softClip(DRIVE), a tanh-like curve. */
@@ -56,6 +61,8 @@ export interface BlastParams {
   dist: number;
   /** Positive phase, s. */
   T: number;
+  /** The rumble's darkening, Hz (absent: RUMBLE_HZ). */
+  rumbleHz?: number;
   /** Rumble decay, s. */
   tau: number;
   /** Seconds of sound. */
@@ -66,12 +73,12 @@ export interface BlastParams {
   delay: number;
 }
 
-/** The boom's physics for a blast of `reach` (m) heard from `dist` (m). */
-export function blastParams(reach: number, dist: number): BlastParams {
+/** The boom's physics for a blast of `reach` (m) heard from `dist` (m); short: A6's shorter pulse and darker rumble. */
+export function blastParams(reach: number, dist: number, short = false): BlastParams {
   if (!(reach > 0 && dist >= 0)) throw new Error(`blast sound: reach must be > 0 and dist >= 0 (${reach}, ${dist})`);
-  const T = BLAST_T_PER_M * reach, tau = Math.min(RUMBLE_TAU_MAX, Math.max(RUMBLE_TAU_MIN, RUMBLE_TAU_1M * Math.sqrt(reach)));
+  const T = (short ? BLAST_T_PER_M_SHORT : BLAST_T_PER_M) * reach, rumbleHz = short ? RUMBLE_HZ_SHORT : RUMBLE_HZ, tau = Math.min(RUMBLE_TAU_MAX, Math.max(RUMBLE_TAU_MIN, RUMBLE_TAU_1M * Math.sqrt(reach)));
   const gain = Math.min(BLAST_GAIN_MAX, Math.max(BLAST_GAIN_MIN, BLAST_GAIN * (reach / REF_REACH) * (REF_DIST / Math.max(dist, 1))));
-  return { reach, dist, T, tau, seconds: ECHO_START + TAIL_TAUS * tau, gain, delay: Math.min(MAX_DELAY, dist / C_AIR) };
+  return { reach, dist, T, rumbleHz, tau, seconds: ECHO_START + TAIL_TAUS * tau, gain, delay: Math.min(MAX_DELAY, dist / C_AIR) };
 }
 
 /** Filter states below this are flushed to 0: a decayed tail would otherwise fall into subnormal floats, ~20x slower to compute. */
@@ -98,7 +105,7 @@ export function softClip(u: number): number {
   return u >= 3 ? 1 : u <= -3 ? -1 : (u * (27 + u * u)) / (27 + 9 * u * u);
 }
 
-export interface BlastMix { shock: number; rumble: number; drive?: number; rumbleHz?: number }
+export interface BlastMix { shock: number; rumble: number; drive?: number; rumbleHz?: number; rumblePoles?: 1 | 2 }
 
 /**
  * The boom as samples (mono, peak = params.gain, starting at the shock: play it params.delay late),
@@ -117,11 +124,11 @@ export function blastWave(p: BlastParams, sr = 48000, seed = 1, mix: BlastMix = 
     rumble[i] = (rand() < 0.5 ? -1 : 1) * Math.exp(-(i / sr - ECHO_START) / p.tau);
   }
   friedlanderFilter(rumble, Tn);
-  const hz = mix.rumbleHz ?? RUMBLE_HZ, a = hz > 0 ? Math.exp((-2 * Math.PI * hz) / sr) : 0;
+  const hz = mix.rumbleHz ?? p.rumbleHz ?? RUMBLE_HZ, a = hz > 0 ? Math.exp((-2 * Math.PI * hz) / sr) : 0;
   let er = 0, l1 = 0, l2 = 0;
   for (let i = 0; i < n; i++) {
     if (a > 0) {
-      l1 = (1 - a) * rumble[i]! + a * l1; l2 = (1 - a) * l1 + a * l2;
+      l1 = (1 - a) * rumble[i]! + a * l1; l2 = (mix.rumblePoles ?? 2) === 2 ? (1 - a) * l1 + a * l2 : l1;
       if (Math.abs(l2) < TINY) l1 = l2 = 0;
       rumble[i] = l2;
     }

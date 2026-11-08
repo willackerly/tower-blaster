@@ -3,7 +3,7 @@
 // owner. Opt-in: the default 'log' rule scores every level as before. Pure functions, no engine.
 import { describe, expect, it } from 'vitest';
 import {
-  checkLevPoints, compileLevel, DEFAULT_GOLD, L1, LEV_POINTS, leveragePoints, levelScore, logLeveragePoints, outcomeTally, type OutcomeFacts,
+  checkLevPoints, compileLevel, DEFAULT_GOLD, L1, LEV_POINTS, leveragePeak, leveragePoints, levelScore, logLeveragePoints, outcomeTally, type OutcomeFacts,
   roundLeverage, SHARE_CAP, SHARE_POINTS, shareLine, type ShotOutcome,
 } from '@tb/keystone';
 
@@ -105,5 +105,21 @@ describe('LevelDef.levPoints', () => {
     expect(shareLine(L1)).toBe(L1.lGold ?? DEFAULT_GOLD);
     expect(shareLine({ ...L1, lGold: 4 })).toBe(4);
     expect(shareLine({ ...L1, scoring: 'outcome', lGold: undefined })).toBe(DEFAULT_GOLD);
+  });
+});
+
+describe('leveragePeak (the card names a drop from it, PT31 follow-up)', () => {
+  it('is the highest running roundLeverage, the last shot it stood at, and the later shots\' own', () => {
+    // B3 on Metal: x5.09 after two bombs, x0.01 from the third, x3.40 for the round.
+    const b3 = [shot({ ke: 1, dPE_mJ: 5090 }), shot({ ke: 1, dPE_mJ: 5090 }), shot({ ke: 1, dPE_mJ: 10 })];
+    const p = leveragePeak(b3)!;
+    expect(p.after).toBe(2);
+    expect(p.peak).toBeCloseTo(roundLeverage(b3.slice(0, 2)), 12);
+    expect(p.later).toBeCloseTo(roundLeverage(b3.slice(2)), 12);
+    expect(roundLeverage(b3)).toBeLessThan(0.7 * p.peak);
+    // Rising to the end: the peak is the round's own figure, with no later shots.
+    const up = [shot({ ke: 1, dPE_mJ: 100 }), shot({ ke: 1, dPE_mJ: 9000 })];
+    expect(leveragePeak(up)).toEqual({ peak: roundLeverage(up), after: 2, later: 0 });
+    expect(leveragePeak([])).toBeNull();
   });
 });

@@ -458,6 +458,25 @@ export function roundLeverage(shots: readonly Pick<ShotOutcome, 'ke' | 'yield' |
   return leverage(released, energyFired(shots));
 }
 
+/**
+ * Where a round's leverage stood highest (PT31 follow-up): roundLeverage over the first k shots, for k = 1..n, and the
+ * k (1-based) where it last stood at its peak (the HUD showed it then). The card names the peak when later shots pulled the round's figure
+ * down from it (hud.ts dilutionWords). No shots: null.
+ */
+export function leveragePeak(shots: readonly Pick<ShotOutcome, 'ke' | 'yield' | 'dPE_mJ'>[]): { peak: number; after: number; later: number } | null {
+  if (shots.length === 0) return null;
+  let released = 0, fired = 0, peak = -1, after = 0;
+  for (let k = 0; k < shots.length; k++) {
+    const o = shots[k]!;
+    released += o.dPE_mJ; fired += o.ke + o.yield;
+    const L = leverage(released, fired);
+    if (L >= peak) { peak = L; after = k + 1; }
+  }
+  // The leverage of the shots after the peak, together: what pulled the round's figure down.
+  const rest = shots.slice(after);
+  return { peak, after, later: roundLeverage(rest) };
+}
+
 /** Leverage points under the 'log' rule (LEV_POINTS): w log2(1 + L) on the round's leverage L, floored. */
 export const logLeveragePoints = (L: number, w = 300) => Math.floor(w * Math.log2(1 + Math.max(0, L)));
 /** The 'share' rule's points for a shot that brings everything down at its level's gold line... */
