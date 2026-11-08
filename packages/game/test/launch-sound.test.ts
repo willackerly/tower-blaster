@@ -2,11 +2,13 @@
 import { describe, expect, it } from 'vitest';
 import { ammoBody, compileLevel, L1 } from '@tb/keystone';
 import { voicesFor } from '../src/audio.ts';
-import { BARREL_CALIBRES, BLAST_T_1KJ, C_AIR, EFFICIENCY, LAUNCH_GAIN, LAUNCH_GAIN_MAX, LAUNCH_GAIN_MIN, LAUNCH_SECONDS, launchParams, launchShapeOf, launchWave, REF_KE, STROUHAL, VENT_TRANSITS } from '../src/launch-sound.ts';
+import { BARREL_CALIBRES, BLAST_T_1KJ, C_AIR, EFFICIENCY, LAUNCH_GAIN, LAUNCH_GAIN_MAX, LAUNCH_GAIN_MIN, LAUNCH_SECONDS, launchParams, launchShapeOf, launchWave, REF_KE, REPORT_SHARE, STROUHAL, VENT_TRANSITS } from '../src/launch-sound.ts';
 import { launchSoundOf } from '../src/options/launchsound.ts';
 
 const SR = 48000;
 const cannon = { diameter: 0.5, speed: 15 }, marble = { diameter: 0.2, speed: 20 };
+/** The least share of the whump's energy after its first 50 ms (measured: 0.27 cannonball, 0.25 marble; dry 0.05, 0.001). */
+const MIN_TAIL = 0.15;
 
 /** Spectral centroid, Hz, of x (direct DFT over 20 Hz-4 kHz in 10 Hz steps: slow but exact enough). */
 function centroid(x: Float32Array): number {
@@ -61,6 +63,18 @@ describe('launch whump samples', () => {
     expect(launchWave(p, 44100).length).toBe(Math.round(LAUNCH_SECONDS * 44100));
   });
 
+  it('the report (A10b) carries the whump past its first 50 ms, as real launches do; dry is the A10 whump', () => {
+    const tail = (x: Float32Array) => { let a = 0, b = 0; const k = Math.round(0.05 * SR); for (let i = 0; i < x.length; i++) (i < k ? (a += x[i]! * x[i]!) : (b += x[i]! * x[i]!)); return b / (a + b); };
+    for (const shot of [cannon, marble]) {
+      const whump = tail(launchWave(launchParams(shot), SR)), dry = tail(launchWave(launchParams(shot, undefined, 0), SR));
+      expect(whump).toBeGreaterThan(MIN_TAIL);
+      expect(whump).toBeGreaterThan(3 * dry);
+    }
+    expect(launchParams(cannon).report).toBe(REPORT_SHARE);
+    expect(launchParams(cannon, undefined, 0).report).toBe(0);
+    for (const bad of [-0.1, 1.1, NaN]) expect(() => launchParams(cannon, undefined, bad)).toThrow(/report/);
+  });
+
   it('a heavier shot whumps lower: the cannonball\'s centroid is under the marble\'s', () => {
     const c = centroid(launchWave(launchParams(cannon), SR)), m = centroid(launchWave(launchParams(marble), SR));
     expect(c).toBeLessThan(0.8 * m);
@@ -92,9 +106,16 @@ describe('a fired shot\'s cue', () => {
     expect(launchShapeOf(undefined)).toBeNull();
   });
 
-  it('keystone.launchsound reads whump or glide', () => {
+  it('keystone.launchsound reads whump, dry or glide; dry is the whump without its report', () => {
     expect(launchSoundOf('whump')).toBe('whump');
+    expect(launchSoundOf('dry')).toBe('dry');
     expect(launchSoundOf('glide')).toBe('glide');
-    expect(() => launchSoundOf('boom')).toThrow(/keystone.launchsound must be whump or glide: boom/);
+    expect(() => launchSoundOf('boom')).toThrow(/keystone.launchsound must be whump, dry, glide: boom/);
+    const ball = launchShapeOf(ammoBody('cannonball', h, [0, 1, 0], [15, 0, 0]))!;
+    expect(voicesFor(fired('cannonball'), { launch: ball })[0]!.launch!.report).toBe(REPORT_SHARE);
+    const dry = voicesFor(fired('cannonball'), { launch: ball, launchSound: 'dry' });
+    expect(dry).toHaveLength(1);
+    expect(dry[0]!.kind).toBe('launch');
+    expect(dry[0]!.launch).toEqual(launchParams(ball, undefined, 0));
   });
 });

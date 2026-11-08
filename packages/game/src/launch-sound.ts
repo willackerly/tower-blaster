@@ -11,8 +11,13 @@
 //   - the chuff: the gas jet's turbulence, noise centred on Strouhal 0.2 (f = 0.2 U / d) for the gas
 //     leaving the bore d choked (at the speed of sound, U = c: the pressure behind a shot is many times
 //     the air's), venting over VENT_TRANSITS barrel transits (L / c each).
+// Over those, the report (A10b, tuned against real cannon and launcher recordings): the muzzle blast as the
+// blast sound builds it (blast-sound.ts), a shock and its echoes off the ground and the scene, under e^(-t/ECHO_TAU)
+// and darkened at ECHO_HZ, taking REPORT_SHARE of the energy. Without it the whump lasted 40 ms where real
+// launches last 0.2-1 s, and the cannonball's read as a struck bell ("Ding, Clang").
 // docs/sound.md, Launch.
 import type { BodyDesc } from '@tb/engine-api';
+import { blastWave, ECHO_START, TAIL_TAUS } from './blast-sound.ts';
 
 /** Speed of sound, m/s. */
 export const C_AIR = 343;
@@ -40,6 +45,8 @@ export const LAUNCH_GAIN = 0.35, LAUNCH_GAIN_MIN = 0.2, LAUNCH_GAIN_MAX = 0.5;
 export const REF_KE = 1e5;
 /** Seconds of sound. */
 export const LAUNCH_SECONDS = 0.6;
+/** The report (A10b): its share of the energy (0: the whump alone, keystone.launchsound=dry), its echoes' decay (s) and darkening (Hz). */
+export const REPORT_SHARE = 0.9, ECHO_TAU = 0.1, ECHO_HZ = 400;
 
 export interface LaunchShape {
   /** Shot diameter, m (a box: its longest side). */
@@ -56,6 +63,8 @@ export interface LaunchParams {
   mass: number; ke: number; gas: number;
   barrel: number; partials: number[]; tau: number[];
   blastT: number; chuffHz: number; vent: number; gain: number;
+  /** The report's share of the energy (0: none). */
+  report: number;
 }
 
 /** A fired body's launch: its size, speed and density (game densities are kg/m^3 for ammo), or null for none (a pull, a quake). */
@@ -67,8 +76,9 @@ export function launchShapeOf(b: BodyDesc | undefined): LaunchShape | null {
   return null;
 }
 
-/** The whump's physics for a shot. */
-export function launchParams(s: LaunchShape, q = BARREL_Q): LaunchParams {
+/** The whump's physics for a shot; report: the report's share (REPORT_SHARE; 0 for the dry whump). */
+export function launchParams(s: LaunchShape, q = BARREL_Q, report = REPORT_SHARE): LaunchParams {
+  if (!(report >= 0 && report <= 1)) throw new Error(`launch: report must be 0 to 1 (${report})`);
   if (!(s.diameter > 0 && s.speed >= 0)) throw new Error(`launch: diameter must be > 0 and speed >= 0 (${s.diameter}, ${s.speed})`);
   const d = s.diameter, r = d / 2, rho = s.rho ?? 7850;
   const mass = rho * (s.sphere === false ? d * d * d : (4 / 3) * Math.PI * r * r * r), ke = 0.5 * mass * s.speed * s.speed;
@@ -76,7 +86,7 @@ export function launchParams(s: LaunchShape, q = BARREL_Q): LaunchParams {
   const partials = [1, 3, 5, 7].map((k) => k * f1), tau = partials.map((f) => q / (Math.PI * f));
   const blastT = BLAST_T_1KJ * Math.cbrt(Math.max(gas, 1) / 1000);
   const gain = Math.min(LAUNCH_GAIN_MAX, Math.max(LAUNCH_GAIN_MIN, LAUNCH_GAIN * (Math.max(ke, 1) / REF_KE) ** 0.1));
-  return { mass, ke, gas, barrel, partials, tau, blastT, chuffHz: (STROUHAL * C_AIR) / d, vent: (VENT_TRANSITS * barrel) / C_AIR, gain };
+  return { mass, ke, gas, barrel, partials, tau, blastT, chuffHz: (STROUHAL * C_AIR) / d, vent: (VENT_TRANSITS * barrel) / C_AIR, gain, report };
 }
 
 function lcg(seed: number) {
@@ -124,8 +134,11 @@ export function launchWave(p: LaunchParams, sr = 48000, seed = 1, mix: { barrel:
     const z = b0 * x - b0 * x2 + c1 * z1 + c2 * z2;
     x2 = x1; x1 = x; z2 = z1; z1 = z; chuff[i] = z;
   }
-  const out = new Float32Array(n), parts = [[unit(barrel), mix.barrel], [unit(blast), mix.blast], [unit(chuff), mix.chuff]] as const;
-  for (const [x, share] of parts) { const g = Math.sqrt(share); for (let i = 0; i < n; i++) out[i]! += g * x[i]!; }
+  // The report: a shock of the muzzle blast's positive phase and its echoes (blast-sound.ts), not overloaded, cut (and faded) at TAIL_TAUS decays as a blast's.
+  const report = p.report > 0 ? blastWave({ reach: 0, dist: 0, T: p.blastT, tau: ECHO_TAU, seconds: Math.min(LAUNCH_SECONDS, ECHO_START + TAIL_TAUS * ECHO_TAU), gain: 1, delay: 0 }, sr, seed, { shock: 0.35, rumble: 0.65, drive: 0, rumbleHz: ECHO_HZ }) : null;
+  const out = new Float32Array(n), w = 1 - p.report, parts: [Float32Array, number][] = [[unit(barrel), w * mix.barrel], [unit(blast), w * mix.blast], [unit(chuff), w * mix.chuff]];
+  if (report) parts.push([unit(report.subarray(0, n)), p.report]);
+  for (const [x, share] of parts) { const g = Math.sqrt(share); for (let i = 0; i < n && i < x.length; i++) out[i]! += g * x[i]!; }
   // A short fade so the cut at LAUNCH_SECONDS is silent, then the peak at the gain.
   const fade = Math.round(0.05 * sr);
   for (let i = 0; i < fade; i++) out[n - 1 - i]! *= i / fade;

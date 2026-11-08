@@ -639,7 +639,7 @@ cannonball's reads 0.79-0.80 real but as Ding, Chink and Clang. YAMNet hears not
 where the barrel and the blast are (either alone it calls silence), so for a cannonball it judges only
 the chuff's upper half; every mix and band width tried (Q 0.3-1.5) kept that label. So the judge can
 rank the whump against the glide but cannot tune a cannonball's. Real launch recordings (mortar, air
-cannon, potato cannon) are the next reference (A10b). A drop (released, not launched) and the cue (pushed)
+cannon, potato cannon) are the next reference: see A10b below. A drop (released, not launched) and the cue (pushed)
 keep the glide. `keystone.launchsound=glide` brings the old cue back.
 
 ## Blasts (A6, 2026-11-07)
@@ -670,12 +670,86 @@ Judged (tools/sound-judge), four takes each at reach 1.5, 2, 3 and 5 m: all 16 t
 
 Tried and dropped: clustered echoes (a slow random swell over the taps, for a rolling rumble) read as
 Wind (Explosion 0.08-0.20). As with the launch, the judge hears nothing under 125 Hz, so the grenade's
-low thump is judged by its upper half; real explosion recordings would be the next reference.
+low thump is judged by its upper half; real explosion recordings were the next reference (A6b below).
 
 Each wave is built once per reach (to the centimetre) and take (four, so blasts going off together do
 not add up coherently) and cached by the Synth: building one is a few ms on a CI box. The feedback
 carries only the reach, not the blast's impulse, so two weapons of one reach sound alike.
 `keystone.blastsound=none` brings the old silence back.
+
+## Against real recordings (A10b launch, A6b blasts, 2026-11-08)
+
+Will pulled 56 Freesound previews (HQ MP3) for launch and explosion queries; 11 came down empty, so 45
+were usable. They are used for analysis and tuning only: no audio derived from them is in the repo or
+the game (licenses are mixed: CC0, Attribution and Attribution-NonCommercial). From them two sets were
+picked by ear and by label, dropping clips that were music, gunfire, debris or long scenes:
+
+- **launch** (7): air cannons 186950 (toy), 870746, 580040, 104399; cannon shots 187767, 210901; a
+  mortar launch 161688.
+- **blast** (11): bomb blasts 163511, 209984, 547375, 663057, 870714; explosions 580893, 366091;
+  grenades 156031, 516914, 563010, 609587.
+
+Each clip (and each of our renders) is cut at its main event, from 30 dB under the loudest 5 ms back
+to 4 s on, and measured: octave-band energy (31.5 Hz-16 kHz, dB of the total), centroid, the share
+under 125 Hz (what YAMNet cannot hear), t20 (peak to the last time the 20 ms envelope is above -20 dB),
+t90 (onset to 90% of the energy) and crest factor (peak over rms up to t90). The judge reads the
+references as real (median share 0.97 launch, 0.96 blast), mostly Explosion, Artillery fire, Burst.
+
+| set | centroid | under 125 Hz | t20 (IQR) | t90 | crest |
+|---|---|---|---|---|---|
+| launch refs, median | 665 Hz | -8 dB | 1.33 s (0.28-1.89) | 0.28 s | 13 dB |
+| blast refs, median | 212 Hz | -1 dB | 1.09 s (0.68-2.25) | 0.67 s | 10 dB (9-12) |
+
+### Launch: the report
+
+A10's whump lasted 40 ms (t90 0.04 s, t20 0.07 s); every reference rings on for a quarter second or
+more, as the muzzle blast echoes off the ground and the surroundings. And the judge's "Ding, Clang" on a
+cannonball was the chuff: rendered alone it reads Clang 0.62. The whump now carries a **report**: the
+muzzle blast's own Friedlander pulse (its positive phase, `blastT`) and a velvet train of its echoes
+under e^(-t/0.1 s), darkened at 400 Hz, made by blast-sound.ts's blastWave without the overload, cut at
+five decays (0.5 s) and mixed at 0.9 of the energy over the whump's 0.1 (`REPORT_SHARE`, `ECHO_TAU`,
+`ECHO_HZ` in launch-sound.ts). Two seeds each:
+
+| whump | real share | top labels | t20 | crest | bands vs refs (rms, 63 Hz-8 kHz) |
+|---|---|---|---|---|---|
+| cannonball, A10 (dry) | 0.70 / 0.75 | Ding, Clang | 0.07 s | 14-15 dB | 2.2-2.6 dB |
+| cannonball, report | **0.76 / 0.86** | **Thunk, Thump** | 0.16 s | 20-21 dB | 3.6-3.8 dB |
+| marble, A10 (dry) | 0.68 / 0.65 | Plop | 0.03 s | 15 dB | 4.1-4.6 dB |
+| marble, report | **0.93 / 0.89** | **Thunk, Knock, Thump** | 0.17 s | 23-24 dB | 2.3-2.7 dB |
+
+Tried and dropped (judge, and the features against the refs): the barrel's Q (1.5, 3) and share (0.15,
+0.3), the chuff's Q (0.3, 0.4) and centre (300, 600, 1200 Hz): none moved the cannonball off Ding.
+Report shares 0.6-0.9 (0.9 best on both shots). Echo darkening 800, 1600, 4000 Hz: brighter echoes read
+Glass, Chink, Ding. Echo decay: 0.07 s reads Glass, Door; 0.13 s flips to Silence and Music (YAMNet
+averages over its 0.96 s frames, so on a short clip the tail's length sets what it hears; the window
+that reads as a launch is narrow, and 0.1 s sits in it).
+
+What is left: t20 is 0.16 s against the references' 0.28-1.89 s. A longer tail is what the recordings
+have but it is what the judge hears as silence, and a launcher fires several times a second, so a long
+report would smear rapid fire; the crest factor rose (20-24 dB against 13) because the report is not
+overloaded. `keystone.launchsound=dry` brings A10's whump back.
+
+### Blasts: a longer pulse, a lighter darkening
+
+A6's boom against the eleven blast refs: a crest factor of 14-17 dB (refs 9-12), too much at 250-1000 Hz,
+and too little under 125 Hz and at 2-8 kHz. Recordings are heard over the ground and through a
+microphone, both of which lengthen the shock. The pulse's positive phase is now 1.2 ms per metre of
+reach (was 0.4: `BLAST_T_PER_M`), so a charge (1.5 m) is 1.8 ms and the grenade (5 m) 6 ms, and the
+rumble is darkened at 1600 Hz (was 400: `RUMBLE_HZ`). Three seeds x reaches 1.5, 3, 5 m:
+
+| boom | bands vs refs (rms) | crest | under 125 Hz | real share | top label |
+|---|---|---|---|---|---|
+| A6 (short) | 6.6 dB (5.8-7.5) | 15.3 dB (14-17) | -4 to -7 dB | 0.93 | Explosion, all 9 |
+| A6b | **5.8 dB (5.5-6.0)** | **11.3 dB (11-12)** | **-2 to -6 dB** | 0.94 | Explosion, all 9 |
+
+Tried and dropped: one darkening pole, or two at 3200 Hz, matched the bands better (3.2-3.9 dB rms) but
+read as Ocean, Water and Eruption, with Explosion lower; a drive of 4 (a softer overload) left the crest
+at 15-21 dB. What is left: the boom is still 6-11 dB short at 4-8 kHz (the refs' crackle of debris and
+of the air's nonlinearity, which this model does not make), and t20 at reach 3-5 (1.5-1.8 s) sits above
+the refs' median 1.09 s, inside their range. `keystone.blastsound=short` brings A6's boom back.
+
+Tools (not in the repo; the refs cannot be): feat.py (the features), cmp.py (the table against the
+sets), and render scripts that write our waves through launch-sound.ts and blast-sound.ts.
 
 ## Everything spawned sounds (A6, 2026-11-07)
 

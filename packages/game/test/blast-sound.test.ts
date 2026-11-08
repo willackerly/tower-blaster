@@ -3,8 +3,8 @@
 import { describe, expect, it } from 'vitest';
 import { BLAST_TAKES, Synth, voicesFor } from '../src/audio.ts';
 import {
-  BLAST_B, BLAST_GAIN, BLAST_GAIN_MAX, BLAST_GAIN_MIN, BLAST_MIX, BLAST_T_PER_M, blastParams, blastWave, C_AIR, ECHO_START, friedlanderFilter, MAX_DELAY,
-  REF_DIST, REF_REACH, RUMBLE_TAU_1M, RUMBLE_TAU_MAX, RUMBLE_TAU_MIN, softClip, TAIL_TAUS,
+  BLAST_B, BLAST_GAIN, BLAST_GAIN_MAX, BLAST_GAIN_MIN, BLAST_MIX, BLAST_T_PER_M, BLAST_T_PER_M_SHORT, blastParams, blastWave, C_AIR, ECHO_START, friedlanderFilter, MAX_DELAY,
+  REF_DIST, REF_REACH, RUMBLE_HZ, RUMBLE_HZ_SHORT, RUMBLE_TAU_1M, RUMBLE_TAU_MAX, RUMBLE_TAU_MIN, softClip, TAIL_TAUS,
 } from '../src/blast-sound.ts';
 import { blastSoundOf } from '../src/options/blastsound.ts';
 
@@ -43,6 +43,10 @@ describe('blast sound physics', () => {
       expect(p.seconds).toBeCloseTo(ECHO_START + TAIL_TAUS * p.tau, 12);
     }
     expect(blastParams(0.1, REF_DIST).tau).toBe(RUMBLE_TAU_MIN);
+    // keystone.blastsound=short: A6's pulse (a third as long) and darker rumble; the rest as the boom.
+    const boom = blastParams(3, REF_DIST), short = blastParams(3, REF_DIST, true);
+    expect(boom.rumbleHz).toBe(RUMBLE_HZ);
+    expect(short).toEqual({ ...boom, T: BLAST_T_PER_M_SHORT * 3, rumbleHz: RUMBLE_HZ_SHORT });
     expect(blastParams(50, REF_DIST).tau).toBe(RUMBLE_TAU_MAX);
   });
 
@@ -81,9 +85,21 @@ describe('blast sound samples', () => {
   });
 
   it('a bigger blast booms lower (its longer pulse), and the darkened rumble is lower than the raw echoes', () => {
+    // Measured centroids (Hz): r1.5 261, r5 148; r3 173, raw echoes 237, darkened at A6's 400 Hz 125.
     const small = centroid(blastWave(blastParams(1.5, REF_DIST), SR, 1)), big = centroid(blastWave(blastParams(5, REF_DIST), SR, 1));
     expect(big).toBeLessThan(0.8 * small);
-    expect(centroid(w)).toBeLessThan(0.7 * centroid(blastWave(p, SR, 1, { ...BLAST_MIX, rumbleHz: 0 })));
+    const c = centroid(w);
+    expect(c).toBeLessThan(0.8 * centroid(blastWave(p, SR, 1, { ...BLAST_MIX, rumbleHz: 0 })));
+    expect(centroid(blastWave(p, SR, 1, { ...BLAST_MIX, rumbleHz: RUMBLE_HZ_SHORT }))).toBeLessThan(0.8 * c);
+  });
+
+  it('the short style (A6) is the boom with a third of the pulse: a higher crest factor, its raw echoes brighter', () => {
+    // A6b: against real explosions (crest 9-12 dB) the A6 boom measured 14-17 dB; the boom 11-12 dB.
+    const s = blastParams(3, REF_DIST, true), ws = blastWave(s, SR, 1);
+    expect(ws.length).toBe(w.length);
+    expect(peakOf(ws)).toBeCloseTo(p.gain, 5);
+    expect(peakOf(ws) / rmsOf(ws)).toBeGreaterThan(1.2 * (peakOf(w) / rmsOf(w)));
+    expect(centroid(blastWave(s, SR, 1, { ...BLAST_MIX, rumbleHz: 0 }))).toBeGreaterThan(1.5 * centroid(blastWave(p, SR, 1, { ...BLAST_MIX, rumbleHz: 0 })));
   });
 
   it('the overload brings the rumble up under the peak (crest factor at least halved)', () => {
@@ -109,12 +125,14 @@ describe('blast sound in the game', () => {
     expect(new Set([0, 1, 2, 3].map((b) => voicesFor(blast(2, b))[0]!.take)).size).toBe(BLAST_TAKES);
   });
 
-  it('keystone.blastsound none keeps blasts silent, as before; it reads boom or none', () => {
+  it('keystone.blastsound none keeps blasts silent, short plays A6\'s boom; it reads boom, short or none', () => {
     expect(voicesFor(blast(5), { blastSound: 'none' })).toEqual([]);
+    expect(voicesFor(blast(5), { blastDist: 30, blastSound: 'short' })[0]!.blast).toEqual(blastParams(5, 30, true));
+    expect(blastSoundOf('short')).toBe('short');
     expect(voicesFor(blast(0))).toEqual([]);
     expect(blastSoundOf('boom')).toBe('boom');
     expect(blastSoundOf('none')).toBe('none');
-    expect(() => blastSoundOf('bang')).toThrow(/keystone.blastsound must be boom or none: bang/);
+    expect(() => blastSoundOf('bang')).toThrow(/keystone.blastsound must be boom, short, none: bang/);
   });
 
   it('the Synth builds each reach and take once, and plays it at the voice gain after its delay', () => {
@@ -137,5 +155,8 @@ describe('blast sound in the game', () => {
     expect(gains[gains.length - 1]).toBeCloseTo(b[0]!.gain, 12);
     synth.play(voicesFor(blast(3, 2), { blastDist: 20 }));
     expect(made.length - before).toBe(2);
+    // The short style at the same reach and take is a different wave, so a buffer of its own.
+    synth.play(voicesFor(blast(3, 2), { blastDist: 20, blastSound: 'short' }));
+    expect(made.length - before).toBe(3);
   });
 });
