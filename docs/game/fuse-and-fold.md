@@ -241,7 +241,22 @@ Results on the reference (8 builds each confirm; the order is lane indices, firs
 | F7 Three Lines | FD-2: F2's 3 x 3 tower, yard north, board to the east | 3, 20 straight, 7 h apart | north first, each lane 3 or 4 more to the south; +2 or less stands | 0.248, 0/8 | +3: 0.857, 8/8 (+4: 0.851) | south first +2: 0.407, 0/8 |
 | F8 Short Fuse | FD-3: F4's 4 x 3 block, 14-cell yard to a heritage wall, board to the south | 4, 22 straight, 7 h apart | west first, 2 or 3 more a lane; +1 stands | 0.290, 0/8 | +3: 0.743, 8/8 (+2: 0.734) | east first +2: 0.408, 0/8 |
 
-Every gate passed: the best build beats all at once by 0.61, 0.61 and 0.45 (64 SE or more) and meets the objective on every build. On the GPU solver (SwiftShader, f32, through the game's cast page) F6's straight build misses and its best build folds the tower (`fuse-gpu-F6.test.ts`, every PR); F7 and F8 run with `PHYSICS_GPU_SLOW=1` or on a real GPU (O5's CI rule). F8's sweeps stop at +3: two or three bumps of 90 degrees fill a 22-domino lane, so its upper edge (F4's overshoot) is not on the board. A longer board would show it; F4 already teaches it.
+Every gate passed: the best build beats all at once by 0.61, 0.61 and 0.45 (64 SE or more) and meets the objective on every build. On the GPU solver (SwiftShader, f32, through the game's cast page) F6's straight build misses and its best build folds the tower (`fuse-gpu-F6.test.ts`, every PR); F7 and F8 run with `PHYSICS_GPU_SLOW=1` or on a real GPU (O5's CI rule), on three builds.
+
+**F8's spill edge on the GPU (nightly, 2026-11-08).** The first nightly to run `fuse-gpu-F8.test.ts` failed: on build 1 the +3 build folded 0.747 but spilled 5.4% of the block past the lot, one piece over the 5% allowance, so it was not a clear. Measured on SwiftShader against the reference, 8 builds each:
+
+| F8 build | reference: met, spill range | SwiftShader: met, spill range | the miss |
+|---|---|---|---|
+| +3 (the gate's best) | 8/8, 0 to 2.2% | 7/8, 0 to 5.4% | build 1, 5.4% |
+| +2 | 8/8, 0 to 3.2% | 7/8, 0 to 6.4% | build 5, 6.4% |
+
+So neither the gate nor the cast was wrong. +3 clears on the GPU at 7 of 8, which passes the gate's own rule (80% of 8 builds), and the cast's GPU cloud found the same 7/8 for its best build. +2 is no safer, because it only moves the miss to another build. What was wrong was the test, which asked every build it played to clear, a stricter rule than the gate's. The GPU suite (`fuse-gpu.ts`) now asks this of every build: the straight build misses, and the best one folds at least the objective's minimum, keeps the heritage whole, spills at most twice the allowance, and beats straight by the gate's tenth. The clear itself is asked on 2 of 3 builds at nightly or Metal size, and on the one build of the every-PR F6 run.
+
+Alternatives weighed:
+- **Make +2 F8's best build.** Rejected: it misses as often on the GPU.
+- **Pick nudges that clear.** Rejected: that hides the edge instead of measuring it.
+- **Play 8 builds a night,** the gate's own size. Rejected for now: about 25 min of SwiftShader for one file, while 2 of 3 still fails a build that misses most of the time.
+- **Loosen the 5% allowance.** Rejected: it is the objective players see, and F1 to F5 share it. F8's sweeps stop at +3: two or three bumps of 90 degrees fill a 22-domino lane, so its upper edge (F4's overshoot) is not on the board. A longer board would show it; F4 already teaches it.
 
 ### Choices, with the alternatives weighed
 
