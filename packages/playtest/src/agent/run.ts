@@ -137,7 +137,7 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
   const tap = async (sel: string) => { const l = page.locator(sel).first(); if (v.touch) await l.tap(); else await l.click(); };
   try {
     await page.goto(new URL(url, origin).toString());
-    await page.waitForFunction(() => window.__game?.status !== 'loading', undefined, { timeout: 15 * MIN, polling: 250 });
+    await page.waitForFunction(() => window.__game !== undefined && window.__game.status !== 'loading', undefined, { timeout: 15 * MIN, polling: 250 });
     if (sc.script.kind !== 'door') await page.waitForFunction(() => window.__game.status !== 'running' || window.__game.ready || window.__game.edit.on, undefined, { timeout: 15 * MIN, polling: 250 });
     rec.loadWallMs = Date.now() - t0;
     const st0 = await gameState(page);
