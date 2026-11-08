@@ -110,7 +110,9 @@ async function runOne(browser: Browser, origin: string, sc: Scenario, vp: Viewpo
   const v = VIEWPORTS[vp], t0 = Date.now();
   const w = v.width * v.scale, h = v.height * v.scale;
   const sep = sc.search.includes('?') ? '&' : '?';
-  const url = `${sc.search}${sep}engine=${engine}&offscreen=${w}x${h}&progress=off&keystone.sound=synth${sc.script.kind === 'door' ? '' : '&door=0'}`;
+  // fxclock=1: the effects run on the simulation's clock between captures, so a frame shows the sparks, flashes and
+  // blasts a player would see (without it they age only at captures and pile up; damage-effects.md, look review).
+  const url = `${sc.search}${sep}engine=${engine}&offscreen=${w}x${h}&fxclock=1&progress=off&keystone.sound=synth${sc.script.kind === 'door' ? '' : '&door=0'}`;
   const rec: RunRecord = { scenario: sc.id, title: sc.title, mode: sc.mode, viewport: vp, url, engine, status: 'ok', loadWallMs: 0, shots: [], frames: [], errors: [], wallMs: 0 };
   const context = await browser.newContext({ viewport: { width: v.width, height: v.height }, deviceScaleFactor: v.scale, isMobile: v.touch, hasTouch: v.touch });
   const page = await context.newPage();

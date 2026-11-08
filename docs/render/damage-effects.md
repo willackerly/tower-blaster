@@ -136,3 +136,46 @@ either style. Its points for the damage style, and what became of them:
 4. The ram is drawn as a sphere: deliberate (its physics shell is a sphere; see Alternatives).
 5. Spark count by energy dissipated rather than speed change: the solver's contact impulses
    (render-interfaces' contact ring) are the long-term source, as above.
+
+## Look review (Mac Metal frames, 2026-11-08)
+
+The Metal capture of B1 and B3 (agent playtest harness, 1280x800, an opener then two bombs each; frames in
+project files `pt2-metal/`) went to an Opus reviewer with no conclusions. Verdict: needs fixing before ship.
+It saw sparks that did not scale with the damage and piled up after the settle (a white hairball over B1's
+frame 02), no fireball in any bomb frame, a bright rim on resting blocks, and projectiles too small to find.
+
+**Most of that is the capture, not the game.** An offscreen page draws only for a capture, and the effects
+ran only inside a drawn frame: sparks and heat aged at most 0.1 s per capture (the frame clock's cap), and a
+blast or flash was stamped at the last capture's time, so a bomb's 2.5 s fireball was usually over, by the
+clock, before the next capture saw it. Measured on L1 (Rapier, the fx-clock e2e): a grenade shot captured
+the way the harness captures still has **1,437 live sparks 2 s after it settled**; on screen they are all
+dead within 1.2 s. The rim on resting blocks is the same thing: the heat glow (heatTau 0.25 s) never got
+the time to cool. Earlier agent-playtest judgements of effects share this artefact.
+
+**The fix, an offscreen effect clock (`?fxclock=1`, KeystoneEnv.fxClock).** `Renderer.advanceEffects(f)`
+runs the compute pass's effects alone (cull, sparks, dust and chips, heat, flash lights; no draw). With the
+key, the game page calls it after every physics step on the simulation's clock (`c.scene.dt`), and while
+no step runs it advances on the wall clock up to the capture (at most `FX_IDLE_S`, 5 s), so a settled shot's
+sparks die as they would on screen. Captures draw at that clock with dt 0. The agent playtest harness
+(`packages/playtest/src/agent/run.ts`) now always passes it. An ID pass (`renderIds`) no longer moves the
+effect clock: before, a test's ID pass with no time set it back to 0. A bomb's fuse is unmarked when its
+blast goes off (the slot was already hidden; `effectStats().fuses` counted it).
+
+It is off by default: on SwiftShader the per-step pass (a 64k-spark pool) about triples a shot's wall
+time, and a test that draws no frame has no use for it. Alternatives considered:
+
+- **Draw every frame offscreen.** The faithful option, but a SwiftShader frame takes up to a second, and
+  frames would queue behind the steps (why offscreen pages draw only for captures).
+- **Advance every k steps.** Cheaper, but changes the spark rule's input (the speed change per pass) from
+  what a 120 Hz display feeds it; one pass per step matches it. Kept as the lever if the cost matters.
+- **Age by wall time at each capture with no cap.** Wrong in the other direction: the spark rule would see
+  one pass with the whole shot's speed change, and blasts would still be stamped at capture times.
+
+Tests: `render-effects.test.ts` 'Renderer.advanceEffects ...' (spawn, heat and flash with no frame; a
+blast set after an ID pass stamped at the advance's time; 5 s later nothing live); `fx-clock-e2e.test.ts`
+on L1 (with the clock, a frame held at the grenade's blast shows the blast and flash lights, and 2 s after
+the settle every count is 0; a wide cannonball spawns 0 sparks against the grenade's 11,723; without it,
+the hairball above). Next: the same Metal capture again with the clock, and the review again.
+
+Not the effects': the reviewer's HUD points (B3's 2★ and 3★ glyphs overlap, a "0% speed" badge, leverage
+×5.09 on the HUD against ×3.40 on the card) went to the scores and HUD threads.

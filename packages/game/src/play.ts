@@ -343,6 +343,8 @@ export const PULL_PUFF = 2;
 export const QUAKE_PUFF = 2.4, QUAKE_PUFF_PER_G = 2, QUAKE_DUST_RING = 0.6;
 /** The impact marker's least radius, h (a marble's marker would be a speck). */
 export const IMPACT_MIN_RADIUS = 0.4;
+/** The offscreen effect clock's longest idle advance, s (KeystoneEnv.fxClock): past every spark's, dust puff's and flash's life. */
+export const FX_IDLE_S = 5;
 const median = (xs: number[]) => { if (!xs.length) return NaN; const s = [...xs].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]!; };
 
 /** The page's last stage: a fast compressor at -1 dBFS, so the cues and the collision sound (each limited) never clip together. */
@@ -424,6 +426,15 @@ export interface KeystoneEnv {
   /** Tests: the renderer draws offscreen (offscreenSize, 640x400 when absent), and only for a capture. */
   offscreen: boolean;
   offscreenSize?: [number, number];
+  /**
+   * Offscreen only (?fxclock=1): run the effects on the simulation's clock between captures (Renderer.advanceEffects
+   * after each step, and on the wall clock while no step runs), so a capture shows sparks, flashes and blasts as a
+   * player watching every frame would see them (the agent playtest's captures). Off (the default), they age only
+   * when a capture is drawn, at most 0.1 s a capture: a capture after a settle still shows the shot's sparks.
+   * Off by default for cost: on SwiftShader the effects pass after every step (a 64k-spark pool) about triples a
+   * shot's wall time, and a test that draws no frame has no use for it.
+   */
+  fxClock?: boolean;
   device: GPUDevice;
   renderer: Renderer;
   source: SnapshotSource;
@@ -1680,6 +1691,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
           const s = driver.snapshot, b = f.body;
           if (b >= 0 && b < s.count) {
             renderer.blast([s.pos[3 * b]!, s.pos[3 * b + 1]!, s.pos[3 * b + 2]!], f.radius);
+            renderer.fuse(b, false); // its fuse is burnt out with it
             handle.counts.blastDrawn = (handle.counts.blastDrawn ?? 0) + 1;
           }
           juice.shake(Math.min(1, 0.15 * (f.radius / c.frame.unit)));
@@ -2384,6 +2396,14 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
   await load(levelIdx);
   handle.status = 'running';
   let last = performance.now(), lastDrawn = NaN;
+  // The offscreen effect clock (KeystoneEnv.fxClock): seconds of effects run, and when (wall clock) they last ran.
+  const fxClock = offscreen && env.fxClock === true;
+  let fxTime = 0, fxWall = performance.now();
+  const advanceFx = (dt: number) => {
+    fxTime += dt;
+    fxWall = performance.now();
+    renderer.advanceEffects({ viewProj: viewProj(orbit, aspect()), eye: eyeOf(orbit), focus: orbit.target, time: fxTime, dt, groundY: 0, alpha: 1 });
+  };
   const frames = new FrameGovernor(feel.frames);
   let pendingCapture: { resolve: (s: PixelStats | null) => void; keep: boolean } | null = null;
   handle.capture = (keep = false) => new Promise((resolve) => { pendingCapture = { resolve, keep }; });
@@ -2496,8 +2516,16 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       quakeRun.dustAt = Math.max(quakeRun.dustAt, at);
     }
     const vp = viewProj(view, aspect());
+    // The offscreen effect clock: with no step running, the effects age on the wall clock up to the capture
+    // (a settled shot's sparks die out, as on screen), at most FX_IDLE_S at once; a step has advanced them itself.
+    let time = now / 1000;
+    if (fxClock) {
+      const idle = Math.min(FX_IDLE_S, (now - fxWall) / 1000);
+      if (want && !running && !frozenLook && idle > 0) advanceFx(idle);
+      time = fxTime;
+    }
     // World points are drawn at p + ground: the view-projection times a translation (column-major, as render math.ts).
-    const fp = { viewProj: ground ? multiply(vp, Float32Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, ground[0], 0, ground[1], 1)) : vp, eye: eyeOf(view), focus: orbit.target, time: now / 1000, groundY: 0, alpha, ...(frozenLook ? { dt: 0 } : {}) };
+    const fp = { viewProj: ground ? multiply(vp, Float32Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, ground[0], 0, ground[1], 1)) : vp, eye: eyeOf(view), focus: orbit.target, time, groundY: 0, alpha, ...(frozenLook || fxClock ? { dt: 0 } : {}) };
     // Offscreen (tests), nobody sees a frame and nothing throttles requestAnimationFrame
     // to the GPU: on SwiftShader a frame takes up to a second, so frames would queue
     // without bound and every readback (a step's, a replay's) wait behind them.
@@ -2555,6 +2583,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       spawned('bomb');
       if (red && feel.tailSkip && d.session.phase === 'running') tail.update(red.nMoving, c.meta.n, d.session.liveCollapse);
       uploadSnapshot(d);
+      if (fxClock) advanceFx(c.scene.dt);
       collapse?.frame(d.snapshot, descs, eyeOf(orbit), orbit.target);
       arrived(arrivals, performance.now(), 1000 * c.scene.dt);
       // Steps run between frames: mirror what this one changed (phase, strokes) now, so the handle

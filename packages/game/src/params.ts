@@ -115,6 +115,8 @@ export interface GameParams {
   offscreen: boolean;
   /** The offscreen frame's size in pixels: 640x400 for ?offscreen=1, or ?offscreen=WxH (agent playtests: a phone's or a desktop's shape). */
   offscreenSize: [number, number];
+  /** ?fxclock=1 (offscreen only): effects run on the simulation's clock between captures, not only when one is drawn (KeystoneEnv.fxClock). */
+  fxClock: boolean;
   /** ?keystone.sound=classic: the collision sound with G6's materials; real1: the real set before step 2c's stone and ice; synth: impacts as the old pentatonic voices (collapse, the default). */
   sound: GameSoundMode;
   /** ?keystone.impacts=-6: the collision sound's level, dB over the game's own (-40 to 20). */
@@ -228,6 +230,13 @@ export function offscreenOf(text: string | null): Pick<GameParams, 'offscreen' |
   return { offscreen: true, offscreenSize: [w, h] };
 }
 
+/** ?fxclock: 1 runs an offscreen page's effects on the simulation's clock (KeystoneEnv.fxClock); absent or 0 ages them only at captures. */
+export function fxClockOf(text: string | null): boolean {
+  if (text === '1') return true;
+  if (text === null || text === '0') return false;
+  throw new Error(`fxclock must be 0 or 1: ${text}`);
+}
+
 /** A look name; throws naming the known ones. */
 export function lookName(name: string): string {
   if (!LOOKS[name]) throw new Error(`unknown look ${name}; known: ${Object.keys(LOOKS).join(', ')}`);
@@ -247,6 +256,7 @@ export function parseGameParams(q: URLSearchParams): GameParams {
     // A duel's line is checked against the duel's own level (its first player first).
     shots: lineOf(duel ? duelLevel(duel, 0) : level, q.get('keystone.shots')),
     ...offscreenOf(q.get('offscreen')),
+    fxClock: fxClockOf(q.get('fxclock')),
     weaponTier: weaponTierParam(q),
     ...gameSound(q),
   };

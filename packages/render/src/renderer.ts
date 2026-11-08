@@ -779,7 +779,6 @@ export class Renderer {
     const fit = (this.shadowFit = fitShadow(this.arena, sun, frustumCorners(invert(f.viewProj), f.eye, reach), this.shadowSize, this.shadowState, f.groundY));
     const lightViewProj = multiply(fit.matrix, toWorld);
     const focus = f.focus ?? [f.eye[0], f.eye[1], f.eye[2] - 1];
-    this.lastTime = f.time ?? 0;
     const inv = invert(viewProj);
     this.lastInv = inv;
     this.floorCount = floorFan(floorPolygon(inv, f.groundY - f.eye[1]), this.floorData).count;
@@ -821,20 +820,25 @@ export class Renderer {
     };
   }
 
-  /** Cull, shadow, then the scene pass (or the ID pass, which skips floor, sky and shadow). */
-  private encodeScene(enc: GPUCommandEncoder, f: FrameParams, mode: 'scene' | 'ids' | 'faces', stamp: Stamp = noStamp): void {
-    const ids = mode !== 'scene';
+  /**
+   * Cull, shadow, then the scene pass (or the ID pass, which skips floor, sky and shadow). Mode 'fx' is the
+   * compute pass's effects alone (advanceEffects): the cull, then sparks, dust and chips, heat and flash lights.
+   */
+  private encodeScene(enc: GPUCommandEncoder, f: FrameParams, mode: 'scene' | 'ids' | 'faces' | 'fx', stamp: Stamp = noStamp): void {
+    const ids = mode === 'ids' || mode === 'faces', fx = mode === 'fx';
     if (f.groundY !== this.aoFloor) { this.aoFloor = f.groundY; this.fitAo(); }
     const culler = this.sync();
     let dt = 0;
     if (!ids) {
+      // Effects run on the frame clock (FrameParams.time); an ID pass leaves it where the last frame put it.
       const t = f.time ?? 0;
       dt = f.dt ?? (this.sceneTime === null ? 0 : Math.min(0.1, Math.max(0, t - this.sceneTime)));
       this.sceneTime = t;
+      this.lastTime = t;
     }
     const cf = this.writeFrame({ ...f, dt });
     cf.sleepTint = !ids && this.toggles.sleepTint;
-    const ao = !ids && this.toggles.ao;
+    const ao = !ids && !fx && this.toggles.ao;
     if (ao) this.ao.clear(enc);
     // Material level of detail: in the real look, boxes past the stone's fade-out go to boxFar, all of them with no stone.
     const stone = !ids && this.look.atmosphere ? this.look.stone : undefined;
@@ -847,7 +851,7 @@ export class Renderer {
       if (this.look.atmosphere && this.realDiag !== 'no-floor-sky') this.ao.bakeFloorSky(cp, f.groundY);
     }
     const real = !ids && this.look.atmosphere ? (this.real ??= this.makeReal()) : null;
-    if (real) real.atmosphere.encode(cp, this.look.atmosphere!, sunOf(this.look), this.eyeKm(f), this.look.exposure, this.look.autoExposure ?? 0);
+    if (real && !fx) real.atmosphere.encode(cp, this.look.atmosphere!, sunOf(this.look), this.eyeKm(f), this.look.exposure, this.look.autoExposure ?? 0);
     const effects = this.look.effects !== false;
     // Particles run as fast as the world's bodies (FrameParams.metres).
     const metres = f.metres ?? 1, froude = 1 / Math.sqrt(metres);
@@ -860,10 +864,10 @@ export class Renderer {
         .map((b) => ({ pos: b.centre, radius: b.lightR, colour: b.lightColour, intensity: b.light * this.sunLuma * (this.look.blastLight ?? 1) })),
       f.eye,
     );
-    const drawFuses = !ids && this.toggles.blasts && this.fuses.prepare({ viewProj: cf.viewProj, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma, records: culler.records, bodies: this.source.bodies, capacity: Math.min(this.source.count, this.source.capacity) });
-    const drawReach = !ids && this.reachZone.prepare({ eye: f.eye, viewProj: cf.viewProj, invViewProj: this.lastInv, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma });
-    const drawImpact = !ids && this.impactMark.prepare({ eye: f.eye, viewProj: cf.viewProj, invViewProj: this.lastInv, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma });
-    const drawBlasts = blasts.length > 0 && this.blasts.prepare(blasts, { eye: f.eye, viewProj: cf.viewProj, invViewProj: this.lastInv, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma });
+    const drawFuses = !ids && !fx && this.toggles.blasts && this.fuses.prepare({ viewProj: cf.viewProj, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma, records: culler.records, bodies: this.source.bodies, capacity: Math.min(this.source.count, this.source.capacity) });
+    const drawReach = !ids && !fx && this.reachZone.prepare({ eye: f.eye, viewProj: cf.viewProj, invViewProj: this.lastInv, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma });
+    const drawImpact = !ids && !fx && this.impactMark.prepare({ eye: f.eye, viewProj: cf.viewProj, invViewProj: this.lastInv, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma });
+    const drawBlasts = !fx && blasts.length > 0 && this.blasts.prepare(blasts, { eye: f.eye, viewProj: cf.viewProj, invViewProj: this.lastInv, viewport: this.viewport(), time: f.time ?? 0, gain: this.sunLuma });
     if (!ids && effects) {
       if (this.toggles.sparks) this.sparks.encode(cp, this.source, { dt: dt * froude, groundY: f.groundY, dvScale: Math.sqrt(metres), surfaces: this.cullSurfaces ?? undefined });
       this.lights.encode(cp, this.source, culler.records, this.sparks, { eye: f.eye, time: f.time ?? 0, ball: this.look.ball.map(srgbToLinear) as V3 });
@@ -877,6 +881,7 @@ export class Renderer {
       }
     }
     cp.end();
+    if (fx) return;
     if (!ids && this.toggles.shadow) {
       const sp = enc.beginRenderPass({ label: 'shadow', ...stamp('shadow'), colorAttachments: [], depthStencilAttachment: { view: this.shadowTex.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' } });
       sp.setBindGroup(0, this.shadowBind!);
@@ -1031,6 +1036,18 @@ export class Renderer {
     stats.bodyFraction = ids.reduce((a, v) => a + (v ? 1 : 0), 0) / ids.length;
     if (keepPixels) stats.ids = Array.from(ids);
     return stats;
+  }
+
+  /**
+   * Run the effects to frame `f` without drawing it: sparks, dust and chips fly and age, bodies heat and cool,
+   * flash lights fade, on f.time (and f.dt) as a drawn frame would. An offscreen page (tests and the agent
+   * playtest) draws only for a capture, so between captures it advances the effects with this on the
+   * simulation's clock, and a capture shows them as a player watching every frame would see them.
+   */
+  advanceEffects(f: FrameParams): void {
+    const enc = this.device.createCommandEncoder({ label: 'effects' });
+    this.encodeScene(enc, f, 'fx');
+    this.device.queue.submit([enc.finish()]);
   }
 
   /**

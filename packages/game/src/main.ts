@@ -4,7 +4,8 @@
 // ?keystone.rack= gives it another rack, ?look= and real.* change the look, ?blast=0 hides blasts (blast.* tune them), ?keystone.hitstop=1 and ?keystone.slowmo=1
 // turn on pace juice, ?keystone.sound=synth plays impacts as the old pentatonic voices and
 // ?keystone.impacts=-6 sets the collision sound's level (dB), ?keystone.shots= plays a line once loaded, ?offscreen=1
-// (tests; or =WxH at that size) draws only for captures. The keys are params.ts's, which the viewer
+// (tests; or =WxH at that size) draws only for captures (?fxclock=1 runs the effects on the simulation's clock
+// between them). The keys are params.ts's, which the viewer
 // reads too under rules=keystone, so the same link opens in either page.
 // The front door (door.ts, docs/game/front-door.md) opens over a bare URL
 // (?door=auto|1|0); ?keystone.preaim, ?progress, ?sound, ?sharp, ?quality are its keys.
@@ -55,7 +56,7 @@ function fail(e: unknown) {
 
 async function main() {
   const q = new URLSearchParams(location.search);
-  const { level, rack, rules, engine, feel, shots, offscreen, offscreenSize, sound, impactsDb, duel, weaponTier } = parseGameParams(q);
+  const { level, rack, rules, engine, feel, shots, offscreen, offscreenSize, fxClock, sound, impactsDb, duel, weaponTier } = parseGameParams(q);
   // Best plays and settings kept in the browser (?progress=off: this visit only); custom runs are not recorded.
   // A setting's URL key (look, sound, sharp) wins over the stored one for the visit (settings.ts).
   const progress = progressStore(q);
@@ -166,7 +167,7 @@ async function main() {
   const chorus = new ChorusPanel(document.body, () => feel.chorusView);
   window.__chorus = chorus;
   await playKeystone({
-    canvas, offscreen, offscreenSize, device, renderer, source, hud: $('hud'), banner: $('banner'), result: $('result'),
+    canvas, offscreen, offscreenSize, fxClock, device, renderer, source, hud: $('hud'), banner: $('banner'), result: $('result'),
     levels: played, start: duel ? 0 : start, ...(duel ? {} : { series: seriesIdx, seriesForward: (i: number) => seriesForward(seriesIdx, i, levels) }),
     layout, onLevels: () => front.show(), engine, feel, weaponTier: () => weaponTierOf(weaponTier, handle.quality?.tier), fail, sound, impactsDb, muted: !settings.current.sound, touch: touchMode(q), ...loadOptions(q), ...buildOption(q),
     ...(duel ? { duel } : {}),
