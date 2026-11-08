@@ -22,7 +22,7 @@ export interface OpenerJudgement {
   trials: OpenerTrial[];
   /** The lower quartile of the values on the engine where it is lowest. */
   score: number;
-  /** Every play on every engine settled within OPENER_PROMISE_S with no limit hit and met the objective's minimum. */
+  /** Every play on every engine settled within OPENER_PROMISE_S with no limit hit and met the objective's minimum, and the score reached the floor. */
   wins: boolean;
 }
 
@@ -45,9 +45,12 @@ const lowerQuantile = (xs: number[], q: number) => [...xs].sort((a, b) => a - b)
 
 /**
  * Plays every candidate alone on every player (exactly, then `n` nudges seeded from `seed` and the shot), and
- * ranks them: winners first, then by score. The objective's minimum is the level's (collapse levels).
+ * ranks them: winners first, then by score. The objective's minimum is the level's (collapse levels). `floor` is
+ * the margin a winner's score (its worst engine's lower quartile) must reach; by default the objective's minimum.
+ * PT13's second pass asks 0.45 of B1 (objective 0.4): two GPU adapters running the same solver spread about 0.05
+ * (the door e2e measured the old opener 0.374 on SwiftShader against 0.427 on Metal).
  */
-export async function judgeOpeners(level: LevelDef, candidates: OpenerCandidate[], players: CastPlayer[], n: number, seed: number, metric: StarMetric = 'collapse'): Promise<OpenerJudgement[]> {
+export async function judgeOpeners(level: LevelDef, candidates: OpenerCandidate[], players: CastPlayer[], n: number, seed: number, metric: StarMetric = 'collapse', floor?: number): Promise<OpenerJudgement[]> {
   const need = level.objective?.kind === 'collapse' ? level.objective.min : -Infinity, presettle = physicsOf(level).presettle;
   const out: OpenerJudgement[] = [];
   for (const cand of candidates) {
@@ -64,14 +67,14 @@ export async function judgeOpeners(level: LevelDef, candidates: OpenerCandidate[
       });
     }
     const score = Math.min(...trials.map((t) => lowerQuantile(t.values, 0.25)));
-    const wins = trials.every((t) => t.limits.length === 0 && t.values.every((v) => v >= need) && t.settleS.every((s) => s <= OPENER_PROMISE_S));
+    const wins = score >= (floor ?? need) && trials.every((t) => t.limits.length === 0 && t.values.every((v) => v >= need) && t.settleS.every((s) => s <= OPENER_PROMISE_S));
     out.push({ shot: cand.shot, recorded: cand.recorded, trials, score, wins });
   }
   return out.sort((a, b) => Number(b.wins) - Number(a.wins) || b.score - a.score);
 }
 
 /** The judgement as a markdown table, best first. */
-export function openerMarkdown(level: LevelDef, judged: OpenerJudgement[], n: number): string {
+export function openerMarkdown(level: LevelDef, judged: OpenerJudgement[], n: number, floor?: number): string {
   const engines = judged[0]?.trials.map((t) => `${t.engine} (${t.adapter})`) ?? [];
   const head = `| opener | recorded | ${engines.map((e) => `${e}: exact, min, p25, median, slowest settle`).join(' | ')} | score | wins |`;
   const rows = judged.map((j) => `| \`${j.shot}\` | ${j.recorded.toFixed(3)} | ${j.trials.map((t) => {
@@ -81,7 +84,7 @@ export function openerMarkdown(level: LevelDef, judged: OpenerJudgement[], n: nu
   const pick = judged[0];
   return [
     `# ${level.id} opener (PT13)`, '',
-    `Each candidate alone, exactly and as ${n} nudges, on ${engines.join(' and ')}. Score: the lower quartile on the engine where it is lowest. Wins: every play met the objective within ${OPENER_PROMISE_S} s of sim with no limit hit.`, '',
+    `Each candidate alone, exactly and as ${n} nudges, on ${engines.join(' and ')}. Score: the lower quartile on the engine where it is lowest. Wins: every play met the objective within ${OPENER_PROMISE_S} s of sim with no limit hit${floor === undefined ? '' : `, and the score reached ${floor}`}.`, '',
     head, `|${' --- |'.repeat(3 + engines.length)}---|`, ...rows, '',
     pick?.wins ? `Pick: \`${pick.shot}\` (solutions.opener: readShots('${pick.shot}')[0]).` : 'No candidate wins on every engine: keep the opener and route a first visit through L1 (PT13\'s fallback).',
     '',

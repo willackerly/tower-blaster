@@ -77,7 +77,23 @@ The agent playtest found B1's first visit failing: the opener brought 17% down, 
 
 **The chooser** (`pnpm keystone:opener B1 --from B1-s1.json,B1-s2.json`, keystone-lab `opener.ts`): the 16 best first shots of the casts' lines, plus the current opener, each played alone exactly and as 8 nudges (the cast's hand noise), on every engine named; ranked on the lower quartile on the worst engine; a winner meets the objective in every play within 20 s of sim with no engine limit. The pick goes into `solutions.opener`, which is not part of the level's hash (the stars stand) and which level files read. No winner: PT13's fallback, a first visit through L1.
 
-Alternatives considered: **retune B1** (thinner wall, lower objective) changes the level and voids its Metal cast; **route a first visit through L1** drops Will's spectacle-first door (G5.5) and is the fallback only; **use the ace's first shot as is** passes on the M5 by 0.027, inside the spread of a nudge and of another GPU; **a dedicated opener** keeps the level and its stars and buys margin, so it is the plan. It gives nothing away: the stars' T2 is 0.65 and T3 0.94, so even a 0.7 opener leaves two bombs to earn three stars.
+Alternatives considered: **retune B1** (thinner wall, lower objective) changes the level and voids its Metal cast; **route a first visit through L1** drops Will's spectacle-first door (G5.5) and is the fallback only; **use the ace's first shot as is** passes on the M5 by 0.027, inside the spread of a nudge and of another GPU; **a dedicated opener** keeps the level and its stars and buys margin, so it is the plan. It gives little away: the stars' T2 is 0.70 and T3 0.94 (stars.json), so a 0.7 opener can reach two stars alone on a lucky play, and the third still takes the two bombs after it.
+
+### Second pass: a margin over the adapters (2026-11-08)
+
+The nightly run (42469639500, main 40a4c69) played the door e2e's GPU case to a measurement for the first time: the ace's first shot, then still the opener, brought **0.374** down on SwiftShader, under the 0.4 bar. With 0.427 on Metal, the margin was 0.027 on the M5 and negative on another adapter: the spread between two adapters running the same solver is about 0.05, so a first visit on some GPU misses the win. The call (the nightly-triage thread's, Will having delegated): change the opener, not the bar; B1's objective stays 0.4, since its stars are cast on it.
+
+The chooser gained `--floor` (a winner's score, the worst adapter's lower quartile, must reach it; 0.45 here) and `--no-current`. One B1 play takes about 5 minutes on SwiftShader, so the cast's best first shots were judged in pairs, exact plus 8 nudges each, on the GPU solver (SwiftShader, the CI adapter):
+
+| opener | Metal cast (first settle) | SwiftShader: exact, min, p25, median, max | slowest settle | wins at 0.45 |
+|---|---|---|---|---|
+| `w-bomb.605.8.-90.181.94` (seed 2) | 0.684 | 0.686, 0.633, **0.660**, 0.683, 0.731 | 8.7 s | yes |
+| `w-bomb.537.8.8.71.100` (seed 1) | 0.725 | 0.721, 0.023, **0.026**, 0.534, 0.721 | 16.1 s | no: 4 of its 8 nudges fall short of 0.4, 3 of them near 0 |
+| `w-bomb.521.8.54.372.66` (the ace's first shot, the old opener) | 0.427 | 0.374 exact (the nightly's figure, reproduced here) | 10.3 s | no |
+
+**Pick: `w-bomb.605.8.-90.181.94`**, now `B1.solutions.opener`. Its worst nudge (0.633) clears the 0.4 bar by 0.23, four times the adapter spread, and every play settles inside 9 s of the 20 s promise. The best recorded shot (537) shows why the floor is a lower quartile and not the exact play: it is the cast's top first settle and the most fragile under the hand noise. The third and fourth cast candidates (`w-bomb.521.8.62.149.62` 0.668, `w-bomb.194.8.9.184.73` 0.667) were not judged: the pick already clears the floor with a 0.21 margin, and each pair costs about 70 minutes on SwiftShader. Rapier stays out of the gate (PT12); it brought 0.573 exact and 0.08 for most nudges of this shot. The Metal confirm (`pnpm keystone:opener B1 --channel chrome --floor 0.45` over the casts) is queued on the M5.
+
+Alternatives considered: **lower the bar to 0.35** passes the old opener and leaves a first visit on a slower adapter one bomb short; **lower B1's objective** voids its cast; **a per-adapter opener** chosen at load ties content to hardware; **a new opener** keeps the level, its stars and the bar, so it is the call.
 
 ## Follow-ups (not in this step)
 
