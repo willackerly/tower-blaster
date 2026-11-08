@@ -132,6 +132,36 @@ the card's figure:
 - `leverage ×L (Tier)` from the line up;
 - the figure alone on a level without a line.
 
+**Why the round's figure fell (2026-11-08).** The PT2 Metal capture of B3 showed ×5.09 in the HUD after two bombs.
+The third bomb brought almost nothing down (this shot ×0.01), and the card then read ×3.40 with no word why. The
+arithmetic is right: leverage is the whole round's fall over the whole round's energy, so energy that brings nothing
+down lowers it. But the player sees a number they earned shrink.
+
+The card now names the peak when the round ends more than 10% under it (`DILUTION_SHARE`). `keystone rules.ts
+leveragePeak(shots)` returns:
+
+- the highest running `roundLeverage`;
+- the last shot at which it stood there;
+- the later shots' own leverage.
+
+`hud.ts dilutionWords` turns this into words such as "leverage ×3.40 · ×5.09 until shot 3 added energy but almost
+nothing fell". It reads "shots 3 and 4" or "shots 3 to 5" for a run, and "brought down less for the energy" when the
+later shots' own leverage is ×0.1 or more (`DILUTION_DUD`). The game passes the peak as `CardFacts.levPeak`. A card
+without facts (the viewer, a duel) is unchanged, as are Chorus and Mason's Trial.
+
+Alternatives considered:
+
+- **Only after a dud last shot** (the brief's wording). Any later low-leverage shot causes the same drop, so the
+  peak rule covers it, and a dud in the middle of the round too.
+- **Score the best prefix, or ignore duds.** This changes the metric. The scoring owner keeps leverage as fall over
+  energy fired, and the stars and gold line are cast on it.
+- **A HUD message.** The HUD already shows "this shot ×0.01" beside the round's figure, and the dud note floats
+  "Nothing moved". The card is where the drop went unexplained.
+
+Tests: `game/test/hud.test.ts` covers the B3 numbers, runs, the 10% band, "nothing fell" and the viewer's card.
+`keystone/test/leverage-points.test.ts` covers `leveragePeak`. `game/test/dud-e2e.test.ts` plays the B1 opener, then a
+bomb wide of the wall, then Bank, and expects the card to name the peak and "until shot 2".
+
 **Leverage points as a share (opt-in).** `rules.ts leveragePoints(shots, line, span_mJ, mode)` is called by both
 `levelScore` and `outcomeTally` (agreed with the scoring owner). Under `'share'`, each shot pays
 
