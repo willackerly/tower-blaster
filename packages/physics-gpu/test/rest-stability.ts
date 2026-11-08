@@ -83,6 +83,16 @@ function wall(n: number, struck: boolean): SceneDesc {
   return { ...s, inputs: [{ step: STRIKE_FRAME, kind: 'spawn', body: ball }] };
 }
 
+/**
+ * The struck city's tower height: S5's (25) when the city fills a tower, else the courses `n` cubes fill, so the
+ * ball (fired at half the height) hits the one short tower instead of flying over it (#310: at 400 cubes, 6 courses
+ * high, a ball at 12.5 never touched it).
+ */
+export function cityHeight(n: number): number {
+  const { F, H } = SCENARIOS.S5!.defaults as { F: number; H: number };
+  return Math.min(H, Math.ceil(n / (F * F)));
+}
+
 /** The scene, solver parameters, engine options and window for a case. */
 export function restSetup(c: RestCase): { scene: SceneDesc; params: Partial<AvbdParams>; opts: Omit<GpuEngineOptions, 'device'>; plan: RestPlan } {
   const struck = c.mode === 'struck';
@@ -90,7 +100,7 @@ export function restSetup(c: RestCase): { scene: SceneDesc; params: Partial<Avbd
   let scene: SceneDesc, params: Partial<AvbdParams> = { iterations: c.iterations, ...slop }, opts: Omit<GpuEngineOptions, 'device'> = {}, substeps = 1, thick = 1;
   if (c.substeps !== undefined && (c.structure !== 'kapla' || !Number.isInteger(c.substeps) || c.substeps < 1)) throw new Error(`${caseName(c)}: substeps is for the Kapla tower only, a whole number from 1`);
   if (c.structure === 'wall') scene = wall(c.n, struck);
-  else if (c.structure === 'city') scene = struck ? buildScenario('S5', { N: c.n, fireStep: STRIKE_FRAME }, 1) : buildScenario('S4', { N: c.n }, 1);
+  else if (c.structure === 'city') scene = struck ? buildScenario('S5', { N: c.n, H: cityHeight(c.n), fireStep: STRIKE_FRAME }, 1) : buildScenario('S4', { N: c.n }, 1);
   else {
     // S15 as the viewer runs it: its own engine options (box test, 32 pair slots a body) under the case's
     // iterations and slop, at real plank size.
@@ -111,11 +121,39 @@ export function restSetup(c: RestCase): { scene: SceneDesc; params: Partial<Avbd
   };
 }
 
-/** Every case of the matrix at these sizes and frames: structures x modes x 20 and 40 iterations x slop on and off. */
+/**
+ * The hold Will chose for Kapla (E2): settled at 120 iterations, then per-body sleep, as kapla-hold.test.ts's
+ * sleepGrid (60 frames, the M5 gate that held 10k planks for a minute). The game's Kapla levels play with sleep.
+ */
+export const KAPLA_HOLD = { settle: { frames: 60, iterations: 120 }, sleep: {} } as const satisfies Pick<RestCase, 'settle' | 'sleep'>;
+
+/** A struck case's least run: its window (the second half) starts 9 s after the strike, when the debris has landed (#310). */
+export const STRUCK_MIN_FRAMES = 1200;
+
+/**
+ * The matrix at these sizes and frames: what the game claims stays at rest, so each case is a gate (#310).
+ * Structures x idle at 40 and 20 iterations x gapSlop on, off, and struck at 40, with these exceptions:
+ * - Kapla runs with KAPLA_HOLD, the hold chosen for it; without it the tower creeps and falls within
+ *   the minute (F3's M5 record, E5, the first nightly; kapla-hold.test.ts measures that). Struck, the
+ *   topple ball brings the tower down, so the case must collapse instead of holding. At 20 iterations
+ *   without the slop (no game setting) a tower settled for 20 frames still fell (SwiftShader, 2026-11-08:
+ *   278 of 400 moved), so that case is left out.
+ * - Struck runs only at 40 iterations: struck rubble at 20 never comes to rest (it creeps; F3's M5 record,
+ *   and the first nightly). The game plays at 40.
+ * - Struck cube structures run at least STRUCK_MIN_FRAMES, whatever `frames` says: at 600 the window opens
+ *   4 s after the strike, with debris still falling. Struck Kapla is judged on its end height, so it keeps
+ *   `frames` (600 frames x 7 substeps already bring 400 planks down).
+ * Every struck case that must hold must also have been hit (rest-page's creep before the window over the bound).
+ */
 export function restMatrix(sizes: number[], frames: number): RestCase[] {
   const out: RestCase[] = [];
   for (const n of sizes) for (const structure of STRUCTURES) for (const mode of ['idle', 'struck'] as const)
-    for (const iterations of [40, 20]) for (const gapSlop of [true, false]) out.push({ structure, mode, n, iterations, gapSlop, frames });
+    for (const iterations of [40, 20]) for (const gapSlop of [true, false]) {
+      if (mode === 'struck' && iterations !== 40) continue;
+      if (structure === 'kapla' && iterations === 20 && !gapSlop) continue;
+      const c: RestCase = { structure, mode, n, iterations, gapSlop, frames: mode === 'struck' && structure !== 'kapla' ? Math.max(frames, STRUCK_MIN_FRAMES) : frames };
+      out.push(structure !== 'kapla' ? c : { ...c, ...KAPLA_HOLD, ...(mode === 'struck' ? { expect: 'collapse' as const } : {}) });
+    }
   return out;
 }
 
@@ -167,6 +205,9 @@ export function restSuite(cases: RestCase[]): void {
         expect(r.meanY[2], `mean height ${r.meanY[0]} -> ${r.meanY[2]}`).toBeLessThan(0.1 * r.meanY[0]);
         return;
       }
+      // A struck structure that must hold must also have been hit: something moved more than the bound before the window.
+      // (A collapse is its own proof, and its ball may land after the window opens: S15's topple ball comes at 2 s.)
+      if (c.mode === 'struck') expect(r.creep.max, 'the strike moved the structure before the window').toBeGreaterThan(plan.tol);
       expect({ moved: r.moved, maxDispUnderTol: r.maxDisp <= plan.tol, topHeld: Math.abs(r.topEnd - r.topFrom) <= plan.tol }).toEqual({ moved: 0, maxDispUnderTol: true, topHeld: true });
     });
   });
