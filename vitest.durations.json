@@ -46,7 +46,7 @@
   "packages/game/test/copy-audit.test.ts": 0.7,
   "packages/game/test/door-e2e.test.ts": 38.9,
   "packages/game/test/door.test.ts": 0.7,
-  "packages/game/test/dud-e2e.test.ts": 10.5,
+  "packages/game/test/dud-e2e.test.ts": 22.4,
   "packages/game/test/dud.test.ts": 0.3,
   "packages/game/test/duel-bot.test.ts": 41.6,
   "packages/game/test/duel-colours-e2e.test.ts": 64.2,

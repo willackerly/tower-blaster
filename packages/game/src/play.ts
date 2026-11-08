@@ -7,7 +7,7 @@
 // its own elements; the viewer calls it for rules=keystone, with hooks for its
 // dev panels (docs/design/viewer-superset.md, step C).
 import { type BodyDesc, type EngineHealth, limitsHit, type PhysicsEngine, type Vec3 } from '@tb/engine-api';
-import { armRefusal, type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, fuseGo, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, RUBE_GO, runSession, scoringOf, selectFootprints, selectGroups, type Shot, isIcePiece, type QuakeShot, QUAKE, MasonTrial, masonWorlds, snapshotHash, TIER_NAMES } from '@tb/keystone';
+import { armRefusal, leveragePeak, type RackItem, type CompiledLevel, compileLevel, Driver, type DriverCheckpoint, Duel, type DuelDef, DEFAULT_TURN_SECONDS, type Feedback, type Footprint, fuseGo, type Goal, goalMet, type Player, type Grade, gradeOf, type LevelDef, type LevelScore, type LotSheet, type PerStep, playShots, rapidDue, roundFacts, RUBE_GO, runSession, scoringOf, selectFootprints, selectGroups, type Shot, isIcePiece, type QuakeShot, QUAKE, MasonTrial, masonWorlds, snapshotHash, TIER_NAMES } from '@tb/keystone';
 import { DIAL_KEYS, type DialField, dialShot, dialStart, dialStep, type QuakeDial, quakePanelHtml, quakeRunHtml, seismogram } from './quake-panel.ts';
 import { dustBeats, fieldQuake, groundAt, type GroundMotion, groundMotion, groundMotionOf } from './quake-ground.ts';
 import { columnUnder, towerTicks } from './quake-ticks.ts';
@@ -1770,6 +1770,7 @@ export async function playKeystone(env: KeystoneEnv, handle: GameHandle = newGam
       collapse: f?.collapse ?? s.liveCollapse,
       ...(f?.spill !== undefined ? { spill: f.spill } : {}), ...(f?.energy !== undefined ? { energy: f.energy } : {}),
       ...(f?.misfires ? { misfires: f.misfires } : {}),
+      levPeak: leveragePeak(s.outcomes), shots: s.outcomes.length,
     };
   }
 

@@ -74,6 +74,9 @@ export interface CardFacts {
   energy?: number;
   /** Fold levels: plunger charges whose column still stands (a domino fuse that never reached its socket, M5b). */
   misfires?: number;
+  /** Where the round's leverage peaked (keystone leveragePeak) and the shots it was over: the card names a later drop (PT31). */
+  levPeak?: { peak: number; after: number; later: number } | null;
+  shots?: number;
 }
 
 /** One of a mode's own card rows: a fact, not points. */

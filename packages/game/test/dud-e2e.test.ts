@@ -1,5 +1,6 @@
 // The dud note on the game page (PT31, agent playtest 2, J1 #6): a shot that moved nothing floats one line saying
 // so and what to try; a shot that brings blocks down does not; keystone.dudnote=0 keeps it quiet; a retry clears it.
+// After a dud the round's leverage drops, and the card says why (the peak and the shot that pulled it down).
 // Rapier, headless Chromium; the note's pure parts are dud.test.ts.
 import { describe, expect, it } from 'vitest';
 import type { Shot } from '@tb/keystone';
@@ -34,6 +35,29 @@ describe('the dud note on the game page (PT31)', () => {
     await ready(page);
     expect((await note(page)).text).toBe('');
     expect((await note(page)).shown).toBe(false);
+    expect(errors).toEqual([]);
+    await page.close();
+  }, 5 * MINUTES);
+
+  it('B1: the opener, then a bomb wide of the wall, then Bank: the card names the leverage peak and the shot that pulled it down', async (ctx) => {
+    if (!game.browser()) return ctx.skip();
+    const o = await game.open('/?level=B1&engine=rapier&look=candy&offscreen=1&progress=off');
+    if (!o) return ctx.skip();
+    const { page, errors } = o;
+    await ready(page);
+    await page.evaluate(() => { window.__game.fast = true; });
+    expect(await page.evaluate(() => window.__game.fireOpener())).toBe(true);
+    await page.waitForFunction(() => window.__game.ready && window.__game.strokes === 1, undefined, { timeout: 2 * MINUTES, polling: 100 });
+    expect(await page.evaluate((s) => window.__game.fire(s), { ...wide, ammo: 'w-bomb' } as Shot)).toBe(true);
+    await page.waitForFunction(() => window.__game.ready && window.__game.strokes === 2, undefined, { timeout: 2 * MINUTES, polling: 100 });
+    expect((await note(page)).text).toMatch(/^Nothing moved: /);
+    expect(await page.evaluate(() => window.__game.bank())).toBe(true);
+    await page.waitForFunction(() => window.__game.result !== null && document.querySelector('.kg-result')?.textContent?.includes('leverage'), undefined, { timeout: 2 * MINUTES, polling: 100 });
+    const card = (await page.evaluate(() => document.querySelector('.kg-result')!.textContent!)).replace(/\s+/g, ' ');
+    // The opener's leverage, halved by a bomb's energy that brought nothing down: the card says so.
+    expect(card).toMatch(/leverage ×(\d+\.\d\d) · ×(\d+\.\d\d) until shot 2 added energy but almost nothing fell/);
+    const [, now, was] = card.match(/leverage ×(\d+\.\d\d) · ×(\d+\.\d\d)/)!;
+    expect(Number(now)).toBeLessThan(0.9 * Number(was));
     expect(errors).toEqual([]);
     await page.close();
   }, 5 * MINUTES);
