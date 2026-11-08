@@ -376,6 +376,7 @@
   "packages/physics-gpu/test/quality.test.ts": 152.5,
   "packages/physics-gpu/test/records-2.test.ts": 165.1,
   "packages/physics-gpu/test/records.test.ts": 170.7,
+  "packages/physics-gpu/test/rest-matrix.test.ts": 0.1,
   "packages/physics-gpu/test/rest-stability-struck.test.ts": 417.7,
   "packages/physics-gpu/test/rest-stability.test.ts": 295.5,
   "packages/physics-gpu/test/s5-blowup-probe.test.ts": 0,

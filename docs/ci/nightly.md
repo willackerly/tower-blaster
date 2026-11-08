@@ -39,7 +39,7 @@ TB_CHANNEL=chrome PHYSICS_GPU_SLOW=1 pnpm vitest run \
 
 With `TB_CHANNEL` set, every level runs, the big ones included. Each file's "names the levels left" case lists anything this adapter didn't run.
 
-The rest-stability matrix at full size is a Mac run too. On SwiftShader the nightly runs its 24 cases at 400 bodies for 600 frames (CI's own case). At 1,000 bodies for 3,600 frames it would take some 8 h there, and the first nightly hit its job limit inside it:
+The rest-stability matrix at full size is a Mac run too. On SwiftShader the nightly runs its 17 cases at 400 bodies for 600 frames (CI's own case; struck cases run 1,200). At 1,000 bodies for 3,600 frames it would take some 8 h there, and the first nightly hit its job limit inside it:
 
 ```
 TB_CHANNEL=chrome PHYSICS_GPU_SLOW=1 REST_SIZES=1000,10000 REQUIRE_WEBGPU=1 \

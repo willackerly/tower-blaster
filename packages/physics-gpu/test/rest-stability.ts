@@ -111,11 +111,37 @@ export function restSetup(c: RestCase): { scene: SceneDesc; params: Partial<Avbd
   };
 }
 
-/** Every case of the matrix at these sizes and frames: structures x modes x 20 and 40 iterations x slop on and off. */
+/**
+ * The hold Will chose for Kapla (E2): settled at 120 iterations, then per-body sleep, as kapla-hold.test.ts's
+ * sleepGrid (60 frames, the M5 gate that held 10k planks for a minute). The game's Kapla levels play with sleep.
+ */
+export const KAPLA_HOLD = { settle: { frames: 60, iterations: 120 }, sleep: {} } as const satisfies Pick<RestCase, 'settle' | 'sleep'>;
+
+/** A struck case's least run: its window (the second half) starts 9 s after the strike, when the debris has landed (#310). */
+export const STRUCK_MIN_FRAMES = 1200;
+
+/**
+ * The matrix at these sizes and frames: what the game claims stays at rest, so each case is a gate (#310).
+ * Structures x idle at 40 and 20 iterations x gapSlop on, off, and struck at 40, with these exceptions:
+ * - Kapla runs with KAPLA_HOLD, the hold chosen for it; without it the tower creeps and falls within
+ *   the minute (F3's M5 record, E5, the first nightly; kapla-hold.test.ts measures that). Struck, the
+ *   topple ball brings the tower down, so the case must collapse instead of holding. At 20 iterations
+ *   without the slop (no game setting) a tower settled for 20 frames still fell (SwiftShader, 2026-11-08:
+ *   278 of 400 moved), so that case is left out.
+ * - Struck runs only at 40 iterations: struck rubble at 20 never comes to rest (it creeps; F3's M5 record,
+ *   and the first nightly). The game plays at 40.
+ * - Struck runs at least STRUCK_MIN_FRAMES, whatever `frames` says: at 600 the window opens 4 s after the
+ *   strike, with debris still falling.
+ */
 export function restMatrix(sizes: number[], frames: number): RestCase[] {
   const out: RestCase[] = [];
   for (const n of sizes) for (const structure of STRUCTURES) for (const mode of ['idle', 'struck'] as const)
-    for (const iterations of [40, 20]) for (const gapSlop of [true, false]) out.push({ structure, mode, n, iterations, gapSlop, frames });
+    for (const iterations of [40, 20]) for (const gapSlop of [true, false]) {
+      if (mode === 'struck' && iterations !== 40) continue;
+      if (structure === 'kapla' && iterations === 20 && !gapSlop) continue;
+      const c: RestCase = { structure, mode, n, iterations, gapSlop, frames: mode === 'struck' ? Math.max(frames, STRUCK_MIN_FRAMES) : frames };
+      out.push(structure !== 'kapla' ? c : { ...c, ...KAPLA_HOLD, ...(mode === 'struck' ? { expect: 'collapse' as const } : {}) });
+    }
   return out;
 }
 
