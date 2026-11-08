@@ -10,8 +10,9 @@
 // Lowering the iterations instead would not make a scoring CI case honest: at 4
 // iterations the unsettled city sags by itself (D 0.036 at 20 steps with or
 // without a hit). The full case (default settings, the shot settled, banked
-// and scored) runs on a real GPU: TB_CHANNEL=chrome (Metal on a Mac), or
-// PHYSICS_GPU_SLOW=1 to force it on SwiftShader (about an hour).
+// and scored) runs on a real GPU only: TB_CHANNEL=chrome (Metal on a Mac, the run in
+// docs/ci/nightly.md). On SwiftShader its load alone passed 60 min without a result
+// (nightly run 42469639500), so the nightly does not force it there.
 import { describe, expect, it } from 'vitest';
 import { limitsHit } from '@tb/engine-api';
 import { type OutcomeScore, scenarioLevel, validateLevel } from '@tb/keystone';
@@ -22,7 +23,7 @@ useViewer();
 
 const MINUTES = 60_000;
 const CITY = '/?scenario=S4&param.N=10000&rules=keystone&offscreen=1';
-const FULL = !!process.env.TB_CHANNEL || process.env.PHYSICS_GPU_SLOW === '1';
+const FULL = !!process.env.TB_CHANNEL;
 /** From azimuth 0, at the nearest tower a third of the way up. */
 const shotIntoCity = () => aimAtNearest(scenarioLevel('S4', { N: 10_000 }, 1), 0, 3, 4);
 

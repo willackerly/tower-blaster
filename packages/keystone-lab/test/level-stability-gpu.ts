@@ -6,7 +6,7 @@
 // that (T-X3B 237 s, T-X4 380 s for 300 steps after the pre-settle), so CI rests CI_STEPS after the pre-settle, where
 // the old arch broke, and a real GPU (TB_CHANNEL=chrome on Metal) or PHYSICS_GPU_SLOW=1 rests the full STEPS.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { compileLevel, type LevelDef, SERIES } from '@tb/keystone';
+import { CHORUS_WORLDS, compileLevel, type LevelDef, SERIES } from '@tb/keystone';
 import { requireWebGPU } from '@tb/testkit';
 import { type BrowserCastPlayer, openBrowserCastPlayer } from '../src/cast-browser.ts';
 import { REST_BOUND_M } from '../src/index.ts';
@@ -26,12 +26,18 @@ export const SWIFT_SLOW_MAX = 2000;
 export const LOAD_MAX = channel ? Infinity : SWIFT_SLOW_MAX;
 export const STEPS = 300, CI_STEPS = 100;
 export const LEVELS_ALL = SERIES.flat().map((def) => ({ def, c: compileLevel(def) }));
+/**
+ * The bodies the page loads for a level: a Chorus level (M9) loads its lot once per world, so CH2's 139 bodies are
+ * 8,896 on the page. Counted by the lot alone, CH2 came under SWIFT_SLOW_MAX, passed its 30 min on SwiftShader with
+ * no result, and the timed-out page failed every level after it (nightly run 42469639500).
+ */
+export const loadBodies = (l: { def: LevelDef; c: ReturnType<typeof compileLevel> }): number => l.c.meta.n * (l.def.chorus ? l.def.chorus.worlds ?? CHORUS_WORLDS : 1);
 /** Every level is dealt over PARTS files (largest first, in turn), so no file holds the whole sweep on one worker. */
 export const PARTS = 3;
 
 /** Part `part` (1..PARTS) of every level up to LOAD_MAX bodies, largest first, in turn. */
 export function levelsPart(part: number): typeof LEVELS_ALL {
-  return LEVELS_ALL.filter((l) => l.c.meta.n <= LOAD_MAX).sort((a, b) => b.c.meta.n - a.c.meta.n || (a.def.id < b.def.id ? -1 : 1)).filter((_, i) => i % PARTS === part - 1);
+  return LEVELS_ALL.filter((l) => loadBodies(l) <= LOAD_MAX).sort((a, b) => loadBodies(b) - loadBodies(a) || (a.def.id < b.def.id ? -1 : 1)).filter((_, i) => i % PARTS === part - 1);
 }
 
 /** The suite on the levels named, or on part `part` of every level when `ids` is null. */
@@ -39,10 +45,11 @@ export function gpuStabilitySuite(ids: readonly string[] | null, extra?: () => v
   const steps = ALL ? STEPS : CI_STEPS;
   const levels: Array<{ def: LevelDef; c: ReturnType<typeof compileLevel> }> = ids ? LEVELS_ALL.filter((l) => ids.includes(l.def.id)) : levelsPart(part);
   if (ids && levels.length !== ids.length) throw new Error(`unknown level among ${ids.join(', ')}`);
-  let player: BrowserCastPlayer | null = null;
+  let player: BrowserCastPlayer | null = null, inFlight = false;
+  const open = () => openBrowserCastPlayer({ ...(channel ? { channel } : {}) });
   beforeAll(async () => {
     try {
-      player = await openBrowserCastPlayer({ ...(channel ? { channel } : {}) });
+      player = await open();
     } catch (e) {
       if (requireWebGPU()) throw e;
     }
@@ -52,7 +59,11 @@ export function gpuStabilitySuite(ids: readonly string[] | null, extra?: () => v
   describe('every level stands at load on the GPU solver', () => {
     for (const { def, c } of levels) it(`${def.id} (${c.meta.n} bodies)`, async (ctx) => {
       if (!player) return ctx.skip();
+      // A level that timed out leaves its rest running on the page; the next level gets a fresh one, not that page.
+      if (inFlight) { await player.close().catch(() => undefined); player = await open(); }
+      inFlight = true;
       const r = await player.rest(def, steps), h = c.frame.unit;
+      inFlight = false;
       console.log(`${def.id} at load on ${player.adapter}: pre-settle max ${(r.settle.maxMove * h).toFixed(3)} m (${r.settle.fell} fell), then ${(r.maxMove * h).toFixed(4)} m over ${steps} steps, ${(r.ms / 1000).toFixed(0)} s`);
       expect(r.limits).toEqual([]);
       expect(r.settle.fell, `bodies that fell in the pre-settle (most moved ${(r.settle.maxMove * h).toFixed(3)} m)`).toBe(0);
