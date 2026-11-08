@@ -4,8 +4,8 @@
 // of any level today) plus made-up worst cases (three ticks within 2%, and ticks against either end). Each is laid
 // out on the desktop HUD (1280x800, the 640x400 test page) and on the docked phone HUD (390x844, a 360x780 phone,
 // 844x390). Checks:
-//   - no two labels overlap, and there is at least a pixel between them;
-//   - each label still reads as its tick's: its box spans the tick, or ends within 4 px of it. The made-up cases are
+//   - no two labels' glyphs (measured as drawn, on whatever font the machine has) overlap, with a pixel between;
+//   - each label still reads as its tick's: its box (its slot, STAR_PX a star) spans the tick, or ends within 4 px. The made-up cases are
 //     only held to order and no overlap: three labels 63 px wide over 3 px of ticks cannot all sit by their ticks.
 import { describe, expect, it } from 'vitest';
 import { compileLevel, type LevelDef, SERIES } from '@tb/keystone';
@@ -20,6 +20,10 @@ const VIEWS = [
   ['phone upright', 390, 844, true],
   ['small phone upright', 360, 780, true],
   ['phone sideways', 844, 390, true],
+  // Other fonts for the stars (CI's draws a star 9 px wide, a Mac's or this VM's 10.5): the boxes are fixed, so the
+  // layout holds whatever the glyphs measure.
+  ['phone upright, serif stars', 390, 844, true, 'serif'],
+  ['desktop 1280x800, monospace stars', 1280, 800, false, 'monospace'],
 ] as const;
 
 const B3 = SERIES.flat().find((d) => d.id === 'B3')!;
@@ -42,11 +46,11 @@ const hud = (def: LevelDef, ticks: MeterTick[]) => {
 };
 
 describe('the Down bar star labels never overlap (PT2 review)', () => {
-  for (const [name, width, height, docked] of VIEWS) it(name, async (ctx) => {
+  for (const [name, width, height, docked, font] of VIEWS as readonly (readonly [string, number, number, boolean, string?])[]) it(name, async (ctx) => {
     const b = game.browser();
     if (!b) return ctx.skip();
     const page = await b.newPage({ viewport: { width, height }, deviceScaleFactor: 1, ...(docked ? { isMobile: true, hasTouch: true } : {}) });
-    await page.setContent(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${GAME_CSS}</style></head><body class="${docked ? 'kg-touch' : ''}"><div id="hud" class="kg-panel kg-hud${docked ? ' kg-dock' : ''}"></div></body></html>`);
+    await page.setContent(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${GAME_CSS}${font ? `.kg-hud .meter .tick b { font-family: ${font}; }` : ''}</style></head><body class="${docked ? 'kg-touch' : ''}"><div id="hud" class="kg-panel kg-hud${docked ? ' kg-dock' : ''}"></div></body></html>`);
     expect(CASES.map((c) => c.name)).toContain('B3');
     for (const c of CASES) {
       const m = await page.evaluate((html) => {
@@ -56,19 +60,23 @@ describe('the Down bar star labels never overlap (PT2 review)', () => {
         return {
           bar: bar.getBoundingClientRect().width,
           ticks: [...bar.querySelectorAll<HTMLElement>('.tick')].map((t) => {
-            const x = t.getBoundingClientRect(), l = t.querySelector('b')!.getBoundingClientRect();
-            return { stars: t.querySelector('b')!.textContent!.length, tick: x.left + x.width / 2, l: l.left, r: l.right };
+            // The glyphs as drawn (a range over the text), not the label's box: what overlaps on screen is ink.
+            const x = t.getBoundingClientRect(), r = document.createRange();
+            r.selectNodeContents(t.querySelector('b')!);
+            const l = r.getBoundingClientRect(), box = t.querySelector('b')!.getBoundingClientRect();
+            return { stars: t.querySelector('b')!.textContent!.length, tick: x.left + x.width / 2, l: l.left, r: l.right, boxL: box.left, boxR: box.right };
           }),
         };
       }, hud(c.def, c.ticks));
       const what = `${name}, ${c.name} (bar ${m.bar.toFixed(0)} px)`;
-      if (c.name === 'B3') console.log(what, JSON.stringify(m.ticks));
+      if (c.name === 'B3') console.log(what, JSON.stringify(m.ticks.map((t) => ({ ...t, ink: +(t.r - t.l).toFixed(1) }))));
       expect(m.ticks.map((t) => t.stars), what).toEqual(c.ticks.map((t) => t.stars));
       for (let i = 1; i < m.ticks.length; i++) {
         expect(m.ticks[i]!.l, `${what}: ${m.ticks[i]!.stars}★ starts a pixel after ${m.ticks[i - 1]!.stars}★ ends`).toBeGreaterThanOrEqual(m.ticks[i - 1]!.r + 1);
       }
       for (const t of m.ticks) {
-        const off = t.tick < t.l ? t.l - t.tick : t.tick > t.r ? t.tick - t.r : 0;
+        // On the label's box (its slot: font-independent), since a narrow glyph sits in the middle of its slot.
+        const off = t.tick < t.boxL ? t.boxL - t.tick : t.tick > t.boxR ? t.tick - t.boxR : 0;
         expect(off, `${what}: ${t.stars}★ by its tick`).toBeLessThanOrEqual(c.near);
       }
     }

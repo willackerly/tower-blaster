@@ -160,7 +160,10 @@ export function meterTicks(c: CompiledLevel): MeterTick[] {
  * the labels keep their px offsets, so labels apart here stay apart on every bar.
  */
 export const METER_MIN_PX = 120;
-/** A star label's width per star at the meter's 11 px glyphs and -1 px letter spacing (measured: 10.5 px a star). */
+/**
+ * A star label's box per star, px: GAME_CSS gives each label this width times its stars and centres the glyphs in it,
+ * so the layout here is the page's on any font (an 11 px star is 10.5 px wide on a Mac or this VM's fonts, 9 on CI's).
+ */
 export const STAR_PX = 10.5;
 /** The least space between two star labels, px. */
 export const LABEL_GAP_PX = 3;
@@ -201,7 +204,7 @@ export function tickLabelShifts(ticks: readonly MeterTick[], px = METER_MIN_PX):
 /** The Down bar: filled to `value` (0..1), a tick per star threshold, lit once the value has reached it. */
 export function meterHtml(value: number, ticks: readonly MeterTick[], label: string): string {
   const v = Math.max(0, Math.min(1, value)), dx = tickLabelShifts(ticks);
-  const marks = ticks.map((t, i) => `<span class="tick${t.stars === 1 ? ' obj' : ''}${v >= t.at ? ' got' : ''}" style="left:${(100 * t.at).toFixed(1)}%" title="${'★'.repeat(t.stars)} at ${pct(t.at)} ${label}"><b${dx[i] ? ` style="--dx:${dx[i]}px"` : ''}>${'★'.repeat(t.stars)}</b></span>`).join('');
+  const marks = ticks.map((t, i) => `<span class="tick${t.stars === 1 ? ' obj' : ''}${v >= t.at ? ' got' : ''}" style="left:${(100 * t.at).toFixed(1)}%" title="${'★'.repeat(t.stars)} at ${pct(t.at)} ${label}"><b style="--n:${t.stars}${dx[i] ? `;--dx:${dx[i]}px` : ''}">${'★'.repeat(t.stars)}</b></span>`).join('');
   return `<div class="meter" role="meter" aria-label="${label}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.floor(100 * v)}"><i style="width:${(100 * v).toFixed(1)}%"></i>${marks}</div>`;
 }
 
