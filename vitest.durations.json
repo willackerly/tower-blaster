@@ -18,6 +18,7 @@
   "packages/audio/test/options.test.ts": 0.1,
   "packages/audio/test/realism.test.ts": 18.2,
   "packages/audio/test/room.test.ts": 1.5,
+  "packages/audio/test/slide.test.ts": 3.8,
   "packages/audio/test/space.test.ts": 2.7,
   "packages/audio/test/tap.test.ts": 0.1,
   "packages/bench/test/run.test.ts": 1,

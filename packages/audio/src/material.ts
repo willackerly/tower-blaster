@@ -112,6 +112,21 @@ export interface SoundMaterial {
    */
   clickBand?: 'sampled' | 'limited';
   /**
+   * Scraping (A8b, engine.setSlide): a sliding body's friction power, dB re the modal energy a bin-0 impact of the
+   * same A^2 rings (absent: SCRAPE_DB, -10); levelDb applies on top, as to impacts.
+   */
+  scrapeDb?: number;
+  /** Scraping's ring share (scrapeRing): the length per asperity, m (absent: SCRAPE_GRAIN, 0.1 mm): the friction force is flat up to speed / scrapeGrain. */
+  scrapeGrain?: number;
+  /** Scraping: the force's fall above that, in 6 dB an octave (absent: SCRAPE_TILT, 1). */
+  scrapeTilt?: number;
+  /** Scraping's crackle (stick-slip): metres slid per grain (absent: SCRAPE_PULSE, 5 mm). */
+  scrapePulse?: number;
+  /** Scraping: the share of its power that rings the body's modes (absent: SCRAPE_RING, 0); the rest is the contact's crackle. */
+  scrapeRing?: number;
+  /** Scraping: most grains a stream sheds a second (absent: SCRAPE_RATE); past it, fewer and larger grains. */
+  scrapeRate?: number;
+  /**
    * The dense modes above the mode table (shell walls and solid cubes have thousands): played as a
    * statistical field, band noise per (sector, half-octave) decaying at each band's loss factor, with
    * the energy the same modes would carry (modal density x the table's per-mode law). dB over that;
@@ -223,7 +238,7 @@ export const soundMaterials = (set: SoundSet = 'real'): Record<keyof typeof SOUN
 
 const POSITIVE = ['E', 'nu', 'rho', 'eta', 'R', 'mstar'] as const;
 
-const KEYS = new Set(['model', 'dims', 'size', 'wall', 'walls', 'plateModes', 'E', 'G', 'nu', 'rho', 'eta', 'jitter', 'R', 'Ec', 'mstar', 'ringDb', 'clickDb', 'gritDb', 'gritRate', 'gritSpread', 'gritRing', 'face', 'levelDb', 'gritShare', 'roughDb', 'roughT', 'overlap', 'clickModel', 'clickBand', 'denseDb', 'law']);
+const KEYS = new Set(['model', 'dims', 'size', 'wall', 'walls', 'plateModes', 'E', 'G', 'nu', 'rho', 'eta', 'jitter', 'R', 'Ec', 'mstar', 'ringDb', 'clickDb', 'gritDb', 'gritRate', 'gritSpread', 'gritRing', 'face', 'levelDb', 'gritShare', 'roughDb', 'roughT', 'overlap', 'clickModel', 'clickBand', 'denseDb', 'law', 'scrapeDb', 'scrapeGrain', 'scrapeTilt', 'scrapePulse', 'scrapeRing', 'scrapeRate']);
 
 /** A material from JSON-ish input over `base` (a whole material when absent); throws on a value that can't make sound. */
 export function parseSoundMaterial(input: Partial<Record<keyof SoundMaterial, unknown>>, base?: SoundMaterial): SoundMaterial {
@@ -251,6 +266,12 @@ export function parseSoundMaterial(input: Partial<Record<keyof SoundMaterial, un
   if (out.face !== undefined && !(out.face >= 0 && out.face <= 1)) throw new Error('sound material face must be 0 to 1');
   if (out.gritRing !== undefined && !(out.gritRing >= 0 && out.gritRing <= 1)) throw new Error('sound material gritRing must be 0 to 1');
   if (out.levelDb !== undefined && !(out.levelDb >= -60 && out.levelDb <= 60)) throw new Error('sound material levelDb must be -60 to 60 dB');
+  if (out.scrapeDb !== undefined && !(out.scrapeDb >= -60 && out.scrapeDb <= 20)) throw new Error('sound material scrapeDb must be -60 to 20 dB');
+  if (out.scrapeGrain !== undefined && !(out.scrapeGrain >= 1e-6 && out.scrapeGrain <= 0.01)) throw new Error('sound material scrapeGrain must be 1e-6 to 0.01 m');
+  if (out.scrapeRing !== undefined && !(out.scrapeRing >= 0 && out.scrapeRing <= 1)) throw new Error('sound material scrapeRing must be 0 to 1');
+  if (out.scrapeRate !== undefined && !(out.scrapeRate >= 1 && out.scrapeRate <= 1e5)) throw new Error('sound material scrapeRate must be 1 to 1e5 grains a second');
+  if (out.scrapePulse !== undefined && !(out.scrapePulse >= 1e-5 && out.scrapePulse <= 1)) throw new Error('sound material scrapePulse must be 1e-5 to 1 m');
+  if (out.scrapeTilt !== undefined && !(out.scrapeTilt >= 0 && out.scrapeTilt <= 4)) throw new Error('sound material scrapeTilt must be 0 to 4');
   if (out.gritShare !== undefined && !(out.gritShare >= 0 && out.gritShare <= 1)) throw new Error('sound material gritShare must be 0 to 1');
   if (out.gritSpread !== undefined && !(out.gritSpread >= 0.001 && out.gritSpread <= 0.25)) throw new Error('sound material gritSpread must be 0.001 to 0.25 s');
   if (out.roughT !== undefined && !(out.roughT >= 1e-5 && out.roughT <= 0.05)) throw new Error('sound material roughT must be 1e-5 to 0.05 s');

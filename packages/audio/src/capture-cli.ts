@@ -53,8 +53,8 @@ for (let s = 0; s < o.steps!; s++) {
   for (; slots < snap.count; slots++) tap.setMaterial(slots, slots < n0 ? 0 : -1); // the ball is silent, as in the viewer
   // Real speeds (units/s x k; the tap's metres turn units into metres) over real time.
   const linVel = k === 1 ? snap.linVel : snap.linVel.map((v) => v * k);
-  const f = tap.frame({ count: snap.count, pos: snap.pos, linVel }, { metres, camera: { pos: eye, right }, dvMin: 0.25, dt: every * scene.dt / k, top: 8 });
-  frames.push({ dt: f.dt, materials: f.materials, sectors: f.sectors, counts: [...f.counts], a2: [...f.a2], top: [...f.top], space: [...f.space!] });
+  const f = tap.frame({ count: snap.count, pos: snap.pos, linVel }, { metres, camera: { pos: eye, right }, dvMin: 0.25, dt: every * scene.dt / k, top: 8, slide: {} });
+  frames.push({ dt: f.dt, materials: f.materials, sectors: f.sectors, counts: [...f.counts], a2: [...f.a2], top: [...f.top], space: [...f.space!], slide: [...f.slide!] });
 }
 writeFileSync(out, JSON.stringify({ bodies: n0, metres, eye, frames }));
 console.error(`${n0} bodies, ${frames.reduce((s, f) => s + Array.from(f.counts).reduce((a, b) => a + b, 0), 0)} impacts in ${frames.length} frames -> ${out}`);

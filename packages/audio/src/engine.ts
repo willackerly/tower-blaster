@@ -48,7 +48,7 @@
 // a third of its energy there, which only uses up headroom), then a lookahead
 // peak limiter (Limiter): gain changes are ramps, never steps, so heavy
 // limiting does not crackle.
-import { binOf, DV_EDGES, SPACE_FIELDS, TOP_FIELDS, type AudioFrame } from './frame.ts';
+import { binOf, DV_EDGES, SLIDE_FIELDS, SPACE_FIELDS, TOP_FIELDS, type AudioFrame } from './frame.ts';
 import type { SoundMaterial } from './material.ts';
 import { AirFilter } from './air.ts';
 import { makeRoom, ROOMS, type Room, type RoomParams, type RoomVerb } from './room.ts';
@@ -213,6 +213,8 @@ interface MatState {
    * per band the amplitude decay a sample, per (sector, band) the amplitude and this block's additions.
    */
   dK: Float64Array | null; dDec: Float64Array; dA: Float64Array; dIn: Float32Array; dLive: number;
+  /** Scraping (A8b): its share of the friction power (level^2 x 10^(scrapeDb/10)); per sector the power (A^2/s) and the sliders' speed now and their targets, and last block's noise rms. */
+  sk: number; sRef: number; sC: Float64Array; sW: Float64Array; sGate: Uint8Array; sR: Float64Array; sRT: Float64Array; sP: Float64Array; sPT: Float64Array; sV: Float64Array; sVT: Float64Array; sSig: Float64Array;
 }
 
 interface Voice {
@@ -230,6 +232,48 @@ interface Voice {
 export const SPACE_DREF = 10;
 export const SPACE_CAP = 32;
 export const SPACE_TAU = 0.05;
+/**
+ * Scraping (A8b, setSlide): a sliding body's friction power, the energy its contacts take (frame.ts slide sums, in
+ * A^2 per second), plays at 10^((levelDb + scrapeDb)/10) (SCRAPE_DB absent) of the modal energy a bin-0 impact of
+ * the same A^2 rings (sRef). The reference leaves out an impact's click, dense field and grit, so against whole
+ * impacts of the same energy a slide at scrapeDb 0 reads from -21 dB (rubber) to +7 dB (pine) (test/slide.test.ts).
+ * Most of it is the contact's crackle (stick-slip grains on their own bus); scrapeRing of it rings the modes, its
+ * force flat up to v / scrapeGrain (an asperity passing per that length) and falling at scrapeTilt x 6 dB an octave
+ * above. Smoothed over SLIDE_TAU.
+ */
+export const SCRAPE_DB = -10;
+export const SCRAPE_GRAIN = 1e-4;
+export const SCRAPE_TILT = 1;
+export const SLIDE_TAU = 0.03;
+/**
+ * Scraping: the share of its power that rings the body's modes; the rest is the contact's own crackle. 0: crackle
+ * only (the judge heard the modes' share as machinery, "Gears, Ratchet"; docs/sound.md A8b).
+ */
+export const SCRAPE_RING = 0;
+/** Scraping: metres slid per grain of its crackle (stick-slip). */
+export const SCRAPE_PULSE = 5e-3;
+/** Scraping: sliders a sector played as their own stick-slip streams, and each stream's gate: mean on and off (s), and its level off. */
+export const SCRAPE_STREAMS = 4;
+/**
+ * Scraping: most grains a stream sheds a second (more slid: fewer, larger grains of the same energy). The texture
+ * study's best rate (denser reads as fireworks, sparser as nothing); over three seeds and five scenes the judge's
+ * real share is 0.976 at 200, 0.968 at 2000 and 0.972 uncapped (off: 0.953). It also bounds the cost: 16 streams
+ * shed 3,200 grains a second at most.
+ */
+export const SCRAPE_RATE = 200;
+export const SCRAPE_GATE = [0.08, 0.05, 0.1] as const;
+/** Scraping's grains: Hann-windowed noise, 2 to 5 ms (log spaced), unit energy at 48 kHz. */
+export function scrapeKernels(sr: number, n = 8, seed = 11): Float32Array[] {
+  const rand = mulberry(seed);
+  return Array.from({ length: n }, (_, j) => {
+    const L = Math.max(8, Math.round(0.002 * (2.5 ** (j / (n - 1))) * sr)), k = new Float32Array(L);
+    let e = 0;
+    for (let i = 0; i < L; i++) { k[i] = (0.5 - 0.5 * Math.cos((2 * Math.PI * (i + 0.5)) / L)) * (rand() - 0.5); e += k[i]! ** 2; }
+    const g = Math.sqrt((sr / 48000) / e);
+    for (let i = 0; i < L; i++) k[i]! *= g;
+    return k;
+  });
+}
 
 /** Equal-power gains for a pan in [-1, 1]. */
 export const panGains = (pan: number): [number, number] => { const a = ((Math.max(-1, Math.min(1, pan)) + 1) * Math.PI) / 4; return [Math.cos(a), Math.sin(a)]; };
@@ -298,6 +342,14 @@ export class CollapseEngine {
   // Space (A8a): per sector the pan and send now (smoothed) and their targets, the gains applied last
   // block (ramps start there), and whether it was silent last block (then a new target is taken at once).
   private spaceOn = false;
+  // Scraping (A8b): on, the frames' slide targets waiting for their start sample, and the noise.
+  private slideOn = false;
+  private slideQ: { at: number; p: Float64Array; v: Float64Array; r: Float64Array }[] = [];
+  private nz = 0x9e3779b9;
+  private nbuf = new Float32Array(BLOCK);
+  private sKern: Float32Array[] = [];
+  private sw = BLOCK; // the crackle bus's width a sector: a block and the longest grain
+  private sbus = new Float32Array(0);
   private dref = SPACE_DREF;
   private sendCap = SPACE_CAP;
   private sPan = new Float64Array(0);
@@ -391,6 +443,8 @@ export class CollapseEngine {
       rough: roughness(m),
       roughT: roughTime(m),
       dK: null, dDec: new Float64Array(0), dA: new Float64Array(0), dIn: new Float32Array(0), dLive: 0,
+      sk: 10 ** (((m.levelDb ?? 0) + (m.scrapeDb ?? SCRAPE_DB)) / 10), sRef: 0, sC: new Float64Array(M), sW: keep ? old.sW : new Float64Array(S), sGate: keep ? old.sGate : new Uint8Array(S * SCRAPE_STREAMS).fill(1), sR: keep ? old.sR : new Float64Array(S), sRT: keep ? old.sRT : new Float64Array(S),
+      sP: keep ? old.sP : new Float64Array(S), sPT: keep ? old.sPT : new Float64Array(S), sV: keep ? old.sV : new Float64Array(S), sVT: keep ? old.sVT : new Float64Array(S), sSig: keep ? old.sSig : new Float64Array(S),
     };
     for (let c = 0; c < C; c++) st.mult[c] = Math.exp(m.jitter * normInv((c + 0.5) / C));
     for (let c = 0; c < C; c++) for (let s = 0; s < S; s++) for (let k = 0; k < M; k++) {
@@ -400,6 +454,9 @@ export class CollapseEngine {
     for (let bin = 0; bin < DV_EDGES.length; bin++) {
       const dv = DV_EDGES[bin]! * Math.SQRT2, T = contactTime(m, dv, edge);
       st.binT[bin] = T;
+      // Scraping's reference: the modal energy an impulse of A = 1 in the lowest bin rings (sum of c^2 tau); friction
+      // of the same A^2 (over any time) plays that energy at scrapeDb 0.
+      if (bin === 0) for (let k = 0; k < M; k++) st.sRef += (forceSpectrum(md.freq[k]! * st.mult[0]!, T, st.rough, st.roughT) * md.gain[k]!) ** 2 * md.tau[k]!;
       // y = 2 cos(th) y1 - y2 + u, th = 2 pi / D, answers an impulse with sin((n + 1) th) / sin(th): one
       // cycle of the kernel's sine is D samples, and the same impulse negated D samples later ends it
       // (u = x - x[n - D]). Scaled so one impulse carries the exact kernel's energy (clickKernel) for a
@@ -455,6 +512,17 @@ export class CollapseEngine {
     const start = Math.max(this.nextFrame, this.now + BLOCK);
     this.nextFrame = start + len;
     const S = f.sectors;
+    if (this.slideOn) {
+      // Scraping: each (material, sector)'s friction power and its sliders' mean speed, from `start` on (as its impacts).
+      const ms = this.mats.length, p = new Float64Array(ms * this.sectors), v = new Float64Array(ms * this.sectors), rr = new Float64Array(ms * this.sectors), sl = f.slide;
+      if (sl) for (let mat = 0; mat < f.materials && mat < ms; mat++) for (let s = 0; s < S && s < this.sectors; s++) {
+        const q = SLIDE_FIELDS * (mat * S + s), net = sl[q]!, pos = sl[q + 1]!;
+        p[mat * this.sectors + s] = Math.max(0, net) / f.dt;
+        v[mat * this.sectors + s] = pos > 0 ? sl[q + 2]! / pos : 0;
+        rr[mat * this.sectors + s] = sl[q + 3]!;
+      }
+      if (this.slideQ.length < 64) this.slideQ.push({ at: start, p, v, r: rr });
+    }
     if (this.spaceOn && f.space) {
       const sp = f.space, law = this.roomVerb?.law ?? 1;
       let wAll = 0, wd = 0, quiet = true;
@@ -604,6 +672,7 @@ export class CollapseEngine {
       st.cIn[bin * S + s] = 1;
     }
     this.bn[slot] = 0;
+    if (this.slideOn) this.scrape();
     // Ringing cracks: this block's grains of a material with gritRing also strike its modes and dense
     // field (crackA), from grit's own stream, so a material without it plays bit for bit as before.
     const gslot = Math.floor(this.now / BLOCK) % GRING, gn = this.gn[gslot]!;
@@ -802,6 +871,107 @@ export class CollapseEngine {
     if (on === this.spaceOn && dref === this.dref && cap === this.sendCap) return;
     this.spaceOn = on; this.dref = dref; this.sendCap = cap;
     this.resetSpace();
+  }
+
+  /**
+   * Scraping (A8b): sliding bodies (the frames' slide sums; frame.ts) play as friction noise through their
+   * material's modes and dense field. Off (the default) plays exactly as before.
+   */
+  setSlide(on: boolean): void {
+    if (on === this.slideOn) return;
+    this.slideOn = on;
+    if (on && !this.sKern.length) { this.sKern = scrapeKernels(this.sr); this.sw = BLOCK + Math.max(...this.sKern.map((k) => k.length)); }
+    this.sbus = new Float32Array(on ? this.sectors * this.sw : 0);
+    this.slideQ = [];
+    for (const st of this.mats) if (st) { st.sW.fill(0); st.sR.fill(0); st.sRT.fill(0); st.sP.fill(0); st.sPT.fill(0); st.sV.fill(0); st.sVT.fill(0); st.sSig.fill(0); }
+  }
+
+  /** Is scraping on? */
+  get slide(): boolean { return this.slideOn; }
+
+  /** Scraping's ring share (scrapeRing): noise from sig0 to sig (rms) through sector s's class-0 modes, shaped by the slide's speed. */
+  private scrapeModes(st: MatState, s: number, sig0: number, sig: number): void {
+    const n = this.nbuf;
+    // Unit-variance noise (uniform, xorshift), its level ramped across the block from the last one's.
+    let z = this.nz;
+    for (let i = 0; i < BLOCK; i++) { z ^= z << 13; z ^= z >>> 17; z ^= z << 5; n[i] = ((z >>> 0) / 4294967296 - 0.5) * 3.4641016 * (sig0 + ((sig - sig0) * (i + 1)) / BLOCK); }
+    this.nz = z;
+    const fc = Math.max(100, st.sV[s]! / (st.m.scrapeGrain ?? SCRAPE_GRAIN)), tilt = st.m.scrapeTilt ?? SCRAPE_TILT, base = s * st.M, mult = st.mult[0]!, C = st.sC;
+    let e = 0;
+    for (let k = 0; k < st.M; k++) { const f = st.md.freq[k]! * mult; C[k] = st.md.gain[k]! / Math.sqrt(1 + (f / fc) ** (2 * tilt)); e += C[k]! ** 2 * st.md.tau[k]!; }
+    const norm = e > 0 ? Math.sqrt(st.sRef / e) : 0;
+    for (let k = 0; k < st.M; k++) {
+      const c = C[k]! * norm;
+      if (!(c > 0)) continue;
+      const o = (base + k) * BLOCK;
+      for (let i = 0; i < BLOCK; i++) st.x[o + i]! += c * n[i]!;
+      if (!st.live[base + k]) { st.live[base + k] = 1; st.nLive++; }
+    }
+    this.work += st.M * BLOCK;
+  }
+
+  /** This block's friction noise into the modes (class 0) and the dense field. */
+  private scrape(): void {
+    const q = this.slideQ, S = this.sectors;
+    while (q.length && q[0]!.at <= this.now) {
+      const t = q.shift()!, ms = t.p.length / S;
+      for (let mat = 0; mat < this.mats.length; mat++) {
+        const st = this.mats[mat];
+        if (!st) continue;
+        for (let s = 0; s < S; s++) {
+          const P = mat < ms ? t.p[mat * S + s]! : 0;
+          st.sPT[s] = P; st.sRT[s] = P > 0 ? t.r[mat * S + s]! : 0;
+          if (P > 0) { st.sVT[s] = t.v[mat * S + s]!; if (!(st.sP[s]! > 0)) { st.sV[s] = st.sVT[s]!; st.sR[s] = st.sRT[s]!; } }
+        }
+      }
+    }
+    const a = 1 - Math.exp(-BLOCK / (SLIDE_TAU * this.sr)), sr = this.sr;
+    for (const st of this.mats) {
+      if (!st) continue;
+      for (let s = 0; s < S; s++) {
+        st.sP[s]! += a * (st.sPT[s]! - st.sP[s]!);
+        st.sV[s]! += a * (st.sVT[s]! - st.sV[s]!);
+        st.sR[s]! += a * (st.sRT[s]! - st.sR[s]!);
+        const P = st.sP[s]! < 1e-14 && st.sPT[s] === 0 ? 0 : st.sP[s]!, ring = st.m.scrapeRing ?? SCRAPE_RING;
+        const sig = Math.sqrt((ring * st.sk * P) / sr), sig0 = st.sSig[s]!, W = Math.sqrt(((1 - ring) * st.sk * P * st.sRef) / 4), W0 = st.sW[s]!;
+        st.sSig[s] = sig; st.sW[s] = W;
+        if (sig === 0 && sig0 === 0 && W === 0 && W0 === 0) continue;
+        if (P === 0) st.sP[s] = 0;
+        if (sig > 0 || sig0 > 0) this.scrapeModes(st, s, sig0, sig);
+        if (W > 0 || W0 > 0) {
+          // The contact's own crackle (1 - ring of the power), as stick-slip: up to SCRAPE_STREAMS sliders a sector (their
+          // number: metres slid a second over the mean speed), each gated on and off at random (SCRAPE_GATE), sheds a grain
+          // per scrapePulse slid; a grain is a few ms of noise (scrapeKernels), log-normal in size. The block's energy is
+          // spread over the grains expected, so the gating keeps the power.
+          const ss = s * SCRAPE_STREAMS, rate = st.sR[s]! / (st.m.scrapePulse ?? SCRAPE_PULSE), v = Math.max(st.sV[s]!, 1e-3);
+          const nS = Math.max(1, Math.min(SCRAPE_STREAMS, Math.round(st.sR[s]! / v))), lam = Math.min(rate / nS, st.m.scrapeRate ?? SCRAPE_RATE) * (BLOCK / sr), E = ((W * W + W0 * W0) / 2) * BLOCK;
+          const [on, off, low] = SCRAPE_GATE, qOn = on / (on + off), duty = qOn + (1 - qOn) * low * low;
+          const amp = lam > 0 ? Math.sqrt(E / (nS * lam * duty)) : 0, r = this.grand, norm = Math.exp(-(GRIT.sigma ** 2)), K = this.sKern, Lw = this.sw, bus = this.sbus;
+          for (let j = 0; j < nS && amp > 0; j++) {
+            // The gate: flips with the chance of a block over its mean length.
+            const g = st.sGate[ss + j]!;
+            if (r() < BLOCK / ((g ? on : off) * sr)) st.sGate[ss + j] = g ? 0 : 1;
+            const ga = st.sGate[ss + j] ? 1 : low;
+            let k = 0;
+            if (lam < 30) for (let p = r(), stop = Math.exp(-lam); p > stop; p *= r()) k++;
+            else k = Math.max(0, Math.round(lam + Math.sqrt(lam) * gauss(r)));
+            for (let e = 0; e < k; e++) {
+              const ker = K[Math.min(K.length - 1, Math.floor(r() * K.length))]!, a = ga * amp * norm * Math.exp(GRIT.sigma * gauss(r)), o = s * Lw + Math.floor(r() * BLOCK);
+              for (let i = 0; i < ker.length; i++) bus[o + i]! += a * ker[i]!;
+            }
+            this.grains += k;
+          }
+        }
+      }
+    }
+    // The crackle's bus: this block into the sectors, the rest (grains running past it) kept.
+    const bus = this.sbus, Lw = this.sw;
+    for (let s = 0; s < S; s++) {
+      const o = s * Lw;
+      for (let i = 0; i < BLOCK; i++) this.sector[s * BLOCK + i]! += bus[o + i]!;
+      bus.copyWithin(o, o + BLOCK, o + Lw);
+      bus.fill(0, o + Lw - BLOCK, o + Lw);
+    }
   }
 
   /** Is space on? */

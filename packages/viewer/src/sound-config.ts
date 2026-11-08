@@ -44,3 +44,5 @@ export function soundRoom(c: Pick<ViewerConfig, 'look' | 'real' | 'sound'>): { r
 export const soundSpace = (c: Pick<ViewerConfig, 'sound'>): boolean => c.sound.set !== 'classic' && c.sound.space;
 /** Air (snd.air, A8a step 3: far impacts lose their top end); with space only. */
 export const soundAir = (c: Pick<ViewerConfig, 'sound'>): boolean => soundSpace(c) && c.sound.air;
+/** Scraping (snd.scrape, A8b: sliding bodies as friction crackle); the classic set never uses it, as G6 did not. */
+export const soundScrape = (c: Pick<ViewerConfig, 'sound'>): boolean => c.sound.set !== 'classic' && c.sound.scrape;

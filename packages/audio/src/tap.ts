@@ -13,7 +13,7 @@
 // Cost: one pass over the slots (~10 ns each in V8), so 10k bodies are
 // ~0.1 ms of main thread a frame. The GPU tap (plan S4) replaces it when the
 // snapshots stop coming back to the CPU.
-import { binOf, cellOf, DV_EDGES, pitchZ, sectorOf, SPACE_FIELDS, TOP_FIELDS, type AudioFrame } from './frame.ts';
+import { binOf, cellOf, DV_EDGES, pitchZ, sectorOf, SLIDE_FIELDS, slideOf, SPACE_FIELDS, TOP_FIELDS, type AudioFrame, type SlideParams } from './frame.ts';
 
 export interface TapInput {
   count: number;
@@ -31,12 +31,16 @@ export interface TapParams {
   dt: number;
   /** Loudest impacts to report one by one (foreground voices). */
   top: number;
+  /** Sliding contacts (A8b, frame.ts): present, the frame carries the slide sums (the tap keeps positions too). */
+  slide?: SlideParams;
 }
 
 export class FrameTap {
   readonly materials: number;
   readonly sectors: number;
   private prev = new Float64Array(0);
+  private prevPos = new Float64Array(0);
+  private posSeen = 0; // slots whose prevPos is their last frame's (a tap asked for slides only now knows none)
   private seen = 0;
   private mat = new Int8Array(0);
   private keyA = new Float64Array(0);
@@ -62,6 +66,7 @@ export class FrameTap {
   /** Forget every velocity (a new scene): the next frame only records. */
   reset(): void {
     this.seen = 0;
+    this.posSeen = 0;
   }
 
   frame(s: TapInput, p: TapParams): AudioFrame {
@@ -70,6 +75,9 @@ export class FrameTap {
     const K = Math.max(0, Math.floor(p.top));
     if (this.keyA.length < K) { this.keyA = new Float64Array(K); this.keyI = new Int32Array(K); this.keyD = new Float64Array(K); }
     if (this.prev.length < 3 * s.count) { const g = new Float64Array(Math.max(3 * s.count, 2 * this.prev.length)); g.set(this.prev); this.prev = g; }
+    const sl = p.slide, slide = sl ? new Float32Array(SLIDE_FIELDS * this.materials * this.sectors) : null;
+    if (sl && this.prevPos.length < this.prev.length) { const g = new Float64Array(this.prev.length); g.set(this.prevPos); this.prevPos = g; }
+    const pp = this.prevPos, posSeen = sl ? Math.min(this.posSeen, s.count) : 0, va: [number, number, number] = [0, 0, 0], vb: [number, number, number] = [0, 0, 0], dxa: [number, number, number] = [0, 0, 0];
     const prev = this.prev, v = s.linVel, x = s.pos, mats = this.mat, M = this.materials, S = this.sectors, m = p.metres;
     const [cx, cy, cz] = p.camera.pos, [rx, ry, rz] = p.camera.right;
     const keyA = this.keyA, keyI = this.keyI, keyD = this.keyD;
@@ -78,11 +86,28 @@ export class FrameTap {
     for (let i = 0; i < seen; i++) {
       const o = 3 * i, vx = v[o]!, vy = v[o + 1]!, vz = v[o + 2]!;
       const dx = vx - prev[o]!, dy = vy - prev[o + 1]!, dz = vz - prev[o + 2]!;
-      prev[o] = vx; prev[o + 1] = vy; prev[o + 2] = vz;
       const mi = i < mats.length ? mats[i]! : -1;
-      if (mi < 0 || mi >= M) continue;
+      if (mi < 0 || mi >= M) { prev[o] = vx; prev[o + 1] = vy; prev[o + 2] = vz; if (sl) { pp[o] = x[o]!; pp[o + 1] = x[o + 1]!; pp[o + 2] = x[o + 2]!; } continue; }
       const dv = Math.sqrt(dx * dx + dy * dy + dz * dz) * m;
-      if (!(dv > p.dvMin)) continue;
+      if (!(dv > p.dvMin)) {
+        if (slide && i < posSeen) {
+          va[0] = vx * m; va[1] = vy * m; va[2] = vz * m; vb[0] = prev[o]! * m; vb[1] = prev[o + 1]! * m; vb[2] = prev[o + 2]! * m;
+          dxa[0] = (x[o]! - pp[o]!) * m; dxa[1] = (x[o + 1]! - pp[o + 1]!) * m; dxa[2] = (x[o + 2]! - pp[o + 2]!) * m;
+          const r = slideOf(va, vb, dxa, sl);
+          if (r) {
+            const px = x[o]! * m - cx, py = x[o + 1]! * m - cy, pz = x[o + 2]! * m - cz;
+            const dist = Math.max(Math.sqrt(px * px + py * py + pz * pz), 0.5), pan = (px * rx + py * ry + pz * rz) / dist;
+            const sec = sectorOf(pan, S), w = (2 * r[0]) / (dist * dist), q = SLIDE_FIELDS * (mi * S + sec);
+            slide[q]! += w;
+            if (w > 0) { slide[q + 1]! += w; slide[q + 2]! += w * r[1]; slide[q + 3]! += r[1]; space[SPACE_FIELDS * sec]! += w; space[SPACE_FIELDS * sec + 1]! += w * pan; space[SPACE_FIELDS * sec + 2]! += w * dist; }
+          }
+        }
+        prev[o] = vx; prev[o + 1] = vy; prev[o + 2] = vz;
+        if (sl) { pp[o] = x[o]!; pp[o + 1] = x[o + 1]!; pp[o + 2] = x[o + 2]!; }
+        continue;
+      }
+      prev[o] = vx; prev[o + 1] = vy; prev[o + 2] = vz;
+      if (sl) { pp[o] = x[o]!; pp[o + 1] = x[o + 1]!; pp[o + 2] = x[o + 2]!; }
       const px = x[o]! * m - cx, py = x[o + 1]! * m - cy, pz = x[o + 2]! * m - cz;
       const dist = Math.max(Math.sqrt(px * px + py * py + pz * pz), 0.5);
       const pan = (px * rx + py * ry + pz * rz) / dist;
@@ -97,8 +122,12 @@ export class FrameTap {
         keyA[j] = A; keyI[j] = i; keyD[j] = dv;
       }
     }
-    for (let i = seen; i < s.count; i++) { prev[3 * i] = v[3 * i]!; prev[3 * i + 1] = v[3 * i + 1]!; prev[3 * i + 2] = v[3 * i + 2]!; }
+    for (let i = seen; i < s.count; i++) {
+      prev[3 * i] = v[3 * i]!; prev[3 * i + 1] = v[3 * i + 1]!; prev[3 * i + 2] = v[3 * i + 2]!;
+      if (sl) { pp[3 * i] = x[3 * i]!; pp[3 * i + 1] = x[3 * i + 1]!; pp[3 * i + 2] = x[3 * i + 2]!; }
+    }
     this.seen = s.count;
+    this.posSeen = sl ? s.count : 0;
     const top = new Float32Array(kept * TOP_FIELDS);
     for (let j = 0; j < kept; j++) {
       const i = keyI[j]!, o = 3 * i;
@@ -106,6 +135,8 @@ export class FrameTap {
       const dist = Math.max(Math.sqrt(px * px + py * py + pz * pz), 0.5);
       top.set([keyD[j]!, dist, (px * rx + py * ry + pz * rz) / dist, mats[i]!, pitchZ(i)], j * TOP_FIELDS);
     }
-    return { dt: p.dt, materials: M, sectors: S, counts, a2, top, space };
+    const f: AudioFrame = { dt: p.dt, materials: M, sectors: S, counts, a2, top, space };
+    if (slide) f.slide = slide;
+    return f;
   }
 }

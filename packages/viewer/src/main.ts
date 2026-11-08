@@ -375,7 +375,7 @@ async function main() {
     renderer.resetEffects();
     renderer.setEffectStyle(want.feel.fx);
     blastsDue = [];
-    sound.scene();
+    sound.scene(scene.gravity);
     sound.configure(config);
     // A level draws as the game draws it: crowns gilded, heritage glazed (structureCoats), materials tinted (@tb/game structureTints), stones marked (structureMarks).
     if (fxSlots) renderer.clearFx(0, fxSlots);

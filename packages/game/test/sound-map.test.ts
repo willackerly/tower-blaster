@@ -165,6 +165,9 @@ describe('Kapla planks (A9)', () => {
     // keystone.air (A8a step 3): on by default, off by keystone.air=0, and only with space.
     expect([new CollapseSound().air, new CollapseSound(0, 'real', true, 'outdoor', true, false).air, new CollapseSound(0, 'real', true, 'outdoor', false, true).air, new CollapseSound(0, 'classic').air]).toEqual([true, false, false, false]);
     expect(paceFeel(new URLSearchParams('keystone.air=0')).air).toBe(false);
+    // keystone.scrape (A8b): off by default, on by keystone.scrape=1; never in the classic set.
+    expect([new CollapseSound().scrape, new CollapseSound(0, 'real', true, 'outdoor', true, true, true).scrape, new CollapseSound(0, 'classic', true, 'outdoor', true, true, true).scrape]).toEqual([false, true, false]);
+    expect([paceFeel(new URLSearchParams('')).scrape, paceFeel(new URLSearchParams('keystone.scrape=1')).scrape]).toEqual([false, true]);
     // A stone box in Kapla's proportions stays stone.
     const stone = { ...c, meta: { ...c.meta, material: c.meta.material.map(() => materialId('stone')) } };
     expect(soundSlotOf(stone, c.scene.bodies[0]!, 0)).toBe(materialId('stone'));

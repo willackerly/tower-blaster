@@ -34,6 +34,13 @@ describe('sound options', () => {
     writeSoundOptions(ar, wa);
     expect(wa.toString()).toBe('snd.air=0');
     expect(() => parseSoundOptions(new URLSearchParams('snd.air=2'))).toThrow(/snd.air must be 0 or 1: 2/);
+    // Scraping (A8b): off by default; snd.scrape=1 turns it on, and round-trips.
+    expect(DEFAULT_SOUND.scrape).toBe(false);
+    const sc = parseSoundOptions(new URLSearchParams('snd.scrape=1')), wc = new URLSearchParams();
+    expect(sc.scrape).toBe(true);
+    writeSoundOptions(sc, wc);
+    expect(wc.toString()).toBe('snd.scrape=1');
+    expect(() => parseSoundOptions(new URLSearchParams('snd.scrape=yes'))).toThrow(/snd.scrape must be 0 or 1: yes/);
     const none = new URLSearchParams();
     writeSoundOptions(DEFAULT_SOUND, none);
     expect(none.toString()).toBe('');
@@ -104,5 +111,14 @@ describe('CollapseHost (the worklet minus WebAudio)', () => {
     h.onMessage({ type: 'gain', gain: 1 });
     expect(h.engine.lowcut).toBe(0); // absent: unchanged
     expect(() => h.onMessage({ type: 'gain', gain: 1, lowcut: NaN })).toThrow(/lowcut/);
+  });
+
+  it('slide turns scraping on and off (A8b); it starts off', () => {
+    const h = new CollapseHost(48000);
+    expect(h.engine.slide).toBe(false);
+    h.onMessage({ type: 'slide', on: true });
+    expect(h.engine.slide).toBe(true);
+    h.onMessage({ type: 'slide', on: false });
+    expect(h.engine.slide).toBe(false);
   });
 });

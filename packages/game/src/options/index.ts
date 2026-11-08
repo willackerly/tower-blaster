@@ -36,6 +36,7 @@ import { shake } from './shake.ts';
 import { sharp } from './sharp.ts';
 import { space } from './space.ts';
 import { air } from './air.ts';
+import { scrape } from './scrape.ts';
 import { sleepTint } from './sleeptint.ts';
 import { slowMo } from './slowmo.ts';
 import { sound } from './sound.ts';
@@ -90,4 +91,5 @@ export const OPTIONS = [
   room,
   space,
   air,
+  scrape,
 ] as const;
