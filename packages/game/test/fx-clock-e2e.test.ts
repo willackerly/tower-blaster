@@ -93,16 +93,14 @@ describe('offscreen effect clock', () => {
     if (!o) return ctx.skip();
     const { page, errors } = o;
     await ready(page);
+    // Frames as the agent playtest draws them, a few a shot: one before, one once the blast has gone off (its
+    // speed change since the last frame spawns the sparks), none until the settle. Not a frame every few ms:
+    // each would see too small a speed change to spawn any, and age the sparks 0.1 s.
+    await page.evaluate(() => window.__game.capture());
     expect(await page.evaluate((x) => window.__game.fire(x), grenade)).toBe(true);
-    // Frames drawn while it runs until one shows sparks, then none until the settle: the agent playtest draws a
-    // few frames a shot. (Not every frame: each ages the sparks 0.1 s, and on a fast runner a frame a few
-    // milliseconds apart for the whole shot would age them out of this frame-clock bug.)
-    let spawned = 0;
-    while (spawned === 0 && (await page.evaluate(() => window.__game.phase)) === 'running') {
-      await page.evaluate(() => window.__game.capture());
-      spawned = (await page.evaluate(() => window.__game.effects())).spawned;
-    }
-    expect(spawned).toBeGreaterThan(0);
+    await page.waitForFunction(() => (window.__game.counts.blastDrawn ?? 0) > 0, undefined, { timeout: 2 * MINUTES, polling: 100 });
+    await page.evaluate(() => window.__game.capture());
+    expect((await page.evaluate(() => window.__game.effects())).spawned).toBeGreaterThan(0);
     await settled(page, 1);
     const after = await afterWait(page, 2000);
     expect(after.particles).toBeGreaterThan(0);
