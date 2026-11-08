@@ -1,5 +1,5 @@
 // pnpm keystone:opener <level> --from cast.json[,cast2.json] [--k 16] [--n 8] [--seed 1]
-//   [--engine gpu[,rapier]] [--channel chrome] [--out opener.json] [--md opener.md]
+//   [--engine gpu[,rapier]] [--channel chrome] [--floor 0.45] [--no-current] [--out opener.json] [--md opener.md]
 // Chooses a level's pre-aimed opener (the agent playtest's PT13, keystone-lab opener.ts): the k first shots of
 // the casts' lines with the highest first-settle value, each played alone exactly and as n nudges on every
 // engine named (gpu, the default: the game's cast page, SwiftShader here and Metal with --channel chrome on a
@@ -21,13 +21,16 @@ for (let i = 0; i < argv.length; i++) {
   const next = argv[i + 1];
   flags.set(a.slice(2), next !== undefined && !next.startsWith('--') ? (i++, next) : 'true');
 }
-if (ids.length !== 1 || !flags.has('from')) throw new Error('usage: pnpm keystone:opener <level> --from cast.json[,more.json] [--k 16] [--n 8] [--engine gpu,rapier] [--channel chrome]');
+if (ids.length !== 1 || !flags.has('from')) throw new Error('usage: pnpm keystone:opener <level> --from cast.json[,more.json] [--k 16] [--n 8] [--engine gpu,rapier] [--channel chrome] [--floor 0.45] [--no-current]');
 const level = levelById(ids[0]!);
 const casts = flags.get('from')!.split(',').map((f) => JSON.parse(readFileSync(f, 'utf8')));
 for (const c of casts) if (c.level !== level.id) throw new Error(`${c.level}'s cast given for ${level.id}`);
 const k = Number(flags.get('k') ?? 16), n = Number(flags.get('n') ?? 8), seed = Number(flags.get('seed') ?? 1);
+/** The score a winner must reach (judgeOpeners' floor); the objective's minimum when absent. */
+const floor = flags.has('floor') ? Number(flags.get('floor')) : undefined;
 const candidates = openerCandidates(casts, k);
-const current = level.solutions?.ace?.[0];
+// The level's current opener joins the candidates (--no-current leaves it out, when it is already measured).
+const current = flags.has('no-current') ? undefined : level.solutions?.opener ?? level.solutions?.ace?.[0];
 if (current) {
   const text = writeShots([current]);
   if (!candidates.some((c) => c.shot === text)) candidates.push({ shot: text, recorded: NaN });
@@ -44,10 +47,10 @@ for (const e of (flags.get('engine') ?? 'gpu').split(',')) {
 }
 console.log(`${level.id}: ${candidates.length} candidates x ${n + 1} plays on ${players.map((p) => `${p.engine} (${p.adapter})`).join(', ')}`);
 const t0 = performance.now();
-const judged = await judgeOpeners(level, candidates, players, n, seed);
+const judged = await judgeOpeners(level, candidates, players, n, seed, 'collapse', floor);
 for (const b of browsers) await b.close();
-const md = openerMarkdown(level, judged, n) + `\nWall time ${((performance.now() - t0) / 60_000).toFixed(1)} min.\n`;
+const md = openerMarkdown(level, judged, n, floor) + `\nWall time ${((performance.now() - t0) / 60_000).toFixed(1)} min.\n`;
 console.log(md);
-if (flags.has('out')) writeFileSync(flags.get('out')!, JSON.stringify({ level: level.id, n, seed, k, judged }, null, 1));
+if (flags.has('out')) writeFileSync(flags.get('out')!, JSON.stringify({ level: level.id, n, seed, k, floor: floor ?? null, judged }, null, 1));
 if (flags.has('md')) writeFileSync(flags.get('md')!, md);
 exitNow(judged[0]?.wins ? 0 : 2);

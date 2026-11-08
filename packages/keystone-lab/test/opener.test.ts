@@ -38,6 +38,14 @@ describe('judgeOpeners', () => {
     expect(j[1]!.wins).toBe(false);
     expect(j[0]!.trials.map((t) => t.values.length)).toEqual([5, 5]); // exact + 4 nudges on each engine
   });
+  it('a floor above the objective holds back a candidate whose every play meets the objective but whose lower quartile is under the floor (PT13 second pass)', async () => {
+    const gpu = fakePlayer('gpu', (s) => (az(s) > 200 ? 0.43 : 0.47));
+    const j = await judgeOpeners(B1, cands, [gpu], 4, 1, 'collapse', 0.45);
+    expect(j.map((x) => [x.shot, x.wins])).toEqual([['w-bomb.100.8.0.300.80', true], ['w-bomb.300.8.0.300.80', false]]);
+    expect(j[1]!.score).toBeCloseTo(0.43); // meets B1's 0.4 on every play, short of the 0.45 margin
+    expect((await judgeOpeners(B1, cands, [gpu], 4, 1)).every((x) => x.wins)).toBe(true); // no floor: the objective's 0.4
+    expect(openerMarkdown(B1, j, 4, 0.45)).toContain('the score reached 0.45');
+  });
   it('a play settling after the promise does not win, and the markdown says to fall back', async () => {
     const slow = fakePlayer('gpu', () => 0.9, 300 + 60 * 25);
     const j = await judgeOpeners(B1, cands, [slow], 2, 1);

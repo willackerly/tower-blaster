@@ -75,7 +75,11 @@ export const B1: LevelDef = outcomeLevel('B1', 'Long Wall', thirdBondWall(40, 25
   // Cast on the M5 Max (Metal) at main f5d6e92, short recipe, seeds 1 and 2 pooled (pnpm keystone:cast B1 --pool):
   // every gate passed on both, recast |T3 1 - T3 2| 0.0015 < 0.0044. docs/game/levels/B1.md.
   // The showcase (solutions.ace) is seed 1's best line: its 50 nudges ended at collapse 0.895 to 0.955.
-  solutions: { ace: readShots('w-bomb.521.8.54.372.66_w-bomb.607.8.-192.247.95_w-bomb.195.8.-230.127.91') },
+  // The first visit's opener (PT13, keystone-lab opener.ts): the ace's first shot brought 0.427 down on Metal and
+  // 0.374 on SwiftShader, short of the 0.4 objective on one adapter. This one, from seed 2's cast (0.684 on Metal),
+  // brought 0.633 to 0.731 down on SwiftShader, exact and 8 nudges, lower quartile 0.660, settled within 8.7 s
+  // (pnpm keystone:opener B1 --floor 0.45; docs/game/front-door.md). Not in the level hash: the stars stand.
+  solutions: { ace: readShots('w-bomb.521.8.54.372.66_w-bomb.607.8.-192.247.95_w-bomb.195.8.-230.127.91'), opener: readShots('w-bomb.605.8.-90.181.94')[0]! },
   // Cast under settle v3, the outcome default until PT6b made it v4: pinned so the cast stars keep their hash.
   // Unpin (drop this line) together with a v4 recast on Metal (roadmap PT6b, docs/game/settle-v4.md).
   settle: 'v3',
