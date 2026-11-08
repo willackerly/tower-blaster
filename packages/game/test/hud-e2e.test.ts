@@ -18,7 +18,7 @@ async function open(search: string, timeout: number): Promise<{ page: Page; erro
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(game.url(search));
-  await page.waitForFunction(() => window.__game?.status !== 'loading', undefined, { timeout, polling: 250 });
+  await page.waitForFunction(() => window.__game !== undefined && window.__game.status !== 'loading', undefined, { timeout, polling: 250 });
   const st = await page.evaluate(() => ({ s: window.__game.status, e: window.__game.error }));
   if (st.s === 'error' && /WebGPU|adapter/.test(st.e ?? '')) { await page.close(); return null; }
   expect(st).toEqual({ s: 'running', e: undefined });

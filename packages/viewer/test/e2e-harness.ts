@@ -39,6 +39,6 @@ export async function open(search: string, viewport = { width: 640, height: 400 
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(new URL(search, origin).toString());
-  await page.waitForFunction(() => window.__viewer?.status !== 'loading', undefined, { timeout });
+  await page.waitForFunction(() => window.__viewer !== undefined && window.__viewer.status !== 'loading', undefined, { timeout });
   return { page, errors };
 }

@@ -97,7 +97,9 @@ export async function openBrowserCastPlayer(opts: BrowserCastOptions = {}): Prom
     const errors: string[] = [];
     p.on('pageerror', (e) => errors.push(e.message));
     await p.goto(url);
-    await p.waitForFunction(() => window.__cast?.status !== 'loading', undefined, { timeout: 120_000, polling: 250 });
+    // __cast must exist: `__cast?.status !== 'loading'` is already true on a page whose script has not run yet
+    // (a Vite dependency reload), and the read below then fails (#330's train run, 2026-11-08).
+    await p.waitForFunction(() => window.__cast !== undefined && window.__cast.status !== 'loading', undefined, { timeout: 120_000, polling: 250 });
     const st = await p.evaluate(() => ({ status: window.__cast.status, error: window.__cast.error }));
     if (st.status !== 'ready') throw new Error(`the cast page failed: ${st.error}${errors.length ? `; ${errors.join('; ')}` : ''}`);
     return p;

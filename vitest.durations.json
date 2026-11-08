@@ -446,6 +446,7 @@
   "packages/testkit/test/layering.test.ts": 0,
   "packages/testkit/test/merge-train.test.ts": 0.5,
   "packages/testkit/test/observe.test.ts": 5.2,
+  "packages/testkit/test/page-waits.test.ts": 0.5,
   "packages/testkit/test/shard.test.ts": 0.1,
   "packages/testkit/test/teardown.test.ts": 1.7,
   "packages/viewer/test/default-scene.test.ts": 0,
