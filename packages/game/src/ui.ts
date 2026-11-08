@@ -4,7 +4,7 @@
 // panel column); the banner and the result card place themselves.
 
 import { DUEL_CSS } from './duel-hud.ts';
-import { TOUCH_HELP, TOUCH_LOOK } from './hud.ts';
+import { STAR_PX, TOUCH_HELP, TOUCH_LOOK } from './hud.ts';
 import { LOT_CSS } from './lot-hud.ts';
 import { FUSE_CSS } from './fuse-panel.ts';
 
@@ -275,7 +275,7 @@ export const GAME_CSS = `
   .kg-hud .meter i { display: block; height: 100%; border-radius: 4px; background: #f7b955; transition: width 0.25s ease-out; }
   .kg-hud .meter .tick { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: #b8c0d0; box-shadow: 0 0 0 1px #1a1f2a; }
   .kg-hud .meter .tick.obj { top: -5px; bottom: -5px; width: 3px; margin-left: -1.5px; background: #e0a84a; }
-  .kg-hud .meter .tick b { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); font-size: 11px; line-height: 1; letter-spacing: -1px; white-space: nowrap; color: #b8c0d0; font-weight: 400; }
+  .kg-hud .meter .tick b { position: absolute; top: 15px; left: 50%; width: calc(var(--n, 1) * ${STAR_PX}px); text-align: center; transform: translateX(calc(-50% + var(--dx, 0px))); font-size: 11px; line-height: 1; letter-spacing: -1px; white-space: nowrap; color: #b8c0d0; font-weight: 400; }
   .kg-hud .meter .tick.obj b { top: 17px; color: #e0a84a; }
   .kg-hud .meter .tick.got { background: #fff; }
   .kg-hud .meter .tick.got b { color: #f7b955; }

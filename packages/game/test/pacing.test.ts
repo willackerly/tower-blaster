@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { STEADY_D, STEADY_STEPS } from '@tb/keystone';
 import {
   alphaAt, arrived, checkPaceFeel, DEFAULT_BUDGET_MS, DEFAULT_FEEL, FAST_SCALE, FRAME_MS, MAX_LAG_MS, newArrivals, Pacer, paceFeel, SLOWMO_IN, SLOWMO_MAX, SLOWMO_OUT, SLOWMO_SCALE, slowTag,
-  SKIP_SCALE, SpeedMeter, stepCost, TAIL_GAIN, TAIL_STEPS, TailSkip, valve, VALVE_MIN, writePaceFeel, DEFAULT_UNDO_MB, MAX_UNDO_MB,
+  SKIP_SCALE, SPEED_STALL_MS, SPEED_TAU, SpeedMeter, stepCost, TAIL_GAIN, TAIL_STEPS, TailSkip, valve, VALVE_MIN, writePaceFeel, DEFAULT_UNDO_MB, MAX_UNDO_MB,
 } from '../src/pacing.ts';
 
 const DT_MS = 1000 / 60;
@@ -207,11 +207,39 @@ describe('SpeedMeter', () => {
       expect(m.speed(4000)).toBeCloseTo(rate / 60, 1);
     }
   });
-  it('starts as if at real time, and falls when steps stop', () => {
+  it('starts as if at real time, and falls when steps stop while frames go on', () => {
     const m = new SpeedMeter();
     expect(m.speed(0)).toBe(1);
     m.step(0, 1 / 60);
+    for (let t = 16; t < 2000; t += 16) m.speed(t);
     expect(m.speed(2000)).toBeLessThan(0.05);
+  });
+  it(`a gap with no frames at all is a stall, counted as ${SPEED_STALL_MS} ms, not slow motion (a hidden tab, a page capture)`, () => {
+    const m = new SpeedMeter();
+    let t = 0;
+    for (; t <= 2000; t += DT_MS) m.step(t, 1 / 60);
+    // Five seconds with no frame, then steps at real time again.
+    t += 5000;
+    m.step(t, 1 / 60);
+    expect(m.speed(t)).toBeGreaterThan(0.6);
+    expect(slowTag(m.speed(t))).not.toBe('0% speed');
+    // ...and back to real time within the meter's time constant or two.
+    for (const end = t + 2 * 1000 * SPEED_TAU; t <= end; t += DT_MS) m.step(t, 1 / 60);
+    expect(m.speed(t)).toBeGreaterThan(0.9);
+  });
+  it('time held on purpose (idle: frozen, a test hold) is not counted: the speed after it is the speed before', () => {
+    const m = new SpeedMeter();
+    let t = 0;
+    for (; t <= 2000; t += DT_MS) m.step(t, 1 / 60);
+    const before = m.speed(t);
+    for (const end = t + 3000; t < end; t += 16) m.idle(t);
+    m.idle(t);
+    expect(m.speed(t)).toBeCloseTo(before, 3);
+    // A slow sim still reads slow after a hold: 30 steps a second.
+    for (const end = t + 3000; t <= end; t += 2 * DT_MS) m.step(t, 1 / 60);
+    for (const end = t + 1000; t < end; t += 16) m.idle(t);
+    m.idle(t);
+    expect(m.speed(t)).toBeCloseTo(0.5, 1);
   });
   it('the HUD tag shows the speed only under 0.95', () => {
     expect([1, 0.96, 0.95, 0.8, 0.75, 0.25, 0.844].map(slowTag)).toEqual(['', '', '', '80% speed', '75% speed', '25% speed', '84% speed']);

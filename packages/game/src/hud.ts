@@ -154,10 +154,57 @@ export function meterTicks(c: CompiledLevel): MeterTick[] {
   return out.filter((t) => t.at > 0 && t.at <= 1).sort((a, b) => a.at - b.at);
 }
 
+/**
+ * The narrowest Down bar the HUD draws, px (the docked strip on a 360 px wide phone; 150 at 390x844, 200 sideways,
+ * 236-250 on a desktop): star labels are laid out for it. A wider bar only spreads the ticks further apart, and
+ * the labels keep their px offsets, so labels apart here stay apart on every bar.
+ */
+export const METER_MIN_PX = 120;
+/**
+ * A star label's box per star, px: GAME_CSS gives each label this width times its stars and centres the glyphs in it,
+ * so the layout here is the page's on any font (an 11 px star is 10.5 px wide on a Mac or this VM's fonts, 9 on CI's).
+ */
+export const STAR_PX = 10.5;
+/** The least space between two star labels, px. */
+export const LABEL_GAP_PX = 3;
+
+/**
+ * Each star label's offset from its tick, px (PT2 review: B3's 2★ at 53% and 3★ at 61% drew on top of each other).
+ * Every label wants to sit centred on its tick; labels that would come closer than LABEL_GAP_PX on the narrowest
+ * bar (METER_MIN_PX) form a group, laid back to back and centred so the sum of squared offsets is least (each group's
+ * left edge is the mean of what each member asks). Merging repeats leftwards until no two groups touch: ticks are
+ * sorted, so this ends in at most n - 1 merges. All zero for ticks far enough apart (every level but B3 today).
+ */
+export function tickLabelShifts(ticks: readonly MeterTick[], px = METER_MIN_PX): number[] {
+  const w = ticks.map((t) => STAR_PX * t.stars), want = ticks.map((t, i) => t.at * px - w[i]! / 2);
+  const groups: { first: number; last: number; left: number }[] = [];
+  const place = (first: number, last: number) => {
+    let off = 0, sum = 0;
+    for (let k = first; k <= last; k++) { sum += want[k]! - off; off += w[k]! + LABEL_GAP_PX; }
+    return { first, last, left: sum / (last - first + 1) };
+  };
+  const right = (g: { first: number; last: number; left: number }) => {
+    let x = g.left;
+    for (let k = g.first; k <= g.last; k++) x += w[k]! + (k < g.last ? LABEL_GAP_PX : 0);
+    return x;
+  };
+  for (let i = 0; i < ticks.length; i++) {
+    let g = place(i, i);
+    while (groups.length && right(groups[groups.length - 1]!) + LABEL_GAP_PX > g.left) g = place(groups.pop()!.first, g.last);
+    groups.push(g);
+  }
+  const out: number[] = [];
+  for (const g of groups) {
+    let x = g.left;
+    for (let k = g.first; k <= g.last; k++) { out.push(Math.round(10 * (x - want[k]!)) / 10); x += w[k]! + LABEL_GAP_PX; }
+  }
+  return out;
+}
+
 /** The Down bar: filled to `value` (0..1), a tick per star threshold, lit once the value has reached it. */
 export function meterHtml(value: number, ticks: readonly MeterTick[], label: string): string {
-  const v = Math.max(0, Math.min(1, value));
-  const marks = ticks.map((t) => `<span class="tick${t.stars === 1 ? ' obj' : ''}${v >= t.at ? ' got' : ''}" style="left:${(100 * t.at).toFixed(1)}%" title="${'★'.repeat(t.stars)} at ${pct(t.at)} ${label}"><b>${'★'.repeat(t.stars)}</b></span>`).join('');
+  const v = Math.max(0, Math.min(1, value)), dx = tickLabelShifts(ticks);
+  const marks = ticks.map((t, i) => `<span class="tick${t.stars === 1 ? ' obj' : ''}${v >= t.at ? ' got' : ''}" style="left:${(100 * t.at).toFixed(1)}%" title="${'★'.repeat(t.stars)} at ${pct(t.at)} ${label}"><b style="--n:${t.stars}${dx[i] ? `;--dx:${dx[i]}px` : ''}">${'★'.repeat(t.stars)}</b></span>`).join('');
   return `<div class="meter" role="meter" aria-label="${label}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.floor(100 * v)}"><i style="width:${(100 * v).toFixed(1)}%"></i>${marks}</div>`;
 }
 
