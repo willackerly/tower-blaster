@@ -479,11 +479,33 @@ export const LEVERAGE_MEANS = "Leverage ×N means the structure's fall gave back
  * tier name at ×0.00), else the figure and, against the level's gold line, its tier from the line up or, under the
  * line, how far it is ("×0.70 · gold at ×0.71", not "Brute" beside three stars). No line (most outcome levels): the figure.
  */
-export function leverageWords(L: number, level: LevelDef): string {
+export function leverageWords(L: number, level: LevelDef, peak?: LeveragePeak | null, shots = 0): string {
   if (!(L > 0)) return 'nothing fell';
-  const t = levelTier(L, level);
-  if (t === null) return `leverage ${fmtLeverage(L)}`;
-  return t === 0 ? `leverage ${fmtLeverage(L)} · gold at ${fmtLeverage(levelGoldLine(level)!)}` : `leverage ${fmtLeverage(L)} (${tierName(t)})`;
+  const t = levelTier(L, level), dilution = dilutionWords(L, peak, shots);
+  if (t === null) return `leverage ${fmtLeverage(L)}${dilution}`;
+  return t === 0 ? `leverage ${fmtLeverage(L)} · gold at ${fmtLeverage(levelGoldLine(level)!)}${dilution}` : `leverage ${fmtLeverage(L)} (${tierName(t)})${dilution}`;
+}
+
+/** Where the round's leverage peaked (keystone leveragePeak): the figure, after how many shots, and the later shots' own. */
+export interface LeveragePeak { peak: number; after: number; later: number }
+
+/** The round's figure must sit this far under its peak (a share of it) before the card names the peak. */
+export const DILUTION_SHARE = 0.9;
+/** Later shots whose leverage together is under this brought almost nothing down (a dud's ×0.01). */
+export const DILUTION_DUD = 0.1;
+
+/**
+ * Why the round's leverage is under what the HUD showed earlier (PT31 follow-up, the PT2 Metal capture of B3: ×5.09 after
+ * shot 2, then a near-dud third bomb and the card's ×3.40 with no word why). Leverage is the whole round's fall over the
+ * whole round's energy, so a later shot that fires energy and brings little down pulls the figure down; the card names
+ * the peak and the shots that pulled it, " · ×5.09 until shot 3 added energy but almost nothing fell". Nothing when the
+ * round ends at its peak or within DILUTION_SHARE of it.
+ */
+export function dilutionWords(L: number, peak: LeveragePeak | null | undefined, shots: number): string {
+  if (!peak || !(peak.peak > 0) || peak.after >= shots || !(L < DILUTION_SHARE * peak.peak)) return '';
+  const first = peak.after + 1, which = first === shots ? `shot ${first}` : first + 1 === shots ? `shots ${first} and ${shots}` : `shots ${first} to ${shots}`;
+  const did = peak.later < DILUTION_DUD ? 'added energy but almost nothing fell' : 'brought down less for the energy';
+  return ` · ${fmtLeverage(peak.peak)} until ${which} ${did}`;
 }
 
 /**
@@ -605,7 +627,7 @@ export function resultHtml(level: LevelDef, score: LevelScore | null, strokes: n
   const worlds = score.worlds && !score.mason ? ` · ${score.worlds.cleared} of ${score.worlds.of} worlds cleared` : '';
   const fz = score.freezes ? ` · freezes used ${score.freezes.used}/${score.freezes.total}` : '';
   const lost = score.heritageStarsLost ? `<div class="lost bad" style="animation-delay:${after + 0.7}s">Heritage cracked: ${score.heritageStarsLost} star${score.heritageStarsLost === 1 ? '' : 's'} lost</div>` : '';
-  const sub = `${shotsText}${'outcome' in score && level.objective.kind !== 'hold' ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''}${worlds}${score.mason ? '' : ` · ${score.worlds ? `leverage ${fmtLeverage(score.leverage)}` : leverageWords(score.leverage, level)}`}${fz}`;
+  const sub = `${shotsText}${'outcome' in score && level.objective.kind !== 'hold' ? ` · ${pct((score as { outcome: { collapse: number } }).outcome.collapse)} down` : ''}${worlds}${score.mason ? '' : ` · ${score.worlds ? `leverage ${fmtLeverage(score.leverage)}` : leverageWords(score.leverage, level, mode.facts?.levPeak, mode.facts?.shots ?? 0)}`}${fz}`;
   // The mode's card (mode-ui.ts, PT27): its rows, stamp and words; a reason on a failed round; HERITAGE LOST in red.
   const card = cardModel(level, score, mode.facts, { sub, stamp: score.stamp }, mode.modeUi ?? true);
   const rows = card.rows.map((r) => `<div class="line fact"><span>${esc(r.label)}</span><span class="${r.tone ?? ''}">${esc(r.value)}</span></div>`).join('');

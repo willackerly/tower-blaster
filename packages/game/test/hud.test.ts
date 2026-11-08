@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { B1, B2, compileLevel, levelGoldLine, L1, L2, L3, L4, L5, levelScore, masonScore, MT4, outcomeScore, RL1, type ShotOutcome, U3, W3, W5, type ChorusJudgement, chorusScore } from '@tb/keystone';
+import { B1, B2, B3, compileLevel, leveragePeak, roundLeverage, levelGoldLine, L1, L2, L3, L4, L5, levelScore, masonScore, MT4, outcomeScore, RL1, type ShotOutcome, U3, W3, W5, type ChorusJudgement, chorusScore } from '@tb/keystone';
 import { HOW_TO_PLAY } from '../src/door.ts';
 import { BUILD_HELP, GAME_CSS, GAME_HELP, GAME_KEYS, HELP_BUDGET, helpHtml, MASON_HELP, TOUCH_HELP } from '../src/ui.ts';
-import { CUT_HINT, PULL_HINT, PUSH_HINT, BANK_BUTTON, BANK_QUIET, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, leverageWords, meterHtml, meterTicks, type MeterTick, METER_MIN_PX, LABEL_GAP_PX, STAR_PX, tickLabelShifts, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs, masonStarsHtml, masonSub, TEST_BUTTON, trialText, chorusObjectiveText } from '../src/hud.ts';
+import { CUT_HINT, PULL_HINT, PUSH_HINT, BANK_BUTTON, BANK_QUIET, SKIP_BUTTON, esc, freezeButton, POWER_STEP, fmtLeverage, fmtPoints, goldHtml, hudHtml, keepRow, LEVERAGE_MEANS, leverageRow, leverageWords, dilutionWords, DILUTION_SHARE, meterHtml, meterTicks, type MeterTick, METER_MIN_PX, LABEL_GAP_PX, STAR_PX, tickLabelShifts, nextSelection, objectiveText, rackChips, resultHtml, starsText, slotAction, tallyHtml, touchActs, masonStarsHtml, masonSub, TEST_BUTTON, trialText, chorusObjectiveText } from '../src/hud.ts';
 
 describe('rack', () => {
   it('groups by kind in first-seen order with counts and keys', () => {
@@ -360,6 +360,43 @@ describe('scores and leverage add up (PT9, PT16)', () => {
     expect(dud).not.toMatch(/Brute|×0\.00/);
     // LEVERAGE_MEANS is the agreed one line (scoring thread, 2026-11-07).
     expect(LEVERAGE_MEANS).toMatch(/^Leverage ×N means the structure's fall gave back N times the energy you fired\./);
+  });
+});
+
+describe('the card says why the round\'s leverage fell (PT31 follow-up, PT2 Metal B3)', () => {
+  const shot = (o: Partial<ShotOutcome>): ShotOutcome => ({ ke: 1000, yield: 0, dPE_mJ: 0, leverage: 0, crownsDown: 0, crownsTotal: 0, heritageNew: 0, displaced: 0, outOfLot: 0, pe_mJ: 0, spawnStep: 0, settleStep: 0, ...o });
+  // B3 on Metal: x5.09 after two bombs, a third that brought almost nothing down, x3.40 on the card with no word why.
+  const b3 = [shot({ ke: 1, dPE_mJ: 5090 }), shot({ ke: 1, dPE_mJ: 5090 }), shot({ ke: 1, dPE_mJ: 10 })];
+  it('names the peak and the shot that pulled the figure down', () => {
+    const pk = leveragePeak(b3)!;
+    expect(pk.after).toBe(2);
+    expect(pk.peak).toBeCloseTo(5.09, 6);
+    expect(pk.later).toBeCloseTo(0.01, 6);
+    expect(fmtLeverage(roundLeverage(b3))).toBe('×3.40');
+    expect(dilutionWords(roundLeverage(b3), pk, 3)).toBe(' · ×5.09 until shot 3 added energy but almost nothing fell');
+    const html = resultHtml(B3, levelScore(B3, b3, true, 10_000), 3, false, false, '', false, { facts: { crownsDown: 0, crownsTotal: 0, heritageBroken: 0, heritageTotal: 0, collapse: 0.68, levPeak: pk, shots: 3 } });
+    expect(html).toContain('leverage ×3.40');
+    expect(html).toContain('×5.09 until shot 3 added energy but almost nothing fell');
+  });
+  it('names a run of later shots, and says less for the energy when they did bring something down', () => {
+    const four = [...b3, shot({ ke: 1, dPE_mJ: 1500 })];
+    expect(dilutionWords(roundLeverage(four), leveragePeak(four), 4)).toBe(' · ×5.09 until shots 3 and 4 brought down less for the energy');
+    const five = [...four, shot({ ke: 1, dPE_mJ: 0 })];
+    expect(dilutionWords(roundLeverage(five), leveragePeak(five), 5)).toMatch(/ · ×5\.09 until shots 3 to 5 /);
+  });
+  it('says nothing when the round ends at its peak, within 10% of it, or without facts', () => {
+    const rising = [shot({ ke: 1, dPE_mJ: 1000 }), shot({ ke: 1, dPE_mJ: 5000 })];
+    expect(leveragePeak(rising)!.after).toBe(2);
+    expect(dilutionWords(roundLeverage(rising), leveragePeak(rising), 2)).toBe('');
+    const slight = [shot({ ke: 1, dPE_mJ: 5000 }), shot({ ke: 1, dPE_mJ: 4500 })];
+    expect(roundLeverage(slight) / leveragePeak(slight)!.peak).toBeGreaterThan(DILUTION_SHARE);
+    expect(dilutionWords(roundLeverage(slight), leveragePeak(slight), 2)).toBe('');
+    expect(leveragePeak([])).toBeNull();
+    expect(dilutionWords(3.4, null, 3)).toBe('');
+    // A round that released nothing still reads "nothing fell", never a peak.
+    expect(leverageWords(0, L1, leveragePeak(b3), 3)).toBe('nothing fell');
+    // Without the facts (the viewer, a duel) the card is as before.
+    expect(resultHtml(B3, levelScore(B3, b3, true, 10_000), 3, false)).not.toContain('until shot');
   });
 });
 
