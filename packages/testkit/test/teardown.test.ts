@@ -86,6 +86,8 @@ describe('crash handlers holding our stdio (macOS lsof)', () => {
   });
 });
 
+const procStat = (pid: number) => { try { return readFileSync(`/proc/${pid}/stat`, 'utf8').trim(); } catch (e) { return `no /proc stat (${e instanceof Error ? e.message : String(e)})`; } };
+
 describe('releaseStdioOnExit', () => {
   // sh exits at once; the sleep it leaves behind holds its stdout and stderr,
   // as Chrome's crash handler holds the browser's.
@@ -138,8 +140,11 @@ describe('releaseStdioOnExit', () => {
       expect(asked).toHaveLength(2);
       expect(asked.every((fd) => Number.isInteger(fd) && fd > 2)).toBe(true);
       expect(log).toEqual([`the browser exited, but its stdio was still held open by pid ${pid}, now stopped; closing our end`]);
-      for (let i = 0; i < 40 && h.alive(pid); i++) await new Promise((r) => setTimeout(r, 25));
-      expect(h.alive(pid)).toBe(false);
+      // SIGTERM went out before `closed`; the holder still needs the CPU to die. 1 s was not always enough on a
+      // loaded CI runner (#324, shard 20), so wait up to 10 s: it returns as soon as the holder is gone.
+      for (const end = performance.now() + 10_000; h.alive(pid) && performance.now() < end;) await new Promise((r) => setTimeout(r, 25));
+      // If it ever fails again, say what the holder was doing (its /proc stat: state, parent, signals).
+      expect(h.alive(pid), h.alive(pid) ? `pid ${pid} after 10 s: ${procStat(pid)}` : '').toBe(false);
     } finally {
       h.cleanup();
     }

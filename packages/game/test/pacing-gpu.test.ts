@@ -24,7 +24,7 @@ describe('pacing on the GPU solver (G4.2)', () => {
     const shot = L1.solutions!.par![0] as Shot;
     expect(await page.evaluate((s) => window.__game.fire(s), shot)).toBe(true);
     // Sample the pace while the shot runs at normal speed (no fast-forward).
-    const samples: Array<{ timeScale: number; speed: number; tag: string; costMs: number; tailSkip: boolean; hud: string; over: boolean }> = [];
+    const samples: Array<{ timeScale: number; speed: number; tag: string; costMs: number; tailSkip: boolean; running: boolean; hud: string; over: boolean }> = [];
     for (let i = 0; i < 40; i++) {
       await page.waitForTimeout(250);
       const p = await page.evaluate(() => ({ phase: window.__game.phase, ...window.__game.pace, hud: document.querySelector('.kg-hud .pace')?.textContent ?? '', over: window.__game.resultShownAt !== null }));
@@ -40,8 +40,10 @@ describe('pacing on the GPU solver (G4.2)', () => {
     expect(t.frameMs.length).toBeGreaterThan(2 * t.costMs.length);
     expect(frame).toBeLessThan(cost / 2);
     // The valve: at its floor or at budget / cost, and the speed reached never above it. Not once the round is
-    // over (every crown down: the rest runs at fast-forward, untagged) or in the tail skip.
-    const late = samples.slice(1).filter((s) => !s.tailSkip && !s.over);
+    // over (every crown down: the rest runs at fast-forward, untagged) or in the tail skip. Nor in the frame after
+    // the shot settled while its last step was still in flight: `phase` reads 'running' there (the step), but the
+    // session is not, and the pace is already 1 (a train run, 2026-11-07: timeScale 1 against a valve of 0.25).
+    const late = samples.slice(1).filter((s) => s.running && !s.tailSkip && !s.over);
     expect(late.length).toBeGreaterThan(0);
     for (const s of late) {
       expect(s.timeScale).toBeCloseTo(valve(DEFAULT_BUDGET_MS, s.costMs), 2);
