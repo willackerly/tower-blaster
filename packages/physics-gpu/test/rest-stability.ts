@@ -143,7 +143,7 @@ export const STRUCK_MIN_FRAMES = 1200;
  * - Struck cube structures run at least STRUCK_MIN_FRAMES, whatever `frames` says: at 600 the window opens
  *   4 s after the strike, with debris still falling. Struck Kapla is judged on its end height, so it keeps
  *   `frames` (600 frames x 7 substeps already bring 400 planks down).
- * Every struck case must also have been hit (rest-page's creep before the window over the bound).
+ * Every struck case that must hold must also have been hit (rest-page's creep before the window over the bound).
  */
 export function restMatrix(sizes: number[], frames: number): RestCase[] {
   const out: RestCase[] = [];
@@ -201,12 +201,13 @@ export function restSuite(cases: RestCase[]): void {
       expect(r.error).toBeNull();
       expect(limitsHit(r.health).map((l) => l.message)).toEqual([]);
       if (c.asleepBy !== undefined) expect(r.trace.find((t) => t.frame === c.asleepBy)!.asleep, `asleep at frame ${c.asleepBy}`).toBe(plan.structure);
-      // A struck structure must have been hit: something moved more than the bound before the window.
-      if (c.mode === 'struck') expect(r.creep.max, 'the strike moved the structure before the window').toBeGreaterThan(plan.tol);
       if (c.expect === 'collapse') {
         expect(r.meanY[2], `mean height ${r.meanY[0]} -> ${r.meanY[2]}`).toBeLessThan(0.1 * r.meanY[0]);
         return;
       }
+      // A struck structure that must hold must also have been hit: something moved more than the bound before the window.
+      // (A collapse is its own proof, and its ball may land after the window opens: S15's topple ball comes at 2 s.)
+      if (c.mode === 'struck') expect(r.creep.max, 'the strike moved the structure before the window').toBeGreaterThan(plan.tol);
       expect({ moved: r.moved, maxDispUnderTol: r.maxDisp <= plan.tol, topHeld: Math.abs(r.topEnd - r.topFrom) <= plan.tol }).toEqual({ moved: 0, maxDispUnderTol: true, topHeld: true });
     });
   });
