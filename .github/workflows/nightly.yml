@@ -4,9 +4,15 @@ name: nightly
 # file's slow cases and the nightly-only files (vitest.nightly.json); TB_TIER=slow
 # runs only those files, not the whole suite again. A failure opens an issue
 # labelled `nightly` (or comments on the open one), since no PR shows it.
+#
+# GitHub drops or delays scheduled runs under load: 06:30 on 2026-11-08 ran 7 h late, on 2026-11-09 not at all.
+# So two later slots back it up, and `gate` lets a scheduled run go ahead only when no nightly has run yet that
+# UTC day (a hand dispatch counts). A run by hand always goes ahead.
 on:
   schedule:
     - cron: '30 6 * * *'
+    - cron: '40 9 * * *'
+    - cron: '50 13 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -14,8 +20,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" != schedule ]; then echo run=true >> "$GITHUB_OUTPUT"; exit 0; fi
+          # Today's other nightly runs that were not cancelled (a skipped one counts: it saw an earlier run).
+          n=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/nightly.yml/runs?created=>=$(date -u +%F)&per_page=50" \
+            --jq "[.workflow_runs[] | select(.id != $GITHUB_RUN_ID and .conclusion != \"cancelled\")] | length")
+          echo "nightly runs already today: $n"
+          if [ "$n" = 0 ]; then echo run=true >> "$GITHUB_OUTPUT"; else echo run=false >> "$GITHUB_OUTPUT"; fi
+
   slow:
     name: slow ${{ matrix.shard }}/6
+    needs: gate
+    if: ${{ needs.gate.outputs.run == 'true' }}
     runs-on: ubuntu-latest
     # One file can take hours on SwiftShader (chorus-gpu 154 min, e2e-keystone-10k 73 min in the first
     # nightly, run 42394058839), and a file runs on one worker: the plan's longest shard is ~154 min.

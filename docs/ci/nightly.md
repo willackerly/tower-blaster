@@ -5,7 +5,7 @@ Every test case runs in one of three places. None is dropped.
 | tier | where | what | when |
 |---|---|---|---|
 | PR / main | `ci.yml`, 20 shards on GitHub runners (SwiftShader) | every test file except the nightly-only ones, slow cases off | every push |
-| nightly | `nightly.yml`, 6 shards (330 min limit each), `PHYSICS_GPU_SLOW=1 TB_TIER=slow`, balanced on `vitest.durations.nightly.json` | the files in `vitest.nightly.json`, plus every file with `PHYSICS_GPU_SLOW` cases of its own, slow cases on | 06:30 UTC on main (when GitHub runs it, see below), and by hand (Actions, Run workflow) |
+| nightly | `nightly.yml`, 6 shards (330 min limit each), `PHYSICS_GPU_SLOW=1 TB_TIER=slow`, balanced on `vitest.durations.nightly.json` | the files in `vitest.nightly.json`, plus every file with `PHYSICS_GPU_SLOW` cases of its own, slow cases on | 06:30 UTC on main, with backups at 09:40 and 13:50 when GitHub skips it (see below), and by hand (Actions, Run workflow) |
 | Mac | Will's M5 Max, real Metal GPU, `TB_CHANNEL=chrome` | the GPU solver's levels too big for SwiftShader | queued as an idle job (see below) |
 
 `PHYSICS_GPU_SLOW=1 pnpm test` runs the PR and nightly tiers together.
@@ -64,6 +64,14 @@ The longest file, chorus-gpu (~60 min), sets the longest shard; rest-stability's
 
 ## GitHub may skip the schedule
 
-GitHub runs `schedule` triggers on a best-effort basis and drops them under load. On the night of 2026-11-07 it ran
-the merge train's half-hourly schedule twice in about 12 h and skipped the nightly's 06:30 run entirely. A day
-with no nightly run is therefore not a pass. When one is missed, run it by hand (Actions, nightly, Run workflow).
+GitHub runs `schedule` triggers on a best-effort basis and drops or delays them under load:
+- On the night of 2026-11-07, it ran the merge train's half-hourly schedule twice in about 12 h.
+- It skipped the nightly's 06:30 run on 2026-11-08, then ran it 7 h late.
+- It skipped the 06:30 run on 2026-11-09 entirely.
+
+So `nightly.yml` has two backup slots, 09:40 and 13:50 UTC. Its `gate` job lets a scheduled run go ahead only
+when no nightly has run yet that UTC day, and a run started by hand counts as that day's run. A run started by hand
+always goes ahead.
+
+The first green run of the whole tier was [42597764707](https://github.com/willackerly/tower-blaster/actions/runs/42597764707)
+(2026-11-09, cf8ab21): 6 shards, the longest 1 h 45 min.
