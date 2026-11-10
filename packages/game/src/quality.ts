@@ -79,6 +79,11 @@ export interface ProbeResult {
   midFrameMs: number;
   /** Wall ms the probe took, warmups included. */
   ms: number;
+  /**
+   * Of ms, the warmup rounds and frames (pipeline compiles and texture bakes, which a cold browser cache
+   * makes the bulk of the probe; the game's renderer then finds those pipelines in Dawn's cache).
+   */
+  warmupMs: number;
 }
 
 /**
